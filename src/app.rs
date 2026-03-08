@@ -823,7 +823,24 @@ impl WallsetterApp {
     }
 
     pub fn view(&self) -> Element<'_, Message> {
-        let mut content = column![self.header_view()].spacing(10).padding(20);
+        let page: Element<'_, Message> = match &self.current_view {
+            View::Search => crate::views::search::view(self),
+            View::Downloads => crate::views::downloads::view(self),
+            View::Bookmarks => crate::views::bookmarks::view(self),
+            View::Settings => crate::views::settings::view(self),
+            View::Preview(wp) => crate::views::preview::view(self, wp),
+        };
+
+        let mut content = column![
+            self.header_view(),
+            container(page)
+                .padding(14)
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .style(crate::theme::app_frame)
+        ]
+        .spacing(14)
+        .padding(16);
 
         if let Some(ref err) = self.error_message {
             content = content.push(
@@ -832,21 +849,13 @@ impl WallsetterApp {
                         text(err).color([0.85, 0.2, 0.2]),
                         button("Dismiss")
                             .on_press(Message::ClearError)
-                            .style(button::danger)
+                            .style(crate::theme::button_danger)
                     ]
                     .spacing(12),
                 )
                 .padding(12)
-                .style(container::rounded_box),
+                .style(crate::theme::panel),
             );
-        }
-
-        match &self.current_view {
-            View::Search => content = content.push(crate::views::search::view(self)),
-            View::Downloads => content = content.push(crate::views::downloads::view(self)),
-            View::Bookmarks => content = content.push(crate::views::bookmarks::view(self)),
-            View::Settings => content = content.push(crate::views::settings::view(self)),
-            View::Preview(wp) => content = content.push(crate::views::preview::view(self, wp)),
         }
 
         container(content)
@@ -860,24 +869,32 @@ impl WallsetterApp {
     }
 
     fn header_view(&self) -> Element<'_, Message> {
-        let mut search = button("Search").on_press(Message::SwitchView(View::Search));
+        let mut search = button("Search")
+            .style(crate::theme::button_secondary)
+            .on_press(Message::SwitchView(View::Search));
         if matches!(self.current_view, View::Search) {
-            search = search.style(button::primary);
+            search = search.style(crate::theme::button_primary);
         }
 
-        let mut downloads = button("Downloads").on_press(Message::SwitchView(View::Downloads));
+        let mut downloads = button("Downloads")
+            .style(crate::theme::button_secondary)
+            .on_press(Message::SwitchView(View::Downloads));
         if matches!(self.current_view, View::Downloads) {
-            downloads = downloads.style(button::primary);
+            downloads = downloads.style(crate::theme::button_primary);
         }
 
-        let mut bookmarks = button("Bookmarks").on_press(Message::SwitchView(View::Bookmarks));
+        let mut bookmarks = button("Bookmarks")
+            .style(crate::theme::button_secondary)
+            .on_press(Message::SwitchView(View::Bookmarks));
         if matches!(self.current_view, View::Bookmarks) {
-            bookmarks = bookmarks.style(button::primary);
+            bookmarks = bookmarks.style(crate::theme::button_primary);
         }
 
-        let mut settings = button("Settings").on_press(Message::SwitchView(View::Settings));
+        let mut settings = button("Settings")
+            .style(crate::theme::button_secondary)
+            .on_press(Message::SwitchView(View::Settings));
         if matches!(self.current_view, View::Settings) {
-            settings = settings.style(button::primary);
+            settings = settings.style(crate::theme::button_primary);
         }
 
         let theme_label = match self.preferences.theme {
@@ -885,21 +902,33 @@ impl WallsetterApp {
             Theme::Dark => "Use Light",
         };
 
-        row![
-            text("Wallsetter").size(28),
+        container(
             row![
-                search,
-                downloads,
-                bookmarks,
-                settings,
-                button(theme_label).on_press(Message::ToggleTheme),
+                column![
+                    text("Wallsetter").size(25),
+                    text("Minimal wallpaper workflow, fast and focused.")
+                        .size(12)
+                        .color([0.60, 0.66, 0.74]),
+                ]
+                .spacing(2),
+                row![
+                    search,
+                    downloads,
+                    bookmarks,
+                    settings,
+                    button(theme_label)
+                        .style(crate::theme::button_secondary)
+                        .on_press(Message::ToggleTheme),
+                ]
+                .spacing(8)
+                .width(Length::Fill)
+                .align_y(iced::Alignment::Center)
             ]
-            .spacing(10)
-            .width(Length::Fill)
-            .align_y(iced::Alignment::Center)
-        ]
-        .spacing(20)
-        .align_y(iced::Alignment::Center)
+            .spacing(18)
+            .align_y(iced::Alignment::Center),
+        )
+        .padding(14)
+        .style(crate::theme::panel)
         .into()
     }
 

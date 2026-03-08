@@ -1,5 +1,5 @@
 use iced::widget::{button, column, container, image, progress_bar, row, scrollable, text};
-use iced::{Alignment, Element, Length};
+use iced::{Alignment, Element, Length, Theme};
 
 use wallsetter_core::DownloadStatus;
 
@@ -7,48 +7,83 @@ use crate::app::{Message, WallsetterApp};
 
 pub fn view<'a>(app: &'a WallsetterApp) -> Element<'a, Message> {
     let tasks = app.download_tasks();
-    let active_count = tasks
+
+    let queued_count = tasks
+        .iter()
+        .filter(|task| task.status == DownloadStatus::Queued)
+        .count();
+    let downloading_count = tasks
+        .iter()
+        .filter(|task| task.status == DownloadStatus::Downloading)
+        .count();
+    let completed_count = tasks
+        .iter()
+        .filter(|task| task.status == DownloadStatus::Completed)
+        .count();
+    let failed_count = tasks
         .iter()
         .filter(|task| {
             matches!(
                 task.status,
-                DownloadStatus::Queued | DownloadStatus::Downloading
+                DownloadStatus::Failed | DownloadStatus::Cancelled
             )
         })
         .count();
 
-    let mut tasks_list = column![].spacing(14);
+    let summary_chips = row![
+        chip(
+            format!("Queued {}", queued_count),
+            crate::theme::chip_neutral
+        ),
+        chip(
+            format!("Active {}", downloading_count),
+            crate::theme::chip_info
+        ),
+        chip(
+            format!("Done {}", completed_count),
+            crate::theme::chip_success
+        ),
+        chip(
+            format!("Failed {}", failed_count),
+            crate::theme::chip_danger
+        ),
+    ]
+    .spacing(8)
+    .align_y(Alignment::Center);
+
+    let mut tasks_list = column![].spacing(12);
 
     if tasks.is_empty() {
         tasks_list = tasks_list.push(
             container(
                 column![
-                    text("No downloads yet.").size(20),
-                    text("Start a download from Search or Preview."),
+                    text("No downloads yet.").size(18),
+                    text("Start a download from Search or Preview.").size(13),
                 ]
                 .spacing(6),
             )
-            .padding(20)
-            .style(container::rounded_box),
+            .padding(18)
+            .style(crate::theme::panel),
         );
     } else {
         for task in tasks {
             let progress = task.progress_percent().unwrap_or(0.0);
 
-            let status_text = match task.status {
-                DownloadStatus::Queued => "Queued".to_string(),
-                DownloadStatus::Downloading => {
-                    let mbps = task.speed_bps as f64 / 1_048_576.0;
-                    format!("Downloading ({mbps:.2} MB/s)")
-                }
-                DownloadStatus::Completed => "Completed".to_string(),
-                DownloadStatus::Failed => {
-                    format!(
-                        "Failed: {}",
-                        task.error.as_deref().unwrap_or("Unknown error")
-                    )
-                }
-                DownloadStatus::Cancelled => "Cancelled".to_string(),
+            let (status_label, status_style): (&str, fn(&Theme) -> container::Style) =
+                match task.status {
+                    DownloadStatus::Queued => ("Queued", crate::theme::chip_neutral),
+                    DownloadStatus::Downloading => ("Active", crate::theme::chip_info),
+                    DownloadStatus::Completed => ("Done", crate::theme::chip_success),
+                    DownloadStatus::Failed | DownloadStatus::Cancelled => {
+                        ("Failed", crate::theme::chip_danger)
+                    }
+                };
+
+            let speed_label = if task.status == DownloadStatus::Downloading {
+                let mbps = task.speed_bps as f64 / 1_048_576.0;
+                format!("{mbps:.2} MB/s")
+            } else {
+                format!("{progress:.1}%")
             };
 
             let thumb = if let Some(handle) = app.get_thumbnail(&task.wallpaper_id) {
@@ -60,59 +95,81 @@ pub fn view<'a>(app: &'a WallsetterApp) -> Element<'a, Message> {
                 )
                 .width(Length::Fixed(100.0))
                 .height(Length::Fixed(70.0))
-                .style(container::rounded_box)
+                .style(crate::theme::panel_subtle)
             } else {
-                container(text("No preview"))
+                container(text("No preview").size(11))
                     .width(Length::Fixed(100.0))
                     .height(Length::Fixed(70.0))
                     .align_x(iced::alignment::Horizontal::Center)
                     .align_y(iced::alignment::Vertical::Center)
-                    .style(container::rounded_box)
+                    .style(crate::theme::panel_subtle)
             };
 
             let mut top = row![
-                text(&task.filename).width(Length::Fill).size(16),
-                text(status_text),
+                text(&task.filename).width(Length::Fill).size(14),
+                chip(status_label, status_style),
+                chip(speed_label, crate::theme::chip_neutral),
             ]
-            .spacing(10)
+            .spacing(8)
             .align_y(Alignment::Center);
 
             if task.status == DownloadStatus::Completed {
                 let mut path = crate::app::resolve_download_dir(&app.preferences().download_dir);
                 path.push(&task.filename);
                 top = top.push(
-                    button("Set as Wallpaper")
+                    button("Set")
                         .on_press(Message::SetWallpaper(path))
-                        .style(button::secondary),
+                        .style(crate::theme::button_secondary),
+                );
+            }
+
+            let mut task_body = column![top, progress_bar(0.0..=100.0, progress)]
+                .spacing(6)
+                .width(Length::Fill);
+
+            if task.status == DownloadStatus::Failed {
+                task_body = task_body.push(
+                    text(task.error.as_deref().unwrap_or("Unknown error"))
+                        .size(11)
+                        .color([0.89, 0.30, 0.30]),
                 );
             }
 
             let item = container(
-                row![
-                    thumb,
-                    column![
-                        top,
-                        progress_bar(0.0..=100.0, progress),
-                        text(format!("{:.1}% done", progress)).size(12),
-                    ]
-                    .spacing(6)
-                    .width(Length::Fill),
-                ]
-                .spacing(12)
-                .align_y(Alignment::Center),
+                row![thumb, task_body]
+                    .spacing(12)
+                    .align_y(Alignment::Center),
             )
-            .padding(14)
-            .style(container::rounded_box);
+            .padding(12)
+            .style(crate::theme::panel_subtle);
 
             tasks_list = tasks_list.push(item);
         }
     }
 
     column![
-        text("Downloads").size(30),
-        text(format!("{active_count} active")).size(14),
+        container(
+            column![
+                text("Downloads").size(26),
+                text("Track progress and set completed wallpapers quickly.").size(12),
+                summary_chips,
+            ]
+            .spacing(8)
+        )
+        .padding(12)
+        .style(crate::theme::panel),
         scrollable(tasks_list).height(Length::Fill),
     ]
-    .spacing(14)
+    .spacing(12)
     .into()
+}
+
+fn chip<'a>(
+    label: impl Into<String>,
+    style: fn(&Theme) -> container::Style,
+) -> Element<'a, Message> {
+    container(text(label.into()).size(11))
+        .padding([4, 10])
+        .style(style)
+        .into()
 }

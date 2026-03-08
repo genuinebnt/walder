@@ -39,36 +39,44 @@ pub fn view<'a>(app: &'a WallsetterApp, wp: &'a Wallpaper) -> Element<'a, Messag
             text(format!("Favorites: {}", wp.favorites)),
             text(format!("File size: {} bytes", wp.file_size)),
         ]
-        .spacing(8),
+        .spacing(7),
     )
     .padding(14)
-    .style(container::rounded_box);
+    .style(crate::theme::panel_subtle);
 
     let actions = row![
         button("Back")
             .on_press(Message::GoBack)
-            .style(button::secondary),
+            .style(crate::theme::button_secondary),
         button("Download")
             .on_press(Message::DownloadSingle(wp.clone()))
-            .style(button::secondary),
+            .style(crate::theme::button_secondary),
         button("Bookmark")
             .on_press(Message::AddBookmark(wp.clone()))
-            .style(button::secondary),
+            .style(crate::theme::button_secondary),
         button("Set as Wallpaper")
             .on_press(Message::QuickSet(wp.clone()))
-            .style(button::primary),
+            .style(crate::theme::button_primary),
     ]
     .spacing(10)
     .align_y(Alignment::Center);
 
     scrollable(
         column![
-            text("Wallpaper Preview").size(30),
+            container(
+                column![
+                    text("Wallpaper Preview").size(26),
+                    text("Inspect details, then download or apply instantly.").size(12),
+                ]
+                .spacing(2),
+            )
+            .padding(12)
+            .style(crate::theme::panel),
             img_view,
             details,
             actions,
         ]
-        .spacing(18),
+        .spacing(14),
     )
     .into()
 }

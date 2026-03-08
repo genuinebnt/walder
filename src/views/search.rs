@@ -17,7 +17,7 @@ pub fn view<'a>(app: &'a WallsetterApp) -> Element<'a, Message> {
 
     let categories_section = container(
         column![
-            text("Category").size(16),
+            text("Category").size(15),
             checkbox("General", filters.categories.contains(&Category::General))
                 .on_toggle(|b| Message::ToggleCategory(Category::General, b)),
             checkbox("Anime", filters.categories.contains(&Category::Anime))
@@ -28,11 +28,11 @@ pub fn view<'a>(app: &'a WallsetterApp) -> Element<'a, Message> {
         .spacing(8),
     )
     .padding(12)
-    .style(container::rounded_box);
+    .style(crate::theme::panel_subtle);
 
     let purity_section = container(
         column![
-            text("Purity").size(16),
+            text("Purity").size(15),
             checkbox("SFW", filters.purity.contains(&Purity::Sfw))
                 .on_toggle(|b| Message::TogglePurity(Purity::Sfw, b)),
             checkbox("Sketchy", filters.purity.contains(&Purity::Sketchy))
@@ -43,7 +43,7 @@ pub fn view<'a>(app: &'a WallsetterApp) -> Element<'a, Message> {
         .spacing(8),
     )
     .padding(12)
-    .style(container::rounded_box);
+    .style(crate::theme::panel_subtle);
 
     let sorting_options = vec![
         Sorting::DateAdded,
@@ -57,7 +57,7 @@ pub fn view<'a>(app: &'a WallsetterApp) -> Element<'a, Message> {
 
     let sorting_section = container(
         column![
-            text("Sort By").size(16),
+            text("Sort By").size(15),
             pick_list(
                 sorting_options,
                 Some(filters.sorting),
@@ -66,28 +66,37 @@ pub fn view<'a>(app: &'a WallsetterApp) -> Element<'a, Message> {
             .width(Length::Fill),
             button("Save as default")
                 .on_press(Message::SaveFiltersAsDefault)
-                .style(button::secondary),
+                .style(crate::theme::button_secondary),
         ]
         .spacing(10),
     )
     .padding(12)
-    .style(container::rounded_box);
+    .style(crate::theme::panel_subtle);
 
-    let sidebar = column![
-        text("Filters").size(24),
-        categories_section,
-        purity_section,
-        sorting_section,
-    ]
-    .spacing(14)
-    .width(Length::Fixed(240.0));
+    let sidebar = container(
+        column![
+            text("Filters").size(20),
+            text("Narrow down results quickly.").size(12),
+            categories_section,
+            purity_section,
+            sorting_section,
+        ]
+        .spacing(14)
+        .width(Length::Fixed(240.0)),
+    )
+    .padding(12)
+    .style(crate::theme::panel);
 
-    let mut search_button = button("Search").padding(10).style(button::primary);
+    let mut search_button = button("Search")
+        .padding(10)
+        .style(crate::theme::button_primary);
     if !app.is_searching() {
         search_button = search_button.on_press(Message::SubmitSearch);
     }
 
-    let mut select_all_button = button("Select All").padding(10);
+    let mut select_all_button = button("Select All")
+        .padding(10)
+        .style(crate::theme::button_secondary);
     if has_results {
         select_all_button = select_all_button.on_press(Message::SelectAll);
     }
@@ -95,37 +104,42 @@ pub fn view<'a>(app: &'a WallsetterApp) -> Element<'a, Message> {
     let grid_options: Vec<u32> = vec![2, 3, 4, 5, 6, 7, 8];
     let current_cols = app.preferences().grid_columns;
 
-    let search_row = row![
-        text_input("Search Wallhaven...", app.search_query())
-            .on_input(Message::SearchQueryChanged)
-            .on_submit(Message::SubmitSearch)
-            .padding(10)
-            .width(Length::Fill),
-        search_button,
-        select_all_button,
+    let search_row = container(
         row![
-            text("Grid"),
-            pick_list(
-                grid_options,
-                Some(current_cols),
-                Message::GridColumnsChanged
-            )
-            .width(Length::Fixed(90.0)),
+            text_input("Search Wallhaven...", app.search_query())
+                .on_input(Message::SearchQueryChanged)
+                .on_submit(Message::SubmitSearch)
+                .padding(10)
+                .style(crate::theme::text_input_style)
+                .width(Length::Fill),
+            search_button,
+            select_all_button,
+            row![
+                text("Grid"),
+                pick_list(
+                    grid_options,
+                    Some(current_cols),
+                    Message::GridColumnsChanged
+                )
+                .width(Length::Fixed(90.0)),
+            ]
+            .spacing(6)
+            .align_y(Alignment::Center),
         ]
-        .spacing(6)
+        .spacing(10)
         .align_y(Alignment::Center),
-    ]
-    .spacing(10)
-    .align_y(Alignment::Center);
+    )
+    .padding(12)
+    .style(crate::theme::panel);
 
     let results_content = responsive(move |size| {
         let mut results_ctn = column![].spacing(12);
 
         if app.is_searching() {
             results_ctn = results_ctn.push(
-                container(text("Searching wallpapers...").size(20))
+                container(text("Searching wallpapers...").size(18))
                     .padding(16)
-                    .style(container::rounded_box),
+                    .style(crate::theme::panel),
             );
         } else if let Some(results) = app.search_results() {
             let mut header = row![
@@ -138,12 +152,12 @@ pub fn view<'a>(app: &'a WallsetterApp) -> Element<'a, Message> {
             .spacing(10)
             .align_y(Alignment::Center);
 
-            let mut prev_btn = button("Previous");
+            let mut prev_btn = button("Previous").style(crate::theme::button_secondary);
             if results.current_page > 1 {
                 prev_btn = prev_btn.on_press(Message::PreviousPage);
             }
 
-            let mut next_btn = button("Next");
+            let mut next_btn = button("Next").style(crate::theme::button_secondary);
             if results.current_page < results.last_page {
                 next_btn = next_btn.on_press(Message::NextPage);
             }
@@ -155,7 +169,7 @@ pub fn view<'a>(app: &'a WallsetterApp) -> Element<'a, Message> {
                 results_ctn = results_ctn.push(
                     container(text("No wallpapers matched this query."))
                         .padding(20)
-                        .style(container::rounded_box),
+                        .style(crate::theme::panel),
                 );
                 return scrollable(results_ctn).into();
             }
@@ -194,7 +208,7 @@ pub fn view<'a>(app: &'a WallsetterApp) -> Element<'a, Message> {
                     column![
                         button(thumbnail)
                             .on_press(Message::SwitchView(crate::app::View::Preview(wp.clone())))
-                            .style(button::text)
+                            .style(crate::theme::button_flat)
                             .width(Length::Fill),
                         row![
                             text(format!("{}x{}", wp.resolution.width, wp.resolution.height))
@@ -209,10 +223,10 @@ pub fn view<'a>(app: &'a WallsetterApp) -> Element<'a, Message> {
                             }),
                             button("Set")
                                 .on_press(Message::QuickSet(wp.clone()))
-                                .style(button::secondary),
+                                .style(crate::theme::button_secondary),
                             button("Bookmark")
                                 .on_press(Message::AddBookmark(wp.clone()))
-                                .style(button::secondary),
+                                .style(crate::theme::button_secondary),
                         ]
                         .spacing(8)
                         .align_y(Alignment::Center),
@@ -221,7 +235,7 @@ pub fn view<'a>(app: &'a WallsetterApp) -> Element<'a, Message> {
                 )
                 .padding(10)
                 .width(Length::Fixed(item_width))
-                .style(container::rounded_box);
+                .style(crate::theme::panel_subtle);
 
                 grid_row = grid_row.push(item);
                 items_in_row += 1;
@@ -240,14 +254,14 @@ pub fn view<'a>(app: &'a WallsetterApp) -> Element<'a, Message> {
             results_ctn = results_ctn.push(
                 container(
                     column![
-                        text("Search for wallpapers").size(22),
+                        text("Search for wallpapers").size(20),
                         text("Use any Wallhaven query, then preview, bookmark, or quick-set.")
-                            .size(14),
+                            .size(13),
                     ]
                     .spacing(8),
                 )
                 .padding(20)
-                .style(container::rounded_box),
+                .style(crate::theme::panel),
             );
         }
 
@@ -257,15 +271,21 @@ pub fn view<'a>(app: &'a WallsetterApp) -> Element<'a, Message> {
     let mut main_content = column![search_row].spacing(14).width(Length::Fill);
     if selected_count > 0 {
         main_content = main_content.push(
-            row![
-                text(format!("{selected_count} selected")).size(14),
-                button("Deselect").on_press(Message::DeselectAll),
-                button("Download Selected")
-                    .on_press(Message::DownloadSelected)
-                    .style(button::primary),
-            ]
-            .spacing(10)
-            .align_y(Alignment::Center),
+            container(
+                row![
+                    text(format!("{selected_count} selected")).size(13),
+                    button("Deselect")
+                        .on_press(Message::DeselectAll)
+                        .style(crate::theme::button_secondary),
+                    button("Download Selected")
+                        .on_press(Message::DownloadSelected)
+                        .style(crate::theme::button_primary),
+                ]
+                .spacing(10)
+                .align_y(Alignment::Center),
+            )
+            .padding(10)
+            .style(crate::theme::panel),
         );
     }
     main_content = main_content.push(results_content);

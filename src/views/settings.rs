@@ -12,6 +12,8 @@ pub fn view<'a>(app: &'a WallsetterApp) -> Element<'a, Message> {
             .on_input(|s| Message::SettingsChanged(SettingsMessage::ApiKeyChanged(s)))
             .secure(true)
             .padding(10)
+            .size(14)
+            .style(crate::theme::text_input_style)
             .width(Length::Fill),
     ]
     .spacing(12)
@@ -22,6 +24,8 @@ pub fn view<'a>(app: &'a WallsetterApp) -> Element<'a, Message> {
         text_input("Path to save wallpapers", &prefs.download_dir)
             .on_input(|s| Message::SettingsChanged(SettingsMessage::DownloadDirChanged(s)))
             .padding(10)
+            .size(14)
+            .style(crate::theme::text_input_style)
             .width(Length::Fill),
     ]
     .spacing(12)
@@ -32,15 +36,17 @@ pub fn view<'a>(app: &'a WallsetterApp) -> Element<'a, Message> {
         text_input("1-10", &prefs.max_parallel_downloads.to_string())
             .on_input(|s| Message::SettingsChanged(SettingsMessage::MaxParallelChanged(s)))
             .padding(10)
+            .size(14)
+            .style(crate::theme::text_input_style)
             .width(Length::Fixed(120.0)),
-        text("(applies when queue is idle)").size(12),
+        text("(applies when queue is idle)").size(11),
     ]
     .spacing(12)
     .align_y(Alignment::Center);
 
     let scheduler_section = container(
         column![
-            text("Scheduler").size(24),
+            text("Scheduler").size(22),
             checkbox(
                 "Enable automatic wallpaper rotation",
                 prefs.scheduler.enabled
@@ -53,6 +59,8 @@ pub fn view<'a>(app: &'a WallsetterApp) -> Element<'a, Message> {
                         SettingsMessage::SchedulerIntervalChanged(s)
                     ))
                     .padding(10)
+                    .size(14)
+                    .style(crate::theme::text_input_style)
                     .width(Length::Fixed(120.0)),
             ]
             .spacing(12)
@@ -64,19 +72,27 @@ pub fn view<'a>(app: &'a WallsetterApp) -> Element<'a, Message> {
         .spacing(12),
     )
     .padding(14)
-    .style(container::rounded_box);
+    .style(crate::theme::panel_subtle);
 
     let content = column![
-        text("Settings").size(30),
+        container(
+            column![
+                text("Settings").size(26),
+                text("Tune API access, downloads, and scheduler behavior.").size(12),
+            ]
+            .spacing(2),
+        )
+        .padding(12)
+        .style(crate::theme::panel),
         container(column![api_key_input, download_dir_input, max_parallel_input].spacing(12))
             .padding(14)
-            .style(container::rounded_box),
+            .style(crate::theme::panel_subtle),
         scheduler_section,
         button("Save Preferences")
             .on_press(Message::SettingsChanged(SettingsMessage::Save))
-            .style(button::primary),
+            .style(crate::theme::button_primary),
     ]
-    .spacing(16);
+    .spacing(14);
 
     scrollable(content).into()
 }

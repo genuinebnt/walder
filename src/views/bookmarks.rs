@@ -8,27 +8,39 @@ pub fn view<'a>(app: &'a WallsetterApp) -> Element<'a, Message> {
     let folder_count = app.bookmark_folders().len();
 
     let mut header = column![
-        text("Bookmarks").size(30),
-        text(format!(
-            "{} saved wallpapers | {} folders",
-            bookmarks.len(),
-            folder_count
-        ))
-        .size(14),
+        container(
+            row![
+                column![
+                    text("Bookmarks").size(26),
+                    text("Saved wallpapers you can reopen anytime.").size(12),
+                ]
+                .spacing(2)
+                .width(Length::Fill),
+                text(format!(
+                    "{} saved | {} folders",
+                    bookmarks.len(),
+                    folder_count
+                ))
+                .size(12),
+            ]
+            .align_y(Alignment::Center),
+        )
+        .padding(12)
+        .style(crate::theme::panel)
     ]
-    .spacing(4);
+    .spacing(12);
 
     if bookmarks.is_empty() {
         header = header.push(
             container(
                 column![
-                    text("No bookmarks yet.").size(20),
-                    text("Open any wallpaper and click Bookmark."),
+                    text("No bookmarks yet.").size(18),
+                    text("Open any wallpaper and click Bookmark.").size(12),
                 ]
                 .spacing(6),
             )
             .padding(20)
-            .style(container::rounded_box),
+            .style(crate::theme::panel),
         );
         return header.into();
     }
@@ -64,13 +76,13 @@ pub fn view<'a>(app: &'a WallsetterApp) -> Element<'a, Message> {
                 column![
                     container(thumb)
                         .width(Length::Fill)
-                        .style(container::rounded_box),
-                    text(format!("{}x{}", bm.resolution.width, bm.resolution.height)).size(12),
+                        .style(crate::theme::panel_subtle),
+                    text(format!("{}x{}", bm.resolution.width, bm.resolution.height)).size(11),
                     row![
                         button("Open")
                             .on_press(Message::OpenBookmark(bm.wallpaper_id.clone()))
-                            .style(button::secondary),
-                        text(format!("ID {}", bm.wallpaper_id)).size(12),
+                            .style(crate::theme::button_secondary),
+                        text(format!("ID {}", bm.wallpaper_id)).size(11),
                     ]
                     .spacing(8)
                     .align_y(Alignment::Center),
@@ -79,7 +91,7 @@ pub fn view<'a>(app: &'a WallsetterApp) -> Element<'a, Message> {
             )
             .padding(10)
             .width(Length::Fixed(item_width))
-            .style(container::rounded_box);
+            .style(crate::theme::panel_subtle);
 
             grid_row = grid_row.push(card);
             items_in_row += 1;
