@@ -70,7 +70,7 @@ wallsetter-db = { path = "crates/wallsetter-db" }
 wallsetter-scheduler = { path = "crates/wallsetter-scheduler" }
 
 [package]
-name = "wallsetter"
+name = "walder"
 version.workspace = true
 edition.workspace = true
 

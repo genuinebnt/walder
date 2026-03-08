@@ -35,6 +35,7 @@ pub struct WallsetterApp {
     search_sidebar_visible: bool,
     search_results: Option<SearchResult>,
     is_searching: bool,
+    is_appending_search_results: bool,
     related_tags: Vec<(String, u32)>,
     author_username: Option<String>,
     author_results: Option<SearchResult>,
@@ -42,6 +43,7 @@ pub struct WallsetterApp {
     thumbnails: HashMap<String, iced::widget::image::Handle>,
     thumbnail_sources: HashMap<String, String>,
     full_images: HashMap<String, iced::widget::image::Handle>,
+    preview_loading_frame: usize,
     selected_wallpapers: HashSet<String>,
     resolution_mode: ResolutionMode,
     resolution_filter_input: String,
@@ -82,6 +84,7 @@ pub enum Message {
     SearchByTag(String),
     ToggleSearchSidebar,
     SubmitSearch,
+    SearchScrolled(iced::widget::scrollable::Viewport),
     SearchCompleted(std::result::Result<SearchResult, String>),
     ThumbnailLoaded(
         String,
@@ -148,6 +151,7 @@ pub enum Message {
 
     // Downloads
     Tick,
+    PreviewLoadingTick,
     DownloadsUpdated(Vec<DownloadTask>),
 
     // Theme & Settings
@@ -240,6 +244,7 @@ impl WallsetterApp {
             search_sidebar_visible: true,
             search_results: None,
             is_searching: false,
+            is_appending_search_results: false,
             related_tags: Vec::new(),
             author_username: None,
             author_results: None,
@@ -247,6 +252,7 @@ impl WallsetterApp {
             thumbnails: HashMap::new(),
             thumbnail_sources: HashMap::new(),
             full_images: HashMap::new(),
+            preview_loading_frame: 0,
             selected_wallpapers: HashSet::new(),
             resolution_mode,
             resolution_filter_input,
@@ -371,18 +377,62 @@ impl WallsetterApp {
     async fn fetch_full_image(
         id: String,
         url: String,
+        local_path: Option<std::path::PathBuf>,
     ) -> (
         String,
         std::result::Result<iced::widget::image::Handle, String>,
     ) {
         let result = async {
-            let bytes = reqwest::get(&url).await?.bytes().await?;
+            if let Some(path) = local_path
+                && path.exists()
+            {
+                let bytes = tokio::fs::read(&path)
+                    .await
+                    .map_err(|e| format!("Failed to read local preview file: {e}"))?;
+                return Ok(iced::widget::image::Handle::from_bytes(bytes));
+            }
+
+            let bytes = reqwest::get(&url)
+                .await
+                .map_err(|e| e.to_string())?
+                .bytes()
+                .await
+                .map_err(|e| e.to_string())?;
             Ok(iced::widget::image::Handle::from_bytes(bytes.to_vec()))
         }
-        .await
-        .map_err(|e: reqwest::Error| e.to_string());
+        .await;
 
         (id, result)
+    }
+
+    fn local_wallpaper_path(download_dir: &str, wp: &Wallpaper) -> Option<std::path::PathBuf> {
+        let mut expected = resolve_download_dir(download_dir);
+        let extension = wp
+            .file_type
+            .strip_prefix("image/")
+            .filter(|ext| !ext.is_empty())
+            .unwrap_or("jpg");
+        expected.push(format!("{}.{}", wp.id, extension));
+
+        if expected.exists() {
+            return Some(expected);
+        }
+
+        let directory = resolve_download_dir(download_dir);
+        let prefix = format!("{}.", wp.id);
+
+        let entries = std::fs::read_dir(&directory).ok()?;
+        for entry in entries.flatten() {
+            let file_name = entry.file_name();
+            if file_name.to_string_lossy().starts_with(&prefix) {
+                let path = entry.path();
+                if path.is_file() {
+                    return Some(path);
+                }
+            }
+        }
+
+        None
     }
 
     async fn quick_set_wallpaper(
@@ -430,7 +480,7 @@ impl WallsetterApp {
     }
 
     pub fn title(&self) -> String {
-        String::from("Wallsetter")
+        String::from("Walder")
     }
 
     fn has_active_downloads(&self) -> bool {
@@ -444,6 +494,14 @@ impl WallsetterApp {
 
     fn should_poll_downloads(&self) -> bool {
         matches!(self.current_view, View::Downloads) || self.has_active_downloads()
+    }
+
+    fn is_preview_loading(&self) -> bool {
+        if let View::Preview(wallpaper) = &self.current_view {
+            !self.full_images.contains_key(&wallpaper.id)
+        } else {
+            false
+        }
     }
 
     fn sanitize_filters(filters: &mut SearchFilters) {
@@ -861,14 +919,21 @@ impl WallsetterApp {
                         return Task::perform(async { () }, |_| Message::LoadBookmarks);
                     }
                     View::Preview(wp) => {
+                        self.preview_loading_frame = 0;
                         let mut tasks: Vec<Task<Message>> = vec![Task::perform(
                             Self::fetch_wallpaper(self.provider.clone(), wp.id.clone()),
                             Message::PreviewWallpaperLoaded,
                         )];
 
                         if !self.full_images.contains_key(&wp.id) {
+                            let local_path =
+                                Self::local_wallpaper_path(&self.preferences.download_dir, &wp);
                             tasks.push(Task::perform(
-                                Self::fetch_full_image(wp.id.clone(), wp.full_url.clone()),
+                                Self::fetch_full_image(
+                                    wp.id.clone(),
+                                    wp.full_url.clone(),
+                                    local_path,
+                                ),
                                 |(id, res)| Message::FullImageLoaded(id, res),
                             ));
                         }
@@ -929,6 +994,7 @@ impl WallsetterApp {
                 self.search_query = format!("#{normalized}");
                 self.related_tags.clear();
                 self.is_searching = true;
+                self.is_appending_search_results = false;
                 self.active_filters.page = 1;
                 self.active_filters.seed = None;
                 self.sync_input_filters_into_active();
@@ -950,6 +1016,7 @@ impl WallsetterApp {
                 }
 
                 self.is_searching = true;
+                self.is_appending_search_results = false;
                 self.active_filters.page = 1;
                 self.active_filters.seed = None;
                 self.sync_input_filters_into_active();
@@ -965,24 +1032,108 @@ impl WallsetterApp {
                     Message::SearchCompleted,
                 )
             }
+            Message::SearchScrolled(viewport) => {
+                if self.is_searching {
+                    return Task::none();
+                }
+
+                let Some(results) = &self.search_results else {
+                    return Task::none();
+                };
+
+                if results.current_page >= results.last_page {
+                    return Task::none();
+                }
+
+                let viewport_bounds = viewport.bounds();
+                let content_bounds = viewport.content_bounds();
+                if content_bounds.height <= viewport_bounds.height {
+                    return Task::none();
+                }
+
+                let absolute = viewport.absolute_offset();
+                let max_offset = (content_bounds.height - viewport_bounds.height).max(0.0);
+                if max_offset <= 0.0 {
+                    return Task::none();
+                }
+
+                let distance_to_bottom = max_offset - absolute.y;
+                if distance_to_bottom > 280.0 {
+                    return Task::none();
+                }
+
+                self.is_searching = true;
+                self.is_appending_search_results = true;
+
+                let mut filters = self.active_filters.clone();
+                Self::sanitize_filters(&mut filters);
+                filters.page = results.current_page + 1;
+                filters.query = Self::normalize_search_query_for_api(&self.search_query);
+                self.active_filters.page = filters.page;
+
+                Task::perform(
+                    Self::fetch_initial_wallpapers(self.provider.clone(), filters),
+                    Message::SearchCompleted,
+                )
+            }
             Message::SearchCompleted(result) => {
                 self.is_searching = false;
+                let append_mode = self.is_appending_search_results;
+                self.is_appending_search_results = false;
                 match result {
                     Ok(r) => {
-                        let tasks = self.build_thumbnail_tasks_for_wallpapers(&r.wallpapers);
+                        let SearchResult {
+                            wallpapers,
+                            current_page,
+                            last_page,
+                            total,
+                            seed,
+                        } = r;
+
+                        let tasks = self.build_thumbnail_tasks_for_wallpapers(&wallpapers);
+
+                        self.active_filters.page = current_page;
+                        self.active_filters.seed = seed.clone();
+
+                        if append_mode {
+                            if let Some(existing) = &mut self.search_results {
+                                existing.wallpapers.extend(wallpapers);
+                                existing.current_page = current_page;
+                                existing.last_page = last_page;
+                                existing.total = total;
+                                existing.seed = seed.clone();
+                            } else {
+                                self.search_results = Some(SearchResult {
+                                    wallpapers,
+                                    current_page,
+                                    last_page,
+                                    total,
+                                    seed: seed.clone(),
+                                });
+                            }
+                        } else {
+                            self.search_results = Some(SearchResult {
+                                wallpapers,
+                                current_page,
+                                last_page,
+                                total,
+                                seed: seed.clone(),
+                            });
+                        }
+
                         self.related_tags = if let Some(primary_tag) =
                             Self::parse_primary_tag_query(&self.search_query)
                         {
-                            Self::derive_related_tags(&r, &primary_tag, 18)
+                            if let Some(results) = &self.search_results {
+                                Self::derive_related_tags(results, &primary_tag, 18)
+                            } else {
+                                Vec::new()
+                            }
                         } else {
                             Vec::new()
                         };
 
-                        self.active_filters.page = r.current_page;
-                        self.active_filters.seed = r.seed.clone();
-                        self.search_results = Some(r);
                         self.error_message = None;
-
                         return Task::batch(tasks);
                     }
                     Err(e) => {
@@ -1020,6 +1171,7 @@ impl WallsetterApp {
                     let last = results.last_page;
                     if current < last {
                         self.is_searching = true;
+                        self.is_appending_search_results = false;
                         let mut filters = self.active_filters.clone();
                         Self::sanitize_filters(&mut filters);
                         filters.page = current + 1;
@@ -1041,6 +1193,7 @@ impl WallsetterApp {
                     let current = results.current_page;
                     if current > 1 {
                         self.is_searching = true;
+                        self.is_appending_search_results = false;
                         let mut filters = self.active_filters.clone();
                         Self::sanitize_filters(&mut filters);
                         filters.page = current - 1;
@@ -1475,13 +1628,19 @@ impl WallsetterApp {
                     Ok(wallpaper) => {
                         self.previous_view = Some(Box::new(self.current_view.clone()));
                         self.current_view = View::Preview(wallpaper.clone());
+                        self.preview_loading_frame = 0;
                         self.error_message = None;
 
                         if !self.full_images.contains_key(&wallpaper.id) {
+                            let local_path = Self::local_wallpaper_path(
+                                &self.preferences.download_dir,
+                                &wallpaper,
+                            );
                             return Task::perform(
                                 Self::fetch_full_image(
                                     wallpaper.id.clone(),
                                     wallpaper.full_url.clone(),
+                                    local_path,
                                 ),
                                 |(id, res)| Message::FullImageLoaded(id, res),
                             );
@@ -1636,6 +1795,14 @@ impl WallsetterApp {
                     async move { downloader.get_tasks().await },
                     Message::DownloadsUpdated,
                 )
+            }
+            Message::PreviewLoadingTick => {
+                if self.is_preview_loading() {
+                    self.preview_loading_frame = (self.preview_loading_frame + 1) % 4;
+                } else {
+                    self.preview_loading_frame = 0;
+                }
+                Task::none()
             }
             Message::DownloadsUpdated(mut tasks) => {
                 tasks.sort_by(|a, b| b.created_at.cmp(&a.created_at));
@@ -1796,7 +1963,7 @@ impl WallsetterApp {
         container(
             row![
                 column![
-                    text("Wallsetter").size(25),
+                    text("Walder").size(25),
                     text("Minimal wallpaper workflow, fast and focused.")
                         .size(12)
                         .color([0.60, 0.66, 0.74]),
@@ -1824,10 +1991,25 @@ impl WallsetterApp {
     }
 
     pub fn subscription(&self) -> iced::Subscription<Message> {
+        let mut subscriptions = Vec::new();
+
         if self.should_poll_downloads() {
-            iced::time::every(std::time::Duration::from_millis(750)).map(|_| Message::Tick)
-        } else {
-            iced::Subscription::none()
+            subscriptions.push(
+                iced::time::every(std::time::Duration::from_millis(750)).map(|_| Message::Tick),
+            );
+        }
+
+        if self.is_preview_loading() {
+            subscriptions.push(
+                iced::time::every(std::time::Duration::from_millis(120))
+                    .map(|_| Message::PreviewLoadingTick),
+            );
+        }
+
+        match subscriptions.len() {
+            0 => iced::Subscription::none(),
+            1 => subscriptions.remove(0),
+            _ => iced::Subscription::batch(subscriptions),
         }
     }
 
@@ -1867,6 +2049,13 @@ impl WallsetterApp {
         self.is_searching
     }
 
+    pub fn has_more_search_pages(&self) -> bool {
+        self.search_results
+            .as_ref()
+            .map(|results| results.current_page < results.last_page)
+            .unwrap_or(false)
+    }
+
     pub fn search_results(&self) -> Option<&SearchResult> {
         self.search_results.as_ref()
     }
@@ -1897,6 +2086,15 @@ impl WallsetterApp {
 
     pub fn get_full_image(&self, id: &str) -> Option<iced::widget::image::Handle> {
         self.full_images.get(id).cloned()
+    }
+
+    pub fn preview_loading_indicator(&self) -> &'static str {
+        match self.preview_loading_frame % 4 {
+            0 => "-",
+            1 => "\\",
+            2 => "|",
+            _ => "/",
+        }
     }
 
     pub fn selected_wallpapers(&self) -> &HashSet<String> {

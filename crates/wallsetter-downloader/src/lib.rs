@@ -26,7 +26,7 @@ impl DownloadManager {
 
         Self {
             client: reqwest::Client::builder()
-                .user_agent("wallsetter/0.1.0")
+                .user_agent("walder/0.1.0")
                 .build()
                 .expect("Failed to build download client"),
             tasks: Arc::new(Mutex::new(HashMap::new())),

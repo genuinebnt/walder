@@ -436,10 +436,14 @@ pub fn view<'a>(app: &'a WallsetterApp) -> Element<'a, Message> {
                         .padding(20)
                         .style(crate::theme::panel),
                 );
-                return scrollable(results_ctn).into();
+                return scrollable(results_ctn).height(Length::Fill).into();
             }
 
-            let available_width = if size.width <= 0.0 { 900.0 } else { size.width };
+            let available_width = if size.width <= 0.0 {
+                900.0
+            } else {
+                size.width.max(1.0)
+            };
             let spacing = 16.0;
             let min_item_width = 180.0;
             let desired = current_cols as usize;
@@ -455,8 +459,7 @@ pub fn view<'a>(app: &'a WallsetterApp) -> Element<'a, Message> {
             }
 
             let total_spacing = spacing * (columns.saturating_sub(1) as f32);
-            let item_width =
-                ((available_width - total_spacing) / columns as f32).max(min_item_width);
+            let item_width = ((available_width - total_spacing) / columns as f32).max(1.0);
             let thumbnail_height = (item_width * 0.62).clamp(100.0, 220.0);
 
             let mut grid_row = row![].spacing(spacing);
@@ -553,10 +556,17 @@ pub fn view<'a>(app: &'a WallsetterApp) -> Element<'a, Message> {
             );
         }
 
-        scrollable(results_ctn).into()
+        let mut results_scroll = scrollable(results_ctn).height(Length::Fill);
+        if app.has_more_search_pages() {
+            results_scroll = results_scroll.on_scroll(Message::SearchScrolled);
+        }
+        results_scroll.into()
     });
 
-    let mut main_content = column![search_row].spacing(14).width(Length::Fill);
+    let mut main_content = column![search_row]
+        .spacing(14)
+        .width(Length::Fill)
+        .height(Length::Fill);
     if selected_count > 0 {
         main_content = main_content.push(
             container(
@@ -579,12 +589,13 @@ pub fn view<'a>(app: &'a WallsetterApp) -> Element<'a, Message> {
             .style(crate::theme::panel),
         );
     }
-    main_content = main_content.push(results_content);
+    main_content = main_content.push(container(results_content).height(Length::Fill));
 
     if app.is_search_sidebar_visible() {
         row![sidebar, main_content]
             .spacing(18)
             .width(Length::Fill)
+            .height(Length::Fill)
             .into()
     } else {
         main_content.into()

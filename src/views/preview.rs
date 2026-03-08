@@ -27,25 +27,36 @@ pub fn view<'a>(app: &'a WallsetterApp, wp: &'a Wallpaper) -> Element<'a, Messag
         let frame_width = preview_width.min(natural_width);
         let frame_height = preview_height.min(natural_height);
 
-        let img_view: Element<'a, Message> = if let Some(handle) = app.get_full_image(&wp.id) {
+        let full_handle = app.get_full_image(&wp.id);
+        let thumb_handle = app.get_thumbnail(&wp.id);
+        let is_loading_full = full_handle.is_none();
+
+        let img_view: Element<'a, Message> = if let Some(handle) = full_handle {
             image(handle)
                 .width(Length::Fixed(frame_width))
                 .height(Length::Fixed(frame_height))
                 .content_fit(iced::ContentFit::Contain)
                 .into()
-        } else if let Some(handle) = app.get_thumbnail(&wp.id) {
+        } else if let Some(handle) = thumb_handle {
             image(handle)
                 .width(Length::Fixed(frame_width))
                 .height(Length::Fixed(frame_height))
                 .content_fit(iced::ContentFit::Contain)
                 .into()
         } else {
-            container(text("Loading image preview...").size(16))
-                .width(Length::Fixed(frame_width))
-                .height(Length::Fixed(frame_height))
-                .align_x(iced::alignment::Horizontal::Center)
-                .align_y(iced::alignment::Vertical::Center)
-                .into()
+            container(
+                column![
+                    text("Loading image preview...").size(16),
+                    text("Waiting for thumbnail/full image data.").size(12),
+                ]
+                .spacing(8)
+                .align_x(Alignment::Center),
+            )
+            .width(Length::Fixed(frame_width))
+            .height(Length::Fixed(frame_height))
+            .align_x(iced::alignment::Horizontal::Center)
+            .align_y(iced::alignment::Vertical::Center)
+            .into()
         };
 
         let author_line: Element<'a, Message> = if let Some(username) = &wp.uploader {
@@ -143,17 +154,39 @@ pub fn view<'a>(app: &'a WallsetterApp, wp: &'a Wallpaper) -> Element<'a, Messag
         .padding(12)
         .style(crate::theme::panel);
 
-        let preview_panel = container(
+        let mut preview_content = column![].spacing(8).height(Length::Fill);
+        if is_loading_full {
+            preview_content = preview_content.push(
+                container(
+                    row![
+                        text(format!(
+                            "Loading full image {}",
+                            app.preview_loading_indicator()
+                        ))
+                        .size(14),
+                        text("Showing thumbnail preview in the meantime.").size(12),
+                    ]
+                    .spacing(10)
+                    .align_y(Alignment::Center),
+                )
+                .padding(8)
+                .style(crate::theme::panel_subtle),
+            );
+        }
+
+        preview_content = preview_content.push(
             container(img_view)
                 .width(Length::Fill)
                 .height(Length::Fill)
                 .align_x(iced::alignment::Horizontal::Center)
                 .align_y(iced::alignment::Vertical::Center),
-        )
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .padding(12)
-        .style(crate::theme::panel_subtle);
+        );
+
+        let preview_panel = container(preview_content)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .padding(12)
+            .style(crate::theme::panel_subtle);
 
         row![info_panel, preview_panel]
             .spacing(12)

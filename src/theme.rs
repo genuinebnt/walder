@@ -12,7 +12,7 @@ pub fn active_theme(theme: Theme) -> IcedTheme {
 
 fn codex_dark() -> IcedTheme {
     IcedTheme::custom(
-        "Wallsetter Codex Dark".to_string(),
+        "Walder Codex Dark".to_string(),
         Palette {
             background: Color::from_rgb8(0x0D, 0x11, 0x17),
             text: Color::from_rgb8(0xE6, 0xED, 0xF3),
@@ -25,7 +25,7 @@ fn codex_dark() -> IcedTheme {
 
 fn codex_light() -> IcedTheme {
     IcedTheme::custom(
-        "Wallsetter Codex Light".to_string(),
+        "Walder Codex Light".to_string(),
         Palette {
             background: Color::from_rgb8(0xF5, 0xF7, 0xFA),
             text: Color::from_rgb8(0x11, 0x18, 0x27),

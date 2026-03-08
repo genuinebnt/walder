@@ -8,9 +8,9 @@ if [[ "$(uname -s)" != "Darwin" ]]; then
 fi
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-APP_NAME="${APP_NAME:-Wallsetter}"
-BIN_NAME="${BIN_NAME:-wallsetter}"
-BUNDLE_ID="${BUNDLE_ID:-com.genuinebasilnt.wallsetter}"
+APP_NAME="${APP_NAME:-Walder}"
+BIN_NAME="${BIN_NAME:-walder}"
+BUNDLE_ID="${BUNDLE_ID:-com.genuinebasilnt.walder}"
 DIST_DIR="${ROOT_DIR}/dist"
 BUILD_MODE="${BUILD_MODE:-release}" # release | debug
 ICON_ICNS="${ICON_ICNS:-${ROOT_DIR}/assets/${APP_NAME}.icns}"
@@ -20,7 +20,7 @@ if [[ "${BUILD_MODE}" != "release" && "${BUILD_MODE}" != "debug" ]]; then
   exit 1
 fi
 
-VERSION="${VERSION:-$(cargo pkgid -p wallsetter | sed -E 's/.*#([0-9A-Za-z.-]+)$/\1/')}"
+VERSION="${VERSION:-$(cargo pkgid -p walder | sed -E 's/.*#([0-9A-Za-z.-]+)$/\1/')}"
 TARGET_BIN="${ROOT_DIR}/target/${BUILD_MODE}/${BIN_NAME}"
 
 APP_DIR="${DIST_DIR}/${APP_NAME}.app"

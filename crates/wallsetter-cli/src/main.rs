@@ -93,10 +93,10 @@ async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     // Initialize paths
-    let proj_dirs = ProjectDirs::from("com", "genuinebasilnt", "wallsetter")
+    let proj_dirs = ProjectDirs::from("com", "genuinebasilnt", "walder")
         .expect("Failed to get project directories");
     let data_dir = proj_dirs.data_dir();
-    let db_path = data_dir.join("wallsetter.db");
+    let db_path = data_dir.join("walder.db");
 
     // Initialize core services
     let db = Arc::new(Database::new(&db_path)?);
