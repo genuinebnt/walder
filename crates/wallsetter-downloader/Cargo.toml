@@ -1,0 +1,16 @@
+[package]
+name = "wallsetter-downloader"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+wallsetter-core.workspace = true
+reqwest = { workspace = true, features = ["stream"] }
+tokio.workspace = true
+futures.workspace = true
+bytes.workspace = true
+tracing.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true
+uuid.workspace = true
+chrono.workspace = true

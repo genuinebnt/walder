@@ -1,0 +1,98 @@
+[workspace]
+members = [
+    "crates/wallsetter-core",
+    "crates/wallsetter-provider",
+    "crates/wallsetter-downloader",
+    "crates/wallsetter-setter",
+    "crates/wallsetter-db",
+    "crates/wallsetter-scheduler",
+    "crates/wallsetter-cli",
+]
+resolver = "3"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+authors = ["genuinebasilnt"]
+
+[workspace.dependencies]
+# Async
+tokio = { version = "1", features = ["full"] }
+
+# HTTP
+reqwest = { version = "0.12", features = ["json", "stream"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+
+# Database
+rusqlite = { version = "0.32", features = ["bundled"] }
+r2d2 = "0.8"
+r2d2_sqlite = "0.25"
+
+# CLI
+clap = { version = "4", features = ["derive"] }
+
+# Image
+image = "0.25"
+
+# Wallpaper
+wallpaper = "3.2"
+
+# Directories
+directories = "6"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Error handling
+thiserror = "2"
+anyhow = "1"
+
+# Utilities
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+url = { version = "2", features = ["serde"] }
+futures = "0.3"
+bytes = "1"
+indicatif = "0.17"
+
+# Internal crates
+wallsetter-core = { path = "crates/wallsetter-core" }
+wallsetter-provider = { path = "crates/wallsetter-provider" }
+wallsetter-downloader = { path = "crates/wallsetter-downloader" }
+wallsetter-setter = { path = "crates/wallsetter-setter" }
+wallsetter-db = { path = "crates/wallsetter-db" }
+wallsetter-scheduler = { path = "crates/wallsetter-scheduler" }
+
+[package]
+name = "wallsetter"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+wallsetter-core.workspace = true
+wallsetter-provider.workspace = true
+wallsetter-downloader.workspace = true
+wallsetter-setter.workspace = true
+wallsetter-db.workspace = true
+wallsetter-scheduler.workspace = true
+
+iced = { version = "0.13", features = ["tokio", "image", "lazy"] }
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+directories.workspace = true
+image.workspace = true
+chrono.workspace = true
+uuid.workspace = true
+futures.workspace = true
+bytes.workspace = true
+reqwest.workspace = true

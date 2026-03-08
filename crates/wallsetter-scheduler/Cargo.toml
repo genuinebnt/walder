@@ -1,0 +1,16 @@
+[package]
+name = "wallsetter-scheduler"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+wallsetter-core.workspace = true
+wallsetter-setter.workspace = true
+wallsetter-db.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true
+chrono.workspace = true
+serde.workspace = true
+rand = "0.8"

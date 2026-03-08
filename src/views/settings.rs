@@ -1,0 +1,82 @@
+use iced::widget::{button, checkbox, column, container, row, scrollable, text, text_input};
+use iced::{Alignment, Element, Length};
+
+use crate::app::{Message, SettingsMessage, WallsetterApp};
+
+pub fn view<'a>(app: &'a WallsetterApp) -> Element<'a, Message> {
+    let prefs = app.preferences();
+
+    let api_key_input = row![
+        text("Wallhaven API Key").width(Length::Fixed(190.0)),
+        text_input("Optional API key", prefs.api_key.as_deref().unwrap_or(""))
+            .on_input(|s| Message::SettingsChanged(SettingsMessage::ApiKeyChanged(s)))
+            .secure(true)
+            .padding(10)
+            .width(Length::Fill),
+    ]
+    .spacing(12)
+    .align_y(Alignment::Center);
+
+    let download_dir_input = row![
+        text("Download directory").width(Length::Fixed(190.0)),
+        text_input("Path to save wallpapers", &prefs.download_dir)
+            .on_input(|s| Message::SettingsChanged(SettingsMessage::DownloadDirChanged(s)))
+            .padding(10)
+            .width(Length::Fill),
+    ]
+    .spacing(12)
+    .align_y(Alignment::Center);
+
+    let max_parallel_input = row![
+        text("Max parallel downloads").width(Length::Fixed(190.0)),
+        text_input("1-10", &prefs.max_parallel_downloads.to_string())
+            .on_input(|s| Message::SettingsChanged(SettingsMessage::MaxParallelChanged(s)))
+            .padding(10)
+            .width(Length::Fixed(120.0)),
+        text("(applies when queue is idle)").size(12),
+    ]
+    .spacing(12)
+    .align_y(Alignment::Center);
+
+    let scheduler_section = container(
+        column![
+            text("Scheduler").size(24),
+            checkbox(
+                "Enable automatic wallpaper rotation",
+                prefs.scheduler.enabled
+            )
+            .on_toggle(|b| Message::SettingsChanged(SettingsMessage::SchedulerEnabledChanged(b))),
+            row![
+                text("Interval (minutes)").width(Length::Fixed(190.0)),
+                text_input("e.g. 30", &prefs.scheduler.interval_minutes.to_string())
+                    .on_input(|s| Message::SettingsChanged(
+                        SettingsMessage::SchedulerIntervalChanged(s)
+                    ))
+                    .padding(10)
+                    .width(Length::Fixed(120.0)),
+            ]
+            .spacing(12)
+            .align_y(Alignment::Center),
+            checkbox("Shuffle wallpapers", prefs.scheduler.shuffle).on_toggle(|b| {
+                Message::SettingsChanged(SettingsMessage::SchedulerShuffleChanged(b))
+            }),
+        ]
+        .spacing(12),
+    )
+    .padding(14)
+    .style(container::rounded_box);
+
+    let content = column![
+        text("Settings").size(30),
+        container(column![api_key_input, download_dir_input, max_parallel_input].spacing(12))
+            .padding(14)
+            .style(container::rounded_box),
+        scheduler_section,
+        button("Save Preferences")
+            .on_press(Message::SettingsChanged(SettingsMessage::Save))
+            .style(button::primary),
+    ]
+    .spacing(16);
+
+    scrollable(content).into()
+}

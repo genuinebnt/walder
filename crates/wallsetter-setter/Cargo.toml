@@ -1,0 +1,11 @@
+[package]
+name = "wallsetter-setter"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+wallsetter-core.workspace = true
+wallpaper.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
