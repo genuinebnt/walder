@@ -9,21 +9,18 @@ pub fn view<'a>(app: &'a WallsetterApp) -> Element<'a, Message> {
 
     let mut header = column![
         container(
-            row![
-                column![
-                    text("Bookmarks").size(26),
-                    text("Saved wallpapers you can reopen anytime.").size(12),
-                ]
-                .spacing(2)
-                .width(Length::Fill),
-                text(format!(
+            column![
+                text("Bookmarks").size(26),
+                text("Saved wallpapers you can reopen anytime.").size(12),
+                container(text(format!(
                     "{} saved | {} folders",
                     bookmarks.len(),
                     folder_count
-                ))
-                .size(12),
+                )))
+                .padding([4, 10])
+                .style(crate::theme::chip_neutral),
             ]
-            .align_y(Alignment::Center),
+            .spacing(6),
         )
         .padding(12)
         .style(crate::theme::panel)
@@ -78,11 +75,11 @@ pub fn view<'a>(app: &'a WallsetterApp) -> Element<'a, Message> {
                         .width(Length::Fill)
                         .style(crate::theme::panel_subtle),
                     text(format!("{}x{}", bm.resolution.width, bm.resolution.height)).size(11),
+                    text(format!("ID {}", short_id(&bm.wallpaper_id))).size(10),
                     row![
                         button("Open")
                             .on_press(Message::OpenBookmark(bm.wallpaper_id.clone()))
                             .style(crate::theme::button_secondary),
-                        text(format!("ID {}", bm.wallpaper_id)).size(11),
                     ]
                     .spacing(8)
                     .align_y(Alignment::Center),
@@ -111,4 +108,12 @@ pub fn view<'a>(app: &'a WallsetterApp) -> Element<'a, Message> {
     });
 
     header.push(grid).into()
+}
+
+fn short_id(id: &str) -> String {
+    if id.chars().count() > 12 {
+        format!("{}...", id.chars().take(12).collect::<String>())
+    } else {
+        id.to_string()
+    }
 }

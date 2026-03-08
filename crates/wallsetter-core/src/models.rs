@@ -179,6 +179,15 @@ impl SortOrder {
     }
 }
 
+impl std::fmt::Display for SortOrder {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Desc => write!(f, "Descending"),
+            Self::Asc => write!(f, "Ascending"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 pub enum ToplistRange {
     OneDay,
@@ -201,6 +210,20 @@ impl ToplistRange {
             Self::ThreeMonths => "3M",
             Self::SixMonths => "6M",
             Self::OneYear => "1y",
+        }
+    }
+}
+
+impl std::fmt::Display for ToplistRange {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::OneDay => write!(f, "1 Day"),
+            Self::ThreeDays => write!(f, "3 Days"),
+            Self::OneWeek => write!(f, "1 Week"),
+            Self::OneMonth => write!(f, "1 Month"),
+            Self::ThreeMonths => write!(f, "3 Months"),
+            Self::SixMonths => write!(f, "6 Months"),
+            Self::OneYear => write!(f, "1 Year"),
         }
     }
 }

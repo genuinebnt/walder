@@ -77,6 +77,23 @@ pub fn panel_subtle(theme: &IcedTheme) -> container::Style {
         })
 }
 
+pub fn panel_selected(theme: &IcedTheme) -> container::Style {
+    let palette = theme.extended_palette();
+
+    container::Style::default()
+        .background(palette.primary.weak.color.scale_alpha(0.32))
+        .border(Border {
+            color: palette.primary.base.color.scale_alpha(0.95),
+            width: 1.8,
+            ..border::rounded(10)
+        })
+        .shadow(Shadow {
+            color: palette.primary.strong.color.scale_alpha(0.22),
+            offset: Vector::new(0.0, 2.0),
+            blur_radius: 9.0,
+        })
+}
+
 pub fn chip_neutral(theme: &IcedTheme) -> container::Style {
     let palette = theme.extended_palette();
 

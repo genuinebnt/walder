@@ -32,11 +32,22 @@ pub struct WallsetterApp {
 
     // Search state
     search_query: String,
+    search_sidebar_visible: bool,
     search_results: Option<SearchResult>,
     is_searching: bool,
+    related_tags: Vec<(String, u32)>,
+    author_username: Option<String>,
+    author_results: Option<SearchResult>,
+    is_loading_author: bool,
     thumbnails: HashMap<String, iced::widget::image::Handle>,
+    thumbnail_sources: HashMap<String, String>,
     full_images: HashMap<String, iced::widget::image::Handle>,
     selected_wallpapers: HashSet<String>,
+    resolution_mode: ResolutionMode,
+    resolution_filter_input: String,
+    atleast_resolution_input: String,
+    ratio_filter_input: String,
+    color_filter_input: String,
     // Download state
     download_tasks: Vec<DownloadTask>,
 
@@ -58,6 +69,7 @@ pub enum View {
     Bookmarks,
     Settings,
     Preview(Wallpaper),
+    AuthorProfile(String),
 }
 
 #[derive(Debug, Clone)]
@@ -67,9 +79,12 @@ pub enum Message {
 
     // Search
     SearchQueryChanged(String),
+    SearchByTag(String),
+    ToggleSearchSidebar,
     SubmitSearch,
     SearchCompleted(std::result::Result<SearchResult, String>),
     ThumbnailLoaded(
+        String,
         String,
         std::result::Result<iced::widget::image::Handle, String>,
     ),
@@ -77,11 +92,13 @@ pub enum Message {
         String,
         std::result::Result<iced::widget::image::Handle, String>,
     ),
+    PreviewWallpaperLoaded(std::result::Result<Wallpaper, String>),
 
     // Preview & Set
     GoBack,
     DownloadSingle(Wallpaper),
     SetWallpaper(std::path::PathBuf),
+    OpenAuthorProfile(String),
 
     // Bookmarks
     LoadBookmarks,
@@ -91,16 +108,25 @@ pub enum Message {
     BookmarkWallpaperLoaded(std::result::Result<Wallpaper, String>),
 
     // Selection & Download
-    ToggleSelection(String, bool),
+    TileClicked(String),
     SelectAll,
     DeselectAll,
     DownloadSelected,
+    BookmarkSelected,
     QuickSet(Wallpaper),
     QuickSetCompleted(std::result::Result<(), String>),
+    DownloadAuthorWorks,
+    DownloadAllAuthorWorks,
+    DownloadAllAuthorWorksCompleted(std::result::Result<usize, String>),
 
     // Pagination
     NextPage,
     PreviousPage,
+    AuthorNextPage,
+    AuthorPreviousPage,
+
+    // Author works
+    AuthorWorksLoaded(std::result::Result<SearchResult, String>),
 
     // Grid layout
     GridColumnsChanged(u32),
@@ -109,6 +135,15 @@ pub enum Message {
     ToggleCategory(Category, bool),
     TogglePurity(Purity, bool),
     SortingChanged(Sorting),
+    SortOrderChanged(SortOrder),
+    ToplistRangeChanged(ToplistRange),
+    ResolutionModeChanged(ResolutionMode),
+    ToggleResolutionFilter(Resolution, bool),
+    ToggleRatioFilter(String, bool),
+    AtleastResolutionChanged(String),
+    ResolutionFilterChanged(String),
+    RatioFilterChanged(String),
+    ColorFilterChanged(String),
     SaveFiltersAsDefault,
 
     // Downloads
@@ -134,7 +169,39 @@ pub enum SettingsMessage {
     Save,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResolutionMode {
+    AtLeast,
+    Exactly,
+}
+
+impl std::fmt::Display for ResolutionMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::AtLeast => write!(f, "At Least"),
+            Self::Exactly => write!(f, "Exactly"),
+        }
+    }
+}
+
 impl WallsetterApp {
+    const GRID_COLUMN_PRESETS: [u32; 3] = [3, 4, 6];
+
+    fn normalize_grid_columns(cols: u32) -> u32 {
+        let mut best = Self::GRID_COLUMN_PRESETS[0];
+        let mut best_delta = cols.abs_diff(best);
+
+        for candidate in Self::GRID_COLUMN_PRESETS.iter().skip(1) {
+            let delta = cols.abs_diff(*candidate);
+            if delta < best_delta {
+                best = *candidate;
+                best_delta = delta;
+            }
+        }
+
+        best
+    }
+
     pub fn new(
         db: Arc<Database>,
         provider: Arc<WallhavenClient>,
@@ -143,12 +210,22 @@ impl WallsetterApp {
         scheduler: Arc<Scheduler>,
     ) -> (Self, Task<Message>) {
         let mut preferences = db.get_preferences().unwrap_or_default();
-        preferences.grid_columns = preferences.grid_columns.clamp(2, 8);
+        preferences.grid_columns = Self::normalize_grid_columns(preferences.grid_columns);
         preferences.max_parallel_downloads = preferences.max_parallel_downloads.clamp(1, 10);
         preferences.scheduler.interval_minutes = preferences.scheduler.interval_minutes.max(1);
 
         let mut active_filters = preferences.default_filters.clone();
         Self::sanitize_filters(&mut active_filters);
+        let resolution_mode = if active_filters.atleast.is_some() {
+            ResolutionMode::AtLeast
+        } else {
+            ResolutionMode::Exactly
+        };
+        let resolution_filter_input = Self::format_resolution_filters(&active_filters.resolutions);
+        let atleast_resolution_input =
+            Self::format_atleast_resolution_filter(active_filters.atleast.as_ref());
+        let ratio_filter_input = Self::format_ratio_filters(&active_filters.ratios);
+        let color_filter_input = Self::format_color_filters(&active_filters.colors);
 
         let app = Self {
             db,
@@ -160,11 +237,22 @@ impl WallsetterApp {
             preferences,
             active_filters,
             search_query: String::new(),
+            search_sidebar_visible: true,
             search_results: None,
             is_searching: false,
+            related_tags: Vec::new(),
+            author_username: None,
+            author_results: None,
+            is_loading_author: false,
             thumbnails: HashMap::new(),
+            thumbnail_sources: HashMap::new(),
             full_images: HashMap::new(),
             selected_wallpapers: HashSet::new(),
+            resolution_mode,
+            resolution_filter_input,
+            atleast_resolution_input,
+            ratio_filter_input,
+            color_filter_input,
             download_tasks: Vec::new(),
             bookmarks: Vec::new(),
             bookmark_folders: Vec::new(),
@@ -201,10 +289,70 @@ impl WallsetterApp {
             .map_err(|e| e.to_string())
     }
 
+    async fn fetch_author_wallpapers(
+        provider: Arc<WallhavenClient>,
+        username: String,
+        page: u32,
+        base_filters: SearchFilters,
+    ) -> std::result::Result<SearchResult, String> {
+        let mut filters = base_filters;
+        Self::sanitize_filters(&mut filters);
+        filters.query = Some(format!("@{}", username.trim()));
+        filters.page = page.max(1);
+        filters.seed = None;
+        provider.search(&filters).await.map_err(|e| e.to_string())
+    }
+
+    async fn queue_all_author_works(
+        provider: Arc<WallhavenClient>,
+        downloader: Arc<DownloadManager>,
+        username: String,
+        download_dir: String,
+        filters: SearchFilters,
+    ) -> std::result::Result<usize, String> {
+        let mut page = 1;
+        let mut items: Vec<(String, String, String)> = Vec::new();
+
+        loop {
+            let result = Self::fetch_author_wallpapers(
+                provider.clone(),
+                username.clone(),
+                page,
+                filters.clone(),
+            )
+            .await?;
+            let last_page = result.last_page;
+
+            for wp in result.wallpapers {
+                let filename = format!("{}.{}", wp.id, wp.file_type.replace("image/", ""));
+                items.push((wp.id, wp.full_url, filename));
+            }
+
+            if page >= last_page {
+                break;
+            }
+            page += 1;
+        }
+
+        if items.is_empty() {
+            return Ok(0);
+        }
+
+        let count = items.len();
+        let dest = resolve_download_dir(&download_dir);
+        downloader
+            .enqueue_bulk(items, &dest)
+            .await
+            .map_err(|e| e.to_string())?;
+
+        Ok(count)
+    }
+
     async fn fetch_thumbnail(
         id: String,
         url: String,
     ) -> (
+        String,
         String,
         std::result::Result<iced::widget::image::Handle, String>,
     ) {
@@ -217,7 +365,7 @@ impl WallsetterApp {
         .await
         .map_err(|e: reqwest::Error| e.to_string());
 
-        (id, result)
+        (id, url, result)
     }
 
     async fn fetch_full_image(
@@ -312,6 +460,361 @@ impl WallsetterApp {
         }
     }
 
+    fn parse_resolution_filters(raw: &str) -> Vec<Resolution> {
+        let mut parsed = Vec::new();
+
+        for token in raw.split(',') {
+            let normalized = token
+                .trim()
+                .to_lowercase()
+                .replace(':', "x")
+                .replace(' ', "");
+
+            if normalized.is_empty() {
+                continue;
+            }
+
+            let Some((w, h)) = normalized.split_once('x') else {
+                continue;
+            };
+
+            let (Ok(width), Ok(height)) = (w.parse::<u32>(), h.parse::<u32>()) else {
+                continue;
+            };
+
+            if width == 0 || height == 0 {
+                continue;
+            }
+
+            let candidate = Resolution::new(width, height);
+            if parsed
+                .iter()
+                .all(|existing: &Resolution| existing.width != width || existing.height != height)
+            {
+                parsed.push(candidate);
+            }
+        }
+
+        parsed
+    }
+
+    fn parse_single_resolution_filter(raw: &str) -> Option<Resolution> {
+        Self::parse_resolution_filters(raw).into_iter().next()
+    }
+
+    fn parse_ratio_filters(raw: &str) -> Vec<String> {
+        let mut parsed = Vec::new();
+
+        for token in raw.split(',') {
+            let normalized = token
+                .trim()
+                .to_lowercase()
+                .replace(':', "x")
+                .replace(' ', "");
+
+            if normalized.is_empty() {
+                continue;
+            }
+
+            if normalized == "landscape" || normalized == "allwide" {
+                let candidate = "landscape".to_string();
+                if !parsed.contains(&candidate) {
+                    parsed.push(candidate);
+                }
+                continue;
+            }
+
+            if normalized == "portrait" || normalized == "allportrait" {
+                let candidate = "portrait".to_string();
+                if !parsed.contains(&candidate) {
+                    parsed.push(candidate);
+                }
+                continue;
+            }
+
+            let Some((w, h)) = normalized.split_once('x') else {
+                continue;
+            };
+
+            let (Ok(width), Ok(height)) = (w.parse::<u32>(), h.parse::<u32>()) else {
+                continue;
+            };
+
+            if width == 0 || height == 0 {
+                continue;
+            }
+
+            let candidate = format!("{width}x{height}");
+            if !parsed.contains(&candidate) {
+                parsed.push(candidate);
+            }
+        }
+
+        parsed
+    }
+
+    fn format_resolution_filters(resolutions: &[Resolution]) -> String {
+        resolutions
+            .iter()
+            .map(|res| format!("{}x{}", res.width, res.height))
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+
+    fn format_atleast_resolution_filter(resolution: Option<&Resolution>) -> String {
+        resolution
+            .map(|res| format!("{}x{}", res.width, res.height))
+            .unwrap_or_default()
+    }
+
+    fn format_ratio_filters(ratios: &[String]) -> String {
+        ratios.join(", ")
+    }
+
+    fn parse_color_filters(raw: &str) -> Vec<String> {
+        for token in raw.split([',', ' ']) {
+            let candidate = token.trim().trim_start_matches('#').to_lowercase();
+            if candidate.len() == 6 && candidate.chars().all(|c| c.is_ascii_hexdigit()) {
+                return vec![candidate];
+            }
+        }
+
+        Vec::new()
+    }
+
+    fn format_color_filters(colors: &[String]) -> String {
+        colors
+            .first()
+            .map(|color| format!("#{color}"))
+            .unwrap_or_default()
+    }
+
+    fn sync_input_filters_into_active(&mut self) {
+        self.active_filters.ratios = Self::parse_ratio_filters(&self.ratio_filter_input);
+        self.active_filters.colors = Self::parse_color_filters(&self.color_filter_input);
+
+        match self.resolution_mode {
+            ResolutionMode::AtLeast => {
+                self.active_filters.atleast =
+                    Self::parse_single_resolution_filter(&self.atleast_resolution_input);
+                self.active_filters.resolutions.clear();
+            }
+            ResolutionMode::Exactly => {
+                self.active_filters.atleast = None;
+                self.active_filters.resolutions =
+                    Self::parse_resolution_filters(&self.resolution_filter_input);
+            }
+        }
+
+        if self.active_filters.sorting == Sorting::Toplist {
+            if self.active_filters.toplist_range.is_none() {
+                self.active_filters.toplist_range = Some(ToplistRange::SixMonths);
+            }
+        } else {
+            self.active_filters.toplist_range = None;
+        }
+    }
+
+    fn strip_ascii_prefix_ci<'a>(input: &'a str, prefix: &str) -> Option<&'a str> {
+        let head = input.get(..prefix.len())?;
+        if head.eq_ignore_ascii_case(prefix) {
+            input.get(prefix.len()..)
+        } else {
+            None
+        }
+    }
+
+    fn parse_primary_tag_query(raw: &str) -> Option<String> {
+        let mut tokens = raw.split_whitespace().peekable();
+
+        while let Some(token) = tokens.next() {
+            let token = token.trim();
+            if token.is_empty() || token.starts_with('-') {
+                continue;
+            }
+
+            let unsigned = token.trim_start_matches('+');
+            let candidate = if let Some(rest) = unsigned.strip_prefix('#') {
+                Some(rest)
+            } else if unsigned.eq_ignore_ascii_case("tag:") {
+                tokens
+                    .next()
+                    .map(str::trim)
+                    .map(|next| next.trim_start_matches('#'))
+            } else {
+                Self::strip_ascii_prefix_ci(unsigned, "tag:")
+            };
+
+            if let Some(raw_tag) = candidate {
+                let normalized = raw_tag
+                    .trim()
+                    .trim_start_matches('#')
+                    .trim_matches(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '-'))
+                    .to_lowercase();
+
+                if !normalized.is_empty() {
+                    return Some(normalized);
+                }
+            }
+        }
+
+        None
+    }
+
+    fn normalize_search_query_for_api(raw: &str) -> Option<String> {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+
+        let mut normalized_tokens: Vec<String> = Vec::new();
+        let mut tokens = trimmed.split_whitespace().peekable();
+
+        while let Some(token) = tokens.next() {
+            let token = token.trim();
+            if token.is_empty() {
+                continue;
+            }
+
+            let (sign, unsigned) = if let Some(rest) = token.strip_prefix('+') {
+                ("+", rest)
+            } else if let Some(rest) = token.strip_prefix('-') {
+                ("-", rest)
+            } else {
+                ("", token)
+            };
+
+            let unsigned = unsigned.trim();
+            if unsigned.is_empty() {
+                continue;
+            }
+
+            let normalized = if unsigned.eq_ignore_ascii_case("author:") {
+                tokens.next().and_then(|next| {
+                    let username = next.trim().trim_start_matches('@');
+                    if username.is_empty() {
+                        None
+                    } else {
+                        Some(format!("{sign}@{username}"))
+                    }
+                })
+            } else if let Some(rest) = Self::strip_ascii_prefix_ci(unsigned, "author:") {
+                let username = rest.trim().trim_start_matches('@');
+                if username.is_empty() {
+                    None
+                } else {
+                    Some(format!("{sign}@{username}"))
+                }
+            } else if unsigned.eq_ignore_ascii_case("tag:") {
+                tokens.next().and_then(|next| {
+                    let tag = next.trim().trim_start_matches('#');
+                    if tag.is_empty() {
+                        None
+                    } else {
+                        Some(format!("{sign}{tag}"))
+                    }
+                })
+            } else if let Some(rest) = Self::strip_ascii_prefix_ci(unsigned, "tag:") {
+                let tag = rest.trim().trim_start_matches('#');
+                if tag.is_empty() {
+                    None
+                } else {
+                    Some(format!("{sign}{tag}"))
+                }
+            } else if let Some(rest) = unsigned.strip_prefix('#') {
+                let tag = rest.trim();
+                if tag.is_empty() {
+                    None
+                } else {
+                    Some(format!("{sign}{tag}"))
+                }
+            } else {
+                Some(format!("{sign}{unsigned}"))
+            };
+
+            if let Some(normalized) = normalized {
+                let cleaned = normalized.trim();
+                if !cleaned.is_empty() {
+                    normalized_tokens.push(cleaned.to_string());
+                }
+            }
+        }
+
+        if normalized_tokens.is_empty() {
+            None
+        } else {
+            Some(normalized_tokens.join(" "))
+        }
+    }
+
+    fn derive_related_tags(
+        results: &SearchResult,
+        primary_tag: &str,
+        limit: usize,
+    ) -> Vec<(String, u32)> {
+        let mut counts: HashMap<String, u32> = HashMap::new();
+
+        for wallpaper in &results.wallpapers {
+            let mut seen: HashSet<String> = HashSet::new();
+
+            for tag in &wallpaper.tags {
+                let name = tag.name.trim().to_lowercase();
+                if name.is_empty() || name == primary_tag {
+                    continue;
+                }
+
+                if seen.insert(name.clone()) {
+                    *counts.entry(name).or_insert(0) += 1;
+                }
+            }
+        }
+
+        let mut related: Vec<(String, u32)> = counts.into_iter().collect();
+        related.sort_by(|(name_a, count_a), (name_b, count_b)| {
+            count_b.cmp(count_a).then_with(|| name_a.cmp(name_b))
+        });
+        related.truncate(limit);
+        related
+    }
+
+    fn preferred_thumbnail_url(wp: &Wallpaper, grid_columns: u32) -> String {
+        match Self::normalize_grid_columns(grid_columns) {
+            3 => wp.thumbnail_original.clone(),
+            4 => wp.thumbnail_large.clone(),
+            _ => wp.thumbnail_small.clone(),
+        }
+    }
+
+    fn should_fetch_thumbnail(&self, id: &str, source_url: &str) -> bool {
+        match self.thumbnail_sources.get(id) {
+            Some(existing) => existing != source_url,
+            None => true,
+        }
+    }
+
+    fn build_thumbnail_tasks_for_wallpapers<'a, I>(&mut self, wallpapers: I) -> Vec<Task<Message>>
+    where
+        I: IntoIterator<Item = &'a Wallpaper>,
+    {
+        let grid_columns = self.preferences.grid_columns;
+        wallpapers
+            .into_iter()
+            .filter_map(|wp| {
+                let thumb_url = Self::preferred_thumbnail_url(wp, grid_columns);
+                if self.should_fetch_thumbnail(&wp.id, &thumb_url) {
+                    self.thumbnail_sources
+                        .insert(wp.id.clone(), thumb_url.clone());
+                    Some(Task::perform(
+                        Self::fetch_thumbnail(wp.id.clone(), thumb_url),
+                        |(id, url, res)| Message::ThumbnailLoaded(id, url, res),
+                    ))
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
     fn push_local_thumbnail_if_available(&mut self, task: &DownloadTask) {
         if self.thumbnails.contains_key(&task.wallpaper_id) {
             return;
@@ -331,21 +834,22 @@ impl WallsetterApp {
         }
     }
 
-    fn is_same_view_kind(a: &View, b: &View) -> bool {
-        matches!(
-            (a, b),
+    fn is_same_view(a: &View, b: &View) -> bool {
+        match (a, b) {
             (View::Search, View::Search)
-                | (View::Downloads, View::Downloads)
-                | (View::Bookmarks, View::Bookmarks)
-                | (View::Settings, View::Settings)
-                | (View::Preview(_), View::Preview(_))
-        )
+            | (View::Downloads, View::Downloads)
+            | (View::Bookmarks, View::Bookmarks)
+            | (View::Settings, View::Settings) => true,
+            (View::Preview(lhs), View::Preview(rhs)) => lhs.id == rhs.id,
+            (View::AuthorProfile(lhs), View::AuthorProfile(rhs)) => lhs == rhs,
+            _ => false,
+        }
     }
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::SwitchView(view) => {
-                if Self::is_same_view_kind(&self.current_view, &view) {
+                if Self::is_same_view(&self.current_view, &view) {
                     return Task::none();
                 }
 
@@ -357,12 +861,34 @@ impl WallsetterApp {
                         return Task::perform(async { () }, |_| Message::LoadBookmarks);
                     }
                     View::Preview(wp) => {
+                        let mut tasks: Vec<Task<Message>> = vec![Task::perform(
+                            Self::fetch_wallpaper(self.provider.clone(), wp.id.clone()),
+                            Message::PreviewWallpaperLoaded,
+                        )];
+
                         if !self.full_images.contains_key(&wp.id) {
-                            return Task::perform(
+                            tasks.push(Task::perform(
                                 Self::fetch_full_image(wp.id.clone(), wp.full_url.clone()),
                                 |(id, res)| Message::FullImageLoaded(id, res),
-                            );
+                            ));
                         }
+
+                        return Task::batch(tasks);
+                    }
+                    View::AuthorProfile(username) => {
+                        self.author_username = Some(username.clone());
+                        self.author_results = None;
+                        self.is_loading_author = true;
+                        let filters = self.active_filters.clone();
+                        return Task::perform(
+                            Self::fetch_author_wallpapers(
+                                self.provider.clone(),
+                                username,
+                                1,
+                                filters,
+                            ),
+                            Message::AuthorWorksLoaded,
+                        );
                     }
                     _ => {}
                 }
@@ -379,7 +905,44 @@ impl WallsetterApp {
             }
             Message::SearchQueryChanged(query) => {
                 self.search_query = query;
+                if Self::parse_primary_tag_query(&self.search_query).is_none() {
+                    self.related_tags.clear();
+                }
                 Task::none()
+            }
+            Message::ToggleSearchSidebar => {
+                self.search_sidebar_visible = !self.search_sidebar_visible;
+                Task::none()
+            }
+            Message::SearchByTag(tag) => {
+                let normalized = tag
+                    .trim()
+                    .trim_start_matches('#')
+                    .trim()
+                    .to_lowercase()
+                    .replace(' ', "_");
+                if normalized.is_empty() {
+                    return Task::none();
+                }
+
+                self.current_view = View::Search;
+                self.search_query = format!("#{normalized}");
+                self.related_tags.clear();
+                self.is_searching = true;
+                self.active_filters.page = 1;
+                self.active_filters.seed = None;
+                self.sync_input_filters_into_active();
+                Self::sanitize_filters(&mut self.active_filters);
+
+                let mut filters = self.active_filters.clone();
+                filters.query = Self::normalize_search_query_for_api(&self.search_query);
+
+                self.selected_wallpapers.clear();
+
+                Task::perform(
+                    Self::fetch_initial_wallpapers(self.provider.clone(), filters),
+                    Message::SearchCompleted,
+                )
             }
             Message::SubmitSearch => {
                 if self.is_searching {
@@ -389,13 +952,10 @@ impl WallsetterApp {
                 self.is_searching = true;
                 self.active_filters.page = 1;
                 self.active_filters.seed = None;
+                self.sync_input_filters_into_active();
                 Self::sanitize_filters(&mut self.active_filters);
                 let mut filters = self.active_filters.clone();
-                if !self.search_query.trim().is_empty() {
-                    filters = filters.with_query(self.search_query.clone());
-                } else {
-                    filters.query = None;
-                }
+                filters.query = Self::normalize_search_query_for_api(&self.search_query);
 
                 // Clear selection on new search
                 self.selected_wallpapers.clear();
@@ -409,21 +969,14 @@ impl WallsetterApp {
                 self.is_searching = false;
                 match result {
                     Ok(r) => {
-                        let mut tasks = vec![];
-                        // Clear old thumbnails or keep a cache
-                        // self.thumbnails.clear();
-
-                        for wp in &r.wallpapers {
-                            if !self.thumbnails.contains_key(&wp.id) {
-                                tasks.push(Task::perform(
-                                    Self::fetch_thumbnail(
-                                        wp.id.clone(),
-                                        wp.thumbnail_small.clone(),
-                                    ),
-                                    |(id, res)| Message::ThumbnailLoaded(id, res),
-                                ));
-                            }
-                        }
+                        let tasks = self.build_thumbnail_tasks_for_wallpapers(&r.wallpapers);
+                        self.related_tags = if let Some(primary_tag) =
+                            Self::parse_primary_tag_query(&self.search_query)
+                        {
+                            Self::derive_related_tags(&r, &primary_tag, 18)
+                        } else {
+                            Vec::new()
+                        };
 
                         self.active_filters.page = r.current_page;
                         self.active_filters.seed = r.seed.clone();
@@ -433,9 +986,29 @@ impl WallsetterApp {
                         return Task::batch(tasks);
                     }
                     Err(e) => {
+                        self.related_tags.clear();
                         self.error_message = Some(e);
                     }
                 }
+                Task::none()
+            }
+            Message::AuthorWorksLoaded(result) => {
+                self.is_loading_author = false;
+
+                match result {
+                    Ok(results) => {
+                        let tasks = self.build_thumbnail_tasks_for_wallpapers(&results.wallpapers);
+
+                        self.author_results = Some(results);
+                        self.error_message = None;
+                        return Task::batch(tasks);
+                    }
+                    Err(e) => {
+                        self.author_results = None;
+                        self.error_message = Some(e);
+                    }
+                }
+
                 Task::none()
             }
             Message::NextPage => {
@@ -450,11 +1023,7 @@ impl WallsetterApp {
                         let mut filters = self.active_filters.clone();
                         Self::sanitize_filters(&mut filters);
                         filters.page = current + 1;
-                        if !self.search_query.trim().is_empty() {
-                            filters = filters.with_query(self.search_query.clone());
-                        } else {
-                            filters.query = None;
-                        }
+                        filters.query = Self::normalize_search_query_for_api(&self.search_query);
                         self.active_filters.page = filters.page;
                         return Task::perform(
                             Self::fetch_initial_wallpapers(self.provider.clone(), filters),
@@ -475,11 +1044,7 @@ impl WallsetterApp {
                         let mut filters = self.active_filters.clone();
                         Self::sanitize_filters(&mut filters);
                         filters.page = current - 1;
-                        if !self.search_query.trim().is_empty() {
-                            filters = filters.with_query(self.search_query.clone());
-                        } else {
-                            filters.query = None;
-                        }
+                        filters.query = Self::normalize_search_query_for_api(&self.search_query);
                         self.active_filters.page = filters.page;
                         return Task::perform(
                             Self::fetch_initial_wallpapers(self.provider.clone(), filters),
@@ -489,9 +1054,76 @@ impl WallsetterApp {
                 }
                 Task::none()
             }
-            Message::ThumbnailLoaded(id, result) => {
-                if let Ok(handle) = result {
-                    self.thumbnails.insert(id, handle);
+            Message::AuthorNextPage => {
+                if self.is_loading_author {
+                    return Task::none();
+                }
+
+                if let (Some(username), Some(results)) =
+                    (&self.author_username, &self.author_results)
+                {
+                    if results.current_page < results.last_page {
+                        self.is_loading_author = true;
+                        let filters = self.active_filters.clone();
+                        return Task::perform(
+                            Self::fetch_author_wallpapers(
+                                self.provider.clone(),
+                                username.clone(),
+                                results.current_page + 1,
+                                filters,
+                            ),
+                            Message::AuthorWorksLoaded,
+                        );
+                    }
+                }
+
+                Task::none()
+            }
+            Message::AuthorPreviousPage => {
+                if self.is_loading_author {
+                    return Task::none();
+                }
+
+                if let (Some(username), Some(results)) =
+                    (&self.author_username, &self.author_results)
+                {
+                    if results.current_page > 1 {
+                        self.is_loading_author = true;
+                        let filters = self.active_filters.clone();
+                        return Task::perform(
+                            Self::fetch_author_wallpapers(
+                                self.provider.clone(),
+                                username.clone(),
+                                results.current_page - 1,
+                                filters,
+                            ),
+                            Message::AuthorWorksLoaded,
+                        );
+                    }
+                }
+
+                Task::none()
+            }
+            Message::ThumbnailLoaded(id, source_url, result) => {
+                match result {
+                    Ok(handle) => {
+                        let should_apply = match self.thumbnail_sources.get(&id) {
+                            Some(expected) => expected == &source_url,
+                            None => true,
+                        };
+
+                        if should_apply {
+                            self.thumbnail_sources.insert(id.clone(), source_url);
+                            self.thumbnails.insert(id, handle);
+                        }
+                    }
+                    Err(_) => {
+                        if let Some(expected) = self.thumbnail_sources.get(&id)
+                            && expected == &source_url
+                        {
+                            self.thumbnail_sources.remove(&id);
+                        }
+                    }
                 }
                 Task::none()
             }
@@ -501,12 +1133,22 @@ impl WallsetterApp {
                 }
                 Task::none()
             }
-            Message::ToggleSelection(id, checked) => {
-                if checked {
-                    self.selected_wallpapers.insert(id);
-                } else {
-                    self.selected_wallpapers.remove(&id);
+            Message::PreviewWallpaperLoaded(result) => {
+                if let Ok(wallpaper) = result
+                    && let View::Preview(current) = &self.current_view
+                    && current.id == wallpaper.id
+                {
+                    self.current_view = View::Preview(wallpaper);
                 }
+                Task::none()
+            }
+            Message::TileClicked(id) => {
+                if self.selected_wallpapers.contains(&id) {
+                    self.selected_wallpapers.remove(&id);
+                } else {
+                    self.selected_wallpapers.insert(id);
+                }
+
                 Task::none()
             }
             Message::SelectAll => {
@@ -554,6 +1196,114 @@ impl WallsetterApp {
                 }
                 Task::none()
             }
+            Message::BookmarkSelected => {
+                if self.selected_wallpapers.is_empty() {
+                    return Task::none();
+                }
+
+                if let Some(results) = &self.search_results {
+                    let mut added = 0_u32;
+                    let mut skipped = 0_u32;
+                    let mut failed = 0_u32;
+
+                    for wp in &results.wallpapers {
+                        if !self.selected_wallpapers.contains(&wp.id) {
+                            continue;
+                        }
+
+                        match self.db.is_bookmarked(&wp.id) {
+                            Ok(true) => skipped += 1,
+                            Ok(false) => {
+                                let bookmark = Bookmark::new(wp, None);
+                                if self.db.add_bookmark(&bookmark).is_ok() {
+                                    added += 1;
+                                } else {
+                                    failed += 1;
+                                }
+                            }
+                            Err(_) => failed += 1,
+                        }
+                    }
+
+                    self.selected_wallpapers.clear();
+
+                    if failed > 0 {
+                        self.error_message = Some(format!(
+                            "Bookmarked {added}, skipped {skipped}, failed {failed}."
+                        ));
+                    } else {
+                        self.error_message = None;
+                    }
+
+                    return Task::perform(async { () }, |_| Message::LoadBookmarks);
+                }
+
+                Task::none()
+            }
+            Message::DownloadAuthorWorks => {
+                if let Some(results) = &self.author_results {
+                    if results.wallpapers.is_empty() {
+                        return Task::none();
+                    }
+
+                    let items: Vec<(String, String, String)> = results
+                        .wallpapers
+                        .iter()
+                        .map(|wp| {
+                            let filename =
+                                format!("{}.{}", wp.id, wp.file_type.replace("image/", ""));
+                            (wp.id.clone(), wp.full_url.clone(), filename)
+                        })
+                        .collect();
+
+                    let dl_manager = self.downloader.clone();
+                    let dest = resolve_download_dir(&self.preferences.download_dir);
+                    self.current_view = View::Downloads;
+
+                    return Task::perform(
+                        async move {
+                            let _ = dl_manager.enqueue_bulk(items, &dest).await;
+                        },
+                        |_| Message::Tick,
+                    );
+                }
+
+                Task::none()
+            }
+            Message::DownloadAllAuthorWorks => {
+                if let Some(username) = &self.author_username {
+                    let provider = self.provider.clone();
+                    let downloader = self.downloader.clone();
+                    let download_dir = self.preferences.download_dir.clone();
+                    let filters = self.active_filters.clone();
+                    self.current_view = View::Downloads;
+
+                    return Task::perform(
+                        Self::queue_all_author_works(
+                            provider,
+                            downloader,
+                            username.clone(),
+                            download_dir,
+                            filters,
+                        ),
+                        Message::DownloadAllAuthorWorksCompleted,
+                    );
+                }
+
+                Task::none()
+            }
+            Message::DownloadAllAuthorWorksCompleted(result) => {
+                match result {
+                    Ok(_) => {
+                        self.error_message = None;
+                    }
+                    Err(e) => {
+                        self.error_message = Some(format!("Failed to queue author downloads: {e}"));
+                    }
+                }
+
+                Task::perform(async { () }, |_| Message::Tick)
+            }
             Message::DownloadSingle(wp) => {
                 let filename = format!("{}.{}", wp.id, wp.file_type.replace("image/", ""));
                 let dl_manager = self.downloader.clone();
@@ -582,6 +1332,30 @@ impl WallsetterApp {
                 }
                 Task::none()
             }
+            Message::OpenAuthorProfile(username) => {
+                let normalized = username.trim().to_string();
+                if normalized.is_empty() {
+                    self.error_message = Some("Author username is missing.".to_string());
+                    return Task::none();
+                }
+
+                if Self::is_same_view(&self.current_view, &View::AuthorProfile(normalized.clone()))
+                {
+                    return Task::none();
+                }
+
+                self.previous_view = Some(Box::new(self.current_view.clone()));
+                self.current_view = View::AuthorProfile(normalized.clone());
+                self.author_username = Some(normalized.clone());
+                self.author_results = None;
+                self.is_loading_author = true;
+                let filters = self.active_filters.clone();
+
+                Task::perform(
+                    Self::fetch_author_wallpapers(self.provider.clone(), normalized, 1, filters),
+                    Message::AuthorWorksLoaded,
+                )
+            }
             Message::QuickSet(wp) => {
                 let setter = self.setter.clone();
                 let download_dir = self.preferences.download_dir.clone();
@@ -602,10 +1376,34 @@ impl WallsetterApp {
                 Task::none()
             }
             Message::GridColumnsChanged(cols) => {
-                let cols = cols.clamp(2, 8);
+                let cols = Self::normalize_grid_columns(cols);
+                if cols == self.preferences.grid_columns {
+                    return Task::none();
+                }
+
                 self.preferences.grid_columns = cols;
                 let _ = self.db.save_preferences(&self.preferences);
-                Task::none()
+
+                let mut tasks = vec![];
+                let search_wallpapers = self
+                    .search_results
+                    .as_ref()
+                    .map(|r| r.wallpapers.clone())
+                    .unwrap_or_default();
+                let author_wallpapers = self
+                    .author_results
+                    .as_ref()
+                    .map(|r| r.wallpapers.clone())
+                    .unwrap_or_default();
+
+                tasks.extend(self.build_thumbnail_tasks_for_wallpapers(&search_wallpapers));
+                tasks.extend(self.build_thumbnail_tasks_for_wallpapers(&author_wallpapers));
+
+                if tasks.is_empty() {
+                    Task::none()
+                } else {
+                    Task::batch(tasks)
+                }
             }
             Message::LoadBookmarks => {
                 let db = self.db.clone();
@@ -626,13 +1424,13 @@ impl WallsetterApp {
 
                         let mut tasks = vec![];
                         for bm in &bookmarks {
-                            if !self.thumbnails.contains_key(&bm.wallpaper_id) {
+                            if self.should_fetch_thumbnail(&bm.wallpaper_id, &bm.thumbnail_url) {
                                 tasks.push(Task::perform(
                                     Self::fetch_thumbnail(
                                         bm.wallpaper_id.clone(),
                                         bm.thumbnail_url.clone(),
                                     ),
-                                    |(id, res)| Message::ThumbnailLoaded(id, res),
+                                    |(id, url, res)| Message::ThumbnailLoaded(id, url, res),
                                 ));
                             }
                         }
@@ -729,10 +1527,102 @@ impl WallsetterApp {
             }
             Message::SortingChanged(sorting) => {
                 self.active_filters.sorting = sorting;
+                if sorting == Sorting::Toplist {
+                    if self.active_filters.toplist_range.is_none() {
+                        self.active_filters.toplist_range = Some(ToplistRange::SixMonths);
+                    }
+                } else {
+                    self.active_filters.toplist_range = None;
+                }
+                Task::none()
+            }
+            Message::SortOrderChanged(order) => {
+                self.active_filters.order = order;
+                Task::none()
+            }
+            Message::ToplistRangeChanged(range) => {
+                self.active_filters.toplist_range = Some(range);
+                Task::none()
+            }
+            Message::ResolutionModeChanged(mode) => {
+                self.resolution_mode = mode;
+
+                match mode {
+                    ResolutionMode::AtLeast => {
+                        self.active_filters.atleast =
+                            Self::parse_single_resolution_filter(&self.atleast_resolution_input);
+                        self.active_filters.resolutions.clear();
+                    }
+                    ResolutionMode::Exactly => {
+                        self.active_filters.atleast = None;
+                        self.active_filters.resolutions =
+                            Self::parse_resolution_filters(&self.resolution_filter_input);
+                    }
+                }
+                Task::none()
+            }
+            Message::ToggleResolutionFilter(resolution, checked) => {
+                self.resolution_mode = ResolutionMode::Exactly;
+                self.active_filters.atleast = None;
+                if checked {
+                    if self
+                        .active_filters
+                        .resolutions
+                        .iter()
+                        .all(|r| r.width != resolution.width || r.height != resolution.height)
+                    {
+                        self.active_filters.resolutions.push(resolution);
+                    }
+                } else {
+                    self.active_filters
+                        .resolutions
+                        .retain(|r| r.width != resolution.width || r.height != resolution.height);
+                }
+
+                self.resolution_filter_input =
+                    Self::format_resolution_filters(&self.active_filters.resolutions);
+                Task::none()
+            }
+            Message::ToggleRatioFilter(ratio, checked) => {
+                if checked {
+                    if !self.active_filters.ratios.contains(&ratio) {
+                        self.active_filters.ratios.push(ratio);
+                    }
+                } else {
+                    self.active_filters.ratios.retain(|r| r != &ratio);
+                }
+
+                self.ratio_filter_input = Self::format_ratio_filters(&self.active_filters.ratios);
+                Task::none()
+            }
+            Message::AtleastResolutionChanged(input) => {
+                self.atleast_resolution_input = input.clone();
+                if self.resolution_mode == ResolutionMode::AtLeast {
+                    self.active_filters.atleast = Self::parse_single_resolution_filter(&input);
+                    self.active_filters.resolutions.clear();
+                }
+                Task::none()
+            }
+            Message::ResolutionFilterChanged(input) => {
+                self.resolution_filter_input = input.clone();
+                if self.resolution_mode == ResolutionMode::Exactly {
+                    self.active_filters.resolutions = Self::parse_resolution_filters(&input);
+                }
+                Task::none()
+            }
+            Message::RatioFilterChanged(input) => {
+                self.ratio_filter_input = input.clone();
+                self.active_filters.ratios = Self::parse_ratio_filters(&input);
+                Task::none()
+            }
+            Message::ColorFilterChanged(input) => {
+                self.color_filter_input = input;
+                self.active_filters.colors = Self::parse_color_filters(&self.color_filter_input);
                 Task::none()
             }
             Message::SaveFiltersAsDefault => {
                 Self::sanitize_filters(&mut self.active_filters);
+                self.sync_input_filters_into_active();
                 self.preferences.default_filters = self.active_filters.clone();
                 let _ = self.db.save_preferences(&self.preferences);
                 Task::none()
@@ -829,6 +1719,7 @@ impl WallsetterApp {
             View::Bookmarks => crate::views::bookmarks::view(self),
             View::Settings => crate::views::settings::view(self),
             View::Preview(wp) => crate::views::preview::view(self, wp),
+            View::AuthorProfile(_) => crate::views::author::view(self),
         };
 
         let mut content = column![
@@ -948,6 +1839,30 @@ impl WallsetterApp {
         &self.search_query
     }
 
+    pub fn is_search_sidebar_visible(&self) -> bool {
+        self.search_sidebar_visible
+    }
+
+    pub fn resolution_filter_input(&self) -> &str {
+        &self.resolution_filter_input
+    }
+
+    pub fn resolution_mode(&self) -> ResolutionMode {
+        self.resolution_mode
+    }
+
+    pub fn atleast_resolution_input(&self) -> &str {
+        &self.atleast_resolution_input
+    }
+
+    pub fn ratio_filter_input(&self) -> &str {
+        &self.ratio_filter_input
+    }
+
+    pub fn color_filter_input(&self) -> &str {
+        &self.color_filter_input
+    }
+
     pub fn is_searching(&self) -> bool {
         self.is_searching
     }
@@ -956,8 +1871,24 @@ impl WallsetterApp {
         self.search_results.as_ref()
     }
 
+    pub fn related_tags(&self) -> &[(String, u32)] {
+        &self.related_tags
+    }
+
     pub fn active_filters(&self) -> &SearchFilters {
         &self.active_filters
+    }
+
+    pub fn author_username(&self) -> Option<&str> {
+        self.author_username.as_deref()
+    }
+
+    pub fn author_results(&self) -> Option<&SearchResult> {
+        self.author_results.as_ref()
+    }
+
+    pub fn is_loading_author(&self) -> bool {
+        self.is_loading_author
     }
 
     pub fn get_thumbnail(&self, id: &str) -> Option<iced::widget::image::Handle> {
@@ -994,5 +1925,75 @@ pub fn resolve_download_dir(raw: &str) -> std::path::PathBuf {
         PathBuf::from(replaced)
     } else {
         PathBuf::from(raw)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::WallsetterApp;
+
+    #[test]
+    fn normalize_search_query_supports_author_aliases() {
+        assert_eq!(
+            WallsetterApp::normalize_search_query_for_api("@tomthecom"),
+            Some("@tomthecom".to_string())
+        );
+        assert_eq!(
+            WallsetterApp::normalize_search_query_for_api("author:tomthecom"),
+            Some("@tomthecom".to_string())
+        );
+        assert_eq!(
+            WallsetterApp::normalize_search_query_for_api("Author:@tomthecom"),
+            Some("@tomthecom".to_string())
+        );
+        assert_eq!(
+            WallsetterApp::normalize_search_query_for_api("author: tomthecom"),
+            Some("@tomthecom".to_string())
+        );
+    }
+
+    #[test]
+    fn normalize_search_query_supports_tag_aliases() {
+        assert_eq!(
+            WallsetterApp::normalize_search_query_for_api("#nature"),
+            Some("nature".to_string())
+        );
+        assert_eq!(
+            WallsetterApp::normalize_search_query_for_api("tag:nature"),
+            Some("nature".to_string())
+        );
+        assert_eq!(
+            WallsetterApp::normalize_search_query_for_api("Tag:#nature +#mountain -tag:city"),
+            Some("nature +mountain -city".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_primary_tag_query_supports_hash_and_tag_prefix() {
+        assert_eq!(
+            WallsetterApp::parse_primary_tag_query("#nature +#mountain"),
+            Some("nature".to_string())
+        );
+        assert_eq!(
+            WallsetterApp::parse_primary_tag_query("tag:nature +tag:mountain"),
+            Some("nature".to_string())
+        );
+        assert_eq!(
+            WallsetterApp::parse_primary_tag_query("-#nature #mountain"),
+            Some("mountain".to_string())
+        );
+        assert_eq!(WallsetterApp::parse_primary_tag_query("-tag:nature"), None);
+    }
+
+    #[test]
+    fn parse_ratio_filters_supports_keywords() {
+        assert_eq!(
+            WallsetterApp::parse_ratio_filters("landscape, portrait, 16x9"),
+            vec![
+                "landscape".to_string(),
+                "portrait".to_string(),
+                "16x9".to_string()
+            ]
+        );
     }
 }
