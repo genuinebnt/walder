@@ -134,6 +134,44 @@ pub fn view<'a>(app: &'a WallsetterApp, wp: &'a Wallpaper) -> Element<'a, Messag
             next_btn = next_btn.on_press(Message::NextWallpaperInSearch);
         }
 
+        let dl_folders = app.download_folders();
+        let pending_dl_folder = app.pending_download_folder();
+        let download_to_section: Element<'a, Message> = if !dl_folders.is_empty() {
+            let mut col = column![text("Download to Folder").size(13)].spacing(4);
+            // "Default" (no specific folder)
+            let default_style = if pending_dl_folder.is_none() {
+                crate::theme::button_primary
+            } else {
+                crate::theme::button_secondary
+            };
+            col = col.push(
+                button(text("Default").size(12))
+                    .on_press(Message::SetPendingDownloadFolder(None))
+                    .style(default_style)
+                    .width(Length::Fill),
+            );
+            for folder in dl_folders {
+                let is_selected = pending_dl_folder == Some(folder.id);
+                let style = if is_selected {
+                    crate::theme::button_primary
+                } else {
+                    crate::theme::button_secondary
+                };
+                col = col.push(
+                    button(text(&folder.name).size(12))
+                        .on_press(Message::SetPendingDownloadFolder(Some(folder.id)))
+                        .style(style)
+                        .width(Length::Fill),
+                );
+            }
+            container(col)
+                .padding(10)
+                .style(crate::theme::panel_subtle)
+                .into()
+        } else {
+            column![].into()
+        };
+
         let folders = app.bookmark_folders();
         let collection_section: Element<'a, Message> = if !folders.is_empty() {
             let mut col = column![text("Add to Collection").size(13)].spacing(4);
@@ -188,6 +226,7 @@ pub fn view<'a>(app: &'a WallsetterApp, wp: &'a Wallpaper) -> Element<'a, Messag
                         .padding(12)
                         .style(crate::theme::panel_subtle),
                     actions,
+                    download_to_section,
                     collection_section,
                 ]
                 .spacing(12),

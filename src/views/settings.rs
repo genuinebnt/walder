@@ -91,6 +91,30 @@ pub fn view<'a>(app: &'a WallsetterApp) -> Element<'a, Message> {
         );
     }
 
+    for folder in app.download_folders() {
+        let is_selected =
+            matches!(current_source, SchedulerSource::DownloadFolder(id) if *id == folder.id);
+        let label = if is_selected {
+            format!("✓ DL Folder: {}", folder.name)
+        } else {
+            format!("DL Folder: {}", folder.name)
+        };
+        source_col = source_col.push(
+            button(text(label).size(13))
+                .on_press(Message::SettingsChanged(
+                    SettingsMessage::SchedulerSourceChanged(SchedulerSource::DownloadFolder(
+                        folder.id,
+                    )),
+                ))
+                .style(if is_selected {
+                    crate::theme::button_primary
+                } else {
+                    crate::theme::button_secondary
+                })
+                .width(Length::Fill),
+        );
+    }
+
     let scheduler_section = container(
         column![
             text("Scheduler").size(22),

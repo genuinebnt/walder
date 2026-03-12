@@ -464,4 +464,221 @@ impl Database {
 
         Ok(records)
     }
+
+    // ──────────────────────────────────────────────
+    // Download Folders
+    // ──────────────────────────────────────────────
+
+    pub fn add_download_folder(&self, folder: &DownloadFolder) -> wallsetter_core::Result<()> {
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| WallsetterError::Database(e.to_string()))?;
+        conn.execute(
+            "INSERT INTO download_folders (id, name, created_at) VALUES (?1, ?2, ?3)",
+            (
+                folder.id.to_string(),
+                &folder.name,
+                folder.created_at.to_rfc3339(),
+            ),
+        )
+        .map_err(|e| WallsetterError::Database(e.to_string()))?;
+        Ok(())
+    }
+
+    pub fn get_download_folders(&self) -> wallsetter_core::Result<Vec<DownloadFolder>> {
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| WallsetterError::Database(e.to_string()))?;
+        let mut stmt = conn
+            .prepare("SELECT * FROM download_folders ORDER BY name ASC")
+            .map_err(|e| WallsetterError::Database(e.to_string()))?;
+        let iter = stmt
+            .query_map([], |row| {
+                let id_str: String = row.get("id")?;
+                let id = Uuid::parse_str(&id_str).unwrap_or_default();
+                let created_at_str: String = row.get("created_at")?;
+                let created_at = chrono::DateTime::parse_from_rfc3339(&created_at_str)
+                    .map(|dt| dt.with_timezone(&chrono::Utc))
+                    .unwrap_or_else(|_| chrono::Utc::now());
+                Ok(DownloadFolder {
+                    id,
+                    name: row.get("name")?,
+                    created_at,
+                })
+            })
+            .map_err(|e| WallsetterError::Database(e.to_string()))?;
+        let mut folders = Vec::new();
+        for f in iter {
+            folders.push(f.map_err(|e| WallsetterError::Database(e.to_string()))?);
+        }
+        Ok(folders)
+    }
+
+    pub fn get_download_folder_by_id(
+        &self,
+        id: Uuid,
+    ) -> wallsetter_core::Result<Option<DownloadFolder>> {
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| WallsetterError::Database(e.to_string()))?;
+        let result = conn
+            .query_row(
+                "SELECT * FROM download_folders WHERE id = ?1",
+                [id.to_string()],
+                |row| {
+                    let id_str: String = row.get("id")?;
+                    let id = Uuid::parse_str(&id_str).unwrap_or_default();
+                    let created_at_str: String = row.get("created_at")?;
+                    let created_at = chrono::DateTime::parse_from_rfc3339(&created_at_str)
+                        .map(|dt| dt.with_timezone(&chrono::Utc))
+                        .unwrap_or_else(|_| chrono::Utc::now());
+                    Ok(DownloadFolder {
+                        id,
+                        name: row.get("name")?,
+                        created_at,
+                    })
+                },
+            )
+            .optional()
+            .map_err(|e| WallsetterError::Database(e.to_string()))?;
+        Ok(result)
+    }
+
+    pub fn delete_download_folder(&self, id: Uuid) -> wallsetter_core::Result<()> {
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| WallsetterError::Database(e.to_string()))?;
+        conn.execute(
+            "DELETE FROM download_folders WHERE id = ?1",
+            [id.to_string()],
+        )
+        .map_err(|e| WallsetterError::Database(e.to_string()))?;
+        Ok(())
+    }
+
+    // ──────────────────────────────────────────────
+    // Local Wallpapers
+    // ──────────────────────────────────────────────
+
+    pub fn add_local_wallpaper(&self, lw: &LocalWallpaper) -> wallsetter_core::Result<()> {
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| WallsetterError::Database(e.to_string()))?;
+        conn.execute(
+            "INSERT OR REPLACE INTO local_wallpapers
+             (id, folder_id, wallpaper_id, local_path, filename, resolution_width,
+              resolution_height, file_size, downloaded_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            (
+                lw.id.to_string(),
+                lw.folder_id.map(|id| id.to_string()),
+                &lw.wallpaper_id,
+                &lw.local_path,
+                &lw.filename,
+                lw.resolution.width,
+                lw.resolution.height,
+                lw.file_size,
+                lw.downloaded_at.to_rfc3339(),
+            ),
+        )
+        .map_err(|e| WallsetterError::Database(e.to_string()))?;
+        Ok(())
+    }
+
+    pub fn get_local_wallpapers(
+        &self,
+        folder_id: Option<Uuid>,
+    ) -> wallsetter_core::Result<Vec<LocalWallpaper>> {
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| WallsetterError::Database(e.to_string()))?;
+
+        let sql = if folder_id.is_some() {
+            "SELECT * FROM local_wallpapers WHERE folder_id = ?1 ORDER BY downloaded_at DESC"
+        } else {
+            "SELECT * FROM local_wallpapers ORDER BY downloaded_at DESC"
+        };
+
+        let mut stmt = conn
+            .prepare(sql)
+            .map_err(|e| WallsetterError::Database(e.to_string()))?;
+
+        let params: Vec<rusqlite::types::Value> = match folder_id {
+            Some(fid) => vec![fid.to_string().into()],
+            None => vec![],
+        };
+
+        let iter = stmt
+            .query_map(rusqlite::params_from_iter(params), |row| {
+                let id_str: String = row.get("id")?;
+                let id = Uuid::parse_str(&id_str).unwrap_or_default();
+                let fid_str: Option<String> = row.get("folder_id")?;
+                let folder_id = fid_str.and_then(|s| Uuid::parse_str(&s).ok());
+                let dt_str: String = row.get("downloaded_at")?;
+                let downloaded_at = chrono::DateTime::parse_from_rfc3339(&dt_str)
+                    .map(|dt| dt.with_timezone(&chrono::Utc))
+                    .unwrap_or_else(|_| chrono::Utc::now());
+                Ok(LocalWallpaper {
+                    id,
+                    folder_id,
+                    wallpaper_id: row.get("wallpaper_id")?,
+                    local_path: row.get("local_path")?,
+                    filename: row.get("filename")?,
+                    resolution: Resolution {
+                        width: row.get("resolution_width")?,
+                        height: row.get("resolution_height")?,
+                    },
+                    file_size: row.get("file_size")?,
+                    downloaded_at,
+                })
+            })
+            .map_err(|e| WallsetterError::Database(e.to_string()))?;
+
+        let mut result = Vec::new();
+        for lw in iter {
+            result.push(lw.map_err(|e| WallsetterError::Database(e.to_string()))?);
+        }
+        Ok(result)
+    }
+
+    pub fn move_local_wallpaper(
+        &self,
+        id: Uuid,
+        new_folder_id: Option<Uuid>,
+        new_local_path: &str,
+    ) -> wallsetter_core::Result<()> {
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| WallsetterError::Database(e.to_string()))?;
+        conn.execute(
+            "UPDATE local_wallpapers SET folder_id = ?1, local_path = ?2 WHERE id = ?3",
+            (
+                new_folder_id.map(|fid| fid.to_string()),
+                new_local_path,
+                id.to_string(),
+            ),
+        )
+        .map_err(|e| WallsetterError::Database(e.to_string()))?;
+        Ok(())
+    }
+
+    pub fn remove_local_wallpaper(&self, id: Uuid) -> wallsetter_core::Result<()> {
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| WallsetterError::Database(e.to_string()))?;
+        conn.execute(
+            "DELETE FROM local_wallpapers WHERE id = ?1",
+            [id.to_string()],
+        )
+        .map_err(|e| WallsetterError::Database(e.to_string()))?;
+        Ok(())
+    }
 }

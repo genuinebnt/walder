@@ -60,6 +60,17 @@ pub struct WallsetterApp {
     selected_folder: Option<uuid::Uuid>,
     new_collection_name: String,
 
+    // Download Folders state
+    download_folders: Vec<DownloadFolder>,
+    local_wallpapers: Vec<LocalWallpaper>,
+    #[allow(dead_code)]
+    selected_download_folder: Option<uuid::Uuid>,
+    new_download_folder_name: String,
+    pending_download_folder: Option<uuid::Uuid>,
+    pending_download_info: HashMap<String, (Option<uuid::Uuid>, Resolution)>,
+    recorded_wallpaper_ids: HashSet<String>,
+    download_view_tab: DownloadViewTab,
+
     // Error state
     error_message: Option<String>,
 
@@ -125,6 +136,24 @@ pub enum Message {
     CreateCollection,
     CollectionCreated(std::result::Result<BookmarkFolder, String>),
     RemoveBookmark(uuid::Uuid),
+
+    // Download Folders
+    LoadDownloadContent,
+    DownloadContentLoaded(
+        std::result::Result<(Vec<DownloadFolder>, Vec<LocalWallpaper>), String>,
+    ),
+    NewDownloadFolderNameChanged(String),
+    CreateDownloadFolder,
+    DownloadFolderCreated(std::result::Result<DownloadFolder, String>),
+    SetDownloadViewTab(DownloadViewTab),
+    SetPendingDownloadFolder(Option<uuid::Uuid>),
+    // Local wallpaper management
+    MoveLocalWallpaper(uuid::Uuid, Option<uuid::Uuid>),
+    LocalWallpaperMoved(std::result::Result<(), String>),
+    DeleteLocalWallpaper(uuid::Uuid),
+    LocalWallpaperDeleted(std::result::Result<uuid::Uuid, String>),
+    LocalWallpaperRecorded(std::result::Result<LocalWallpaper, String>),
+    QuickSetLocalWallpaper(String),
 
     // Selection & Download
     TileClicked(String),
@@ -212,6 +241,12 @@ impl std::fmt::Display for ResolutionMode {
     }
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum DownloadViewTab {
+    Queue,
+    Library(Option<uuid::Uuid>), // None = all local files, Some(id) = specific folder
+}
+
 pub const SEARCH_SCROLL_ID: &str = "search_results_scroll";
 
 impl WallsetterApp {
@@ -291,6 +326,14 @@ impl WallsetterApp {
             bookmark_folders: Vec::new(),
             selected_folder: None,
             new_collection_name: String::new(),
+            download_folders: Vec::new(),
+            local_wallpapers: Vec::new(),
+            selected_download_folder: None,
+            new_download_folder_name: String::new(),
+            pending_download_folder: None,
+            pending_download_info: HashMap::new(),
+            recorded_wallpaper_ids: HashSet::new(),
+            download_view_tab: DownloadViewTab::Queue,
             error_message: None,
             previous_view: None,
             nav_forward_stack: Vec::new(),
@@ -298,13 +341,16 @@ impl WallsetterApp {
         };
 
         // Initial task (e.g., fetch initial wallpapers)
-        let initial_task = Task::perform(
-            Self::fetch_initial_wallpapers(
-                app.provider.clone(),
-                app.preferences.default_filters.clone(),
+        let initial_task = Task::batch([
+            Task::perform(
+                Self::fetch_initial_wallpapers(
+                    app.provider.clone(),
+                    app.preferences.default_filters.clone(),
+                ),
+                Message::SearchCompleted,
             ),
-            Message::SearchCompleted,
-        );
+            Task::done(Message::LoadDownloadContent),
+        ]);
 
         (app, initial_task)
     }
@@ -1596,17 +1642,44 @@ impl WallsetterApp {
             Message::DownloadSingle(wp) => {
                 let filename = format!("{}.{}", wp.id, wp.file_type.replace("image/", ""));
                 let dl_manager = self.downloader.clone();
-                let dest = resolve_download_dir(&self.preferences.download_dir);
+                let base_dest = resolve_download_dir(&self.preferences.download_dir);
+                let pending_folder_id = self.pending_download_folder;
+                let folder_name = pending_folder_id.and_then(|fid| {
+                    self.download_folders
+                        .iter()
+                        .find(|f| f.id == fid)
+                        .map(|f| f.name.clone())
+                });
+
+                // Record pending info for later DB recording
+                self.pending_download_info.insert(
+                    wp.id.clone(),
+                    (pending_folder_id, wp.resolution),
+                );
 
                 self.nav_forward_stack.clear();
                 self.previous_view = Some(Box::new(self.current_view.clone()));
                 self.current_view = View::Downloads;
+                self.download_view_tab = DownloadViewTab::Queue;
+
+                let wp_id = wp.id.clone();
+                let full_url = wp.full_url.clone();
+                let filename2 = filename.clone();
 
                 Task::perform(
                     async move {
-                        let _ = dl_manager
-                            .enqueue(wp.id.clone(), wp.full_url.clone(), filename, &dest)
-                            .await;
+                        let dest = match folder_name {
+                            Some(name) => {
+                                let d = base_dest.join(&name);
+                                let _ = std::fs::create_dir_all(&d);
+                                d
+                            }
+                            None => base_dest,
+                        };
+                        dl_manager
+                            .enqueue(wp_id, full_url, filename2, &dest)
+                            .await
+                            .ok();
                     },
                     |_| Message::Tick,
                 )
@@ -1859,6 +1932,191 @@ impl WallsetterApp {
                 }
                 Task::perform(async { () }, |_| Message::LoadBookmarks)
             }
+
+            Message::LoadDownloadContent => {
+                let db = self.db.clone();
+                Task::perform(
+                    async move {
+                        let folders = db
+                            .get_download_folders()
+                            .map_err(|e| e.to_string())?;
+                        let wallpapers = db
+                            .get_local_wallpapers(None)
+                            .map_err(|e| e.to_string())?;
+                        Ok((folders, wallpapers))
+                    },
+                    Message::DownloadContentLoaded,
+                )
+            }
+
+            Message::DownloadContentLoaded(result) => {
+                match result {
+                    Ok((folders, wallpapers)) => {
+                        self.download_folders = folders;
+                        self.local_wallpapers = wallpapers;
+                    }
+                    Err(e) => {
+                        self.error_message = Some(format!("Failed to load download content: {}", e));
+                    }
+                }
+                Task::none()
+            }
+
+            Message::NewDownloadFolderNameChanged(name) => {
+                self.new_download_folder_name = name;
+                Task::none()
+            }
+
+            Message::CreateDownloadFolder => {
+                let name = self.new_download_folder_name.trim().to_string();
+                if name.is_empty() {
+                    return Task::none();
+                }
+                self.new_download_folder_name.clear();
+                let db = self.db.clone();
+                let download_dir =
+                    resolve_download_dir(&self.preferences.download_dir);
+                Task::perform(
+                    async move {
+                        let folder = DownloadFolder::new(&name);
+                        // Create physical subdirectory
+                        let dir = download_dir.join(&folder.name);
+                        std::fs::create_dir_all(&dir)
+                            .map_err(|e| e.to_string())?;
+                        db.add_download_folder(&folder)
+                            .map_err(|e| e.to_string())?;
+                        Ok(folder)
+                    },
+                    Message::DownloadFolderCreated,
+                )
+            }
+
+            Message::DownloadFolderCreated(result) => {
+                match result {
+                    Ok(folder) => {
+                        self.download_folders.push(folder);
+                        self.download_folders.sort_by(|a, b| a.name.cmp(&b.name));
+                    }
+                    Err(e) => {
+                        self.error_message =
+                            Some(format!("Failed to create download folder: {}", e));
+                    }
+                }
+                Task::none()
+            }
+
+            Message::SetDownloadViewTab(tab) => {
+                self.download_view_tab = tab;
+                Task::none()
+            }
+
+            Message::SetPendingDownloadFolder(folder_id) => {
+                self.pending_download_folder = folder_id;
+                Task::none()
+            }
+
+            Message::MoveLocalWallpaper(local_id, target_folder_id) => {
+                let db = self.db.clone();
+                let download_dir =
+                    resolve_download_dir(&self.preferences.download_dir);
+                let folders = self.download_folders.clone();
+                let local_wallpapers = self.local_wallpapers.clone();
+                Task::perform(
+                    async move {
+                        let lw = local_wallpapers
+                            .iter()
+                            .find(|lw| lw.id == local_id)
+                            .ok_or_else(|| "Local wallpaper not found".to_string())?;
+                        let new_dir = match target_folder_id {
+                            None => download_dir.clone(),
+                            Some(fid) => {
+                                let folder = folders
+                                    .iter()
+                                    .find(|f| f.id == fid)
+                                    .ok_or_else(|| "Target folder not found".to_string())?;
+                                download_dir.join(&folder.name)
+                            }
+                        };
+                        std::fs::create_dir_all(&new_dir)
+                            .map_err(|e| e.to_string())?;
+                        let new_path = new_dir.join(&lw.filename);
+                        let old_path = std::path::PathBuf::from(&lw.local_path);
+                        if old_path != new_path && old_path.exists() {
+                            std::fs::rename(&old_path, &new_path)
+                                .map_err(|e| e.to_string())?;
+                        }
+                        let new_path_str = new_path.to_string_lossy().to_string();
+                        db.move_local_wallpaper(local_id, target_folder_id, &new_path_str)
+                            .map_err(|e| e.to_string())?;
+                        Ok(())
+                    },
+                    Message::LocalWallpaperMoved,
+                )
+            }
+
+            Message::LocalWallpaperMoved(result) => {
+                if let Err(e) = result {
+                    self.error_message = Some(format!("Failed to move wallpaper: {}", e));
+                }
+                Task::done(Message::LoadDownloadContent)
+            }
+
+            Message::DeleteLocalWallpaper(local_id) => {
+                let db = self.db.clone();
+                let local_wallpapers = self.local_wallpapers.clone();
+                Task::perform(
+                    async move {
+                        let lw = local_wallpapers
+                            .iter()
+                            .find(|lw| lw.id == local_id)
+                            .ok_or_else(|| "Local wallpaper not found".to_string())?;
+                        // Delete physical file
+                        let path = std::path::PathBuf::from(&lw.local_path);
+                        if path.exists() {
+                            std::fs::remove_file(&path).map_err(|e| e.to_string())?;
+                        }
+                        db.remove_local_wallpaper(local_id)
+                            .map_err(|e| e.to_string())?;
+                        Ok(local_id)
+                    },
+                    Message::LocalWallpaperDeleted,
+                )
+            }
+
+            Message::LocalWallpaperDeleted(result) => {
+                match result {
+                    Ok(id) => {
+                        self.local_wallpapers.retain(|lw| lw.id != id);
+                    }
+                    Err(e) => {
+                        self.error_message = Some(format!("Failed to delete wallpaper: {}", e));
+                    }
+                }
+                Task::none()
+            }
+
+            Message::LocalWallpaperRecorded(result) => {
+                if let Ok(lw) = result {
+                    // Avoid duplicates
+                    if !self.local_wallpapers.iter().any(|x| x.id == lw.id) {
+                        self.local_wallpapers.insert(0, lw);
+                    }
+                }
+                Task::none()
+            }
+
+            Message::QuickSetLocalWallpaper(path) => {
+                let path = std::path::PathBuf::from(&path);
+                match self.setter.set_wallpaper(&path) {
+                    Ok(_) => self.error_message = None,
+                    Err(e) => {
+                        self.error_message =
+                            Some(format!("Failed to set wallpaper: {}", e));
+                    }
+                }
+                Task::none()
+            }
+
             Message::ToggleCategory(cat, checked) => {
                 let categories = &mut self.active_filters.categories;
                 if checked {
@@ -2013,13 +2271,65 @@ impl WallsetterApp {
             }
             Message::DownloadsUpdated(mut tasks) => {
                 tasks.sort_by(|a, b| b.created_at.cmp(&a.created_at));
-                self.download_tasks = tasks;
+                self.download_tasks = tasks.clone();
 
                 for task in self.download_tasks.clone() {
                     self.push_local_thumbnail_if_available(&task);
                 }
 
-                Task::none()
+                // Detect newly completed downloads and record them in local_wallpapers
+                let mut record_tasks: Vec<Task<Message>> = Vec::new();
+                for task in &tasks {
+                    if task.status == DownloadStatus::Completed
+                        && !self.recorded_wallpaper_ids.contains(&task.wallpaper_id)
+                    {
+                        if let Some((folder_id, resolution)) =
+                            self.pending_download_info.get(&task.wallpaper_id).cloned()
+                        {
+                            self.recorded_wallpaper_ids
+                                .insert(task.wallpaper_id.clone());
+
+                            let base = resolve_download_dir(&self.preferences.download_dir);
+                            let folder_name = folder_id.and_then(|fid| {
+                                self.download_folders
+                                    .iter()
+                                    .find(|f| f.id == fid)
+                                    .map(|f| f.name.clone())
+                            });
+                            let dir = match folder_name {
+                                Some(name) => base.join(name),
+                                None => base,
+                            };
+                            let local_path =
+                                dir.join(&task.filename).to_string_lossy().to_string();
+
+                            let lw = LocalWallpaper::new(
+                                folder_id,
+                                task.wallpaper_id.clone(),
+                                local_path,
+                                task.filename.clone(),
+                                resolution,
+                                task.bytes_downloaded,
+                            );
+
+                            let db = self.db.clone();
+                            let lw_clone = lw.clone();
+                            record_tasks.push(Task::perform(
+                                async move {
+                                    db.add_local_wallpaper(&lw_clone)
+                                        .map_err(|e| e.to_string())?;
+                                    Ok(lw_clone)
+                                },
+                                Message::LocalWallpaperRecorded,
+                            ));
+                        }
+                    }
+                }
+                if record_tasks.is_empty() {
+                    Task::none()
+                } else {
+                    Task::batch(record_tasks)
+                }
             }
             Message::PrevWallpaperInSearch => {
                 let target = if let View::Preview(current_wp) = &self.current_view {
@@ -2477,6 +2787,34 @@ impl WallsetterApp {
                 .filter(|b| b.folder_id == Some(folder_id))
                 .collect(),
         }
+    }
+
+    pub fn download_folders(&self) -> &[DownloadFolder] {
+        &self.download_folders
+    }
+
+    pub fn local_wallpapers_for_display(&self) -> Vec<&LocalWallpaper> {
+        match &self.download_view_tab {
+            DownloadViewTab::Queue => vec![],
+            DownloadViewTab::Library(None) => self.local_wallpapers.iter().collect(),
+            DownloadViewTab::Library(Some(folder_id)) => self
+                .local_wallpapers
+                .iter()
+                .filter(|lw| lw.folder_id.as_ref() == Some(folder_id))
+                .collect(),
+        }
+    }
+
+    pub fn new_download_folder_name(&self) -> &str {
+        &self.new_download_folder_name
+    }
+
+    pub fn pending_download_folder(&self) -> Option<uuid::Uuid> {
+        self.pending_download_folder
+    }
+
+    pub fn download_view_tab(&self) -> &DownloadViewTab {
+        &self.download_view_tab
     }
 }
 

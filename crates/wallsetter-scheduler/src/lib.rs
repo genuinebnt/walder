@@ -159,6 +159,21 @@ impl Scheduler {
 
                 valid_paths
             }
+            SchedulerSource::DownloadFolder(id) => {
+                let prefs = db.get_preferences()?;
+                let base = Path::new(&prefs.download_dir);
+                match db.get_download_folder_by_id(*id)? {
+                    Some(folder) => {
+                        let folder_path = base.join(&folder.name);
+                        Self::scan_directory(&folder_path).await?
+                    }
+                    None => {
+                        return Err(WallsetterError::Scheduler(
+                            "Download folder not found".into(),
+                        ));
+                    }
+                }
+            }
             SchedulerSource::CustomDir(dir) => Self::scan_directory(Path::new(dir)).await?,
         };
 
