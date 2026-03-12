@@ -102,6 +102,34 @@ impl Database {
         )
         .map_err(|e| WallsetterError::Database(e.to_string()))?;
 
+        // Download Folders
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS download_folders (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )",
+            [],
+        )
+        .map_err(|e| WallsetterError::Database(e.to_string()))?;
+
+        // Local Wallpapers (downloaded files with folder organization)
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS local_wallpapers (
+                id TEXT PRIMARY KEY,
+                folder_id TEXT REFERENCES download_folders(id) ON DELETE SET NULL,
+                wallpaper_id TEXT NOT NULL,
+                local_path TEXT NOT NULL,
+                filename TEXT NOT NULL,
+                resolution_width INTEGER NOT NULL,
+                resolution_height INTEGER NOT NULL,
+                file_size INTEGER NOT NULL,
+                downloaded_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )",
+            [],
+        )
+        .map_err(|e| WallsetterError::Database(e.to_string()))?;
+
         Ok(())
     }
 

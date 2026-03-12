@@ -481,6 +481,7 @@ pub enum SchedulerSource {
     #[default]
     DownloadDir,
     BookmarkFolder(Uuid),
+    DownloadFolder(Uuid),
     CustomDir(String),
 }
 
@@ -520,4 +521,59 @@ pub struct DownloadRecord {
     pub local_path: String,
     pub file_size: u64,
     pub downloaded_at: DateTime<Utc>,
+}
+
+// ──────────────────────────────────────────────
+// Download Folders (local organization)
+// ──────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DownloadFolder {
+    pub id: Uuid,
+    pub name: String,
+    pub created_at: DateTime<Utc>,
+}
+
+impl DownloadFolder {
+    pub fn new(name: impl Into<String>) -> Self {
+        Self {
+            id: Uuid::new_v4(),
+            name: name.into(),
+            created_at: Utc::now(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LocalWallpaper {
+    pub id: Uuid,
+    pub folder_id: Option<Uuid>,
+    pub wallpaper_id: String,
+    pub local_path: String,
+    pub filename: String,
+    pub resolution: Resolution,
+    pub file_size: u64,
+    pub downloaded_at: DateTime<Utc>,
+}
+
+impl LocalWallpaper {
+    pub fn new(
+        folder_id: Option<Uuid>,
+        wallpaper_id: String,
+        local_path: String,
+        filename: String,
+        resolution: Resolution,
+        file_size: u64,
+    ) -> Self {
+        Self {
+            id: Uuid::new_v4(),
+            folder_id,
+            wallpaper_id,
+            local_path,
+            filename,
+            resolution,
+            file_size,
+            downloaded_at: Utc::now(),
+        }
+    }
 }

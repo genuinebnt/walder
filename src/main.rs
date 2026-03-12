@@ -95,8 +95,7 @@ fn build_app_icon() -> Option<window::Icon> {
     window::icon::from_rgba(rgba, SIZE, SIZE).ok()
 }
 
-#[tokio::main]
-async fn main() -> iced::Result {
+fn main() -> iced::Result {
     // Initialize standard logging
     let subscriber = FmtSubscriber::builder()
         .with_max_level(Level::INFO)
@@ -111,6 +110,16 @@ async fn main() -> iced::Result {
     let data_dir = proj_dirs.data_dir();
     let db_path = data_dir.join("walder.db");
 
+    // Build an explicit tokio runtime so we control when it shuts down.
+    // Scheduler::new() calls tokio::spawn(), which requires an active runtime handle.
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .expect("Failed to create Tokio runtime");
+
+    // Enter the runtime so tokio::spawn works during service construction.
+    let _rt_guard = rt.enter();
+
     // Initialize core services
     let db = Arc::new(Database::new(&db_path).expect("Failed to init DB"));
     let prefs = db.get_preferences().unwrap_or_default();
@@ -120,8 +129,10 @@ async fn main() -> iced::Result {
     let setter = Arc::new(DesktopWallpaperSetter::new());
     let scheduler = Arc::new(Scheduler::new(db.clone(), setter.clone()));
 
-    // Define Application entrypoint for iced 0.13
-    iced::application(
+    // Run iced — this is a blocking call that returns when the window closes.
+    // At that point we are still in plain synchronous code, so dropping `rt`
+    // afterwards (not from within an async context) is safe.
+    let result = iced::application(
         WallsetterApp::title,
         WallsetterApp::update,
         WallsetterApp::view,
@@ -134,8 +145,13 @@ async fn main() -> iced::Result {
         icon: build_app_icon(),
         ..Default::default()
     })
-    // Provide initialization flag wrapper if needed or use the closure
-    // Due to the ownership requirements in `iced::application().run_with(...)`,
-    // it's easier to use a closure that moves the Arc references.
-    .run_with(move || WallsetterApp::new(db, provider, downloader, setter, scheduler))
+    .run_with(move || WallsetterApp::new(db, provider, downloader, setter, scheduler));
+
+    // Exit the runtime context before dropping the runtime.
+    drop(_rt_guard);
+    // Shut down the runtime in the background so any pending tasks can finish
+    // without blocking the main thread.
+    rt.shutdown_background();
+
+    result
 }
