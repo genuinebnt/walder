@@ -1935,11 +1935,78 @@ impl WallsetterApp {
 
             Message::LoadDownloadContent => {
                 let db = self.db.clone();
+                let download_dir = resolve_download_dir(&self.preferences.download_dir);
                 Task::perform(
                     async move {
                         let folders = db
                             .get_download_folders()
                             .map_err(|e| e.to_string())?;
+
+                        // Scan download_dir (and known subdirectories) for image files
+                        // that aren't yet tracked in local_wallpapers. This recovers
+                        // downloads made before this feature existed.
+                        let tracked = db
+                            .get_tracked_local_paths()
+                            .map_err(|e| e.to_string())?;
+
+                        let mut dirs_to_scan: Vec<(std::path::PathBuf, Option<uuid::Uuid>)> =
+                            vec![(download_dir.clone(), None)];
+                        for folder in &folders {
+                            dirs_to_scan
+                                .push((download_dir.join(&folder.name), Some(folder.id)));
+                        }
+
+                        for (dir, folder_id) in dirs_to_scan {
+                            if !dir.exists() {
+                                continue;
+                            }
+                            let rd = match std::fs::read_dir(&dir) {
+                                Ok(r) => r,
+                                Err(_) => continue,
+                            };
+                            for entry in rd.flatten() {
+                                let path = entry.path();
+                                if !path.is_file() {
+                                    continue;
+                                }
+                                let ext = path
+                                    .extension()
+                                    .and_then(|e| e.to_str())
+                                    .unwrap_or("")
+                                    .to_lowercase();
+                                if ext != "jpg" && ext != "jpeg" && ext != "png" {
+                                    continue;
+                                }
+                                let path_str = path.to_string_lossy().to_string();
+                                if tracked.contains(&path_str) {
+                                    continue;
+                                }
+                                // Derive wallpaper_id from filename (format: "<id>.<ext>")
+                                let stem = path
+                                    .file_stem()
+                                    .and_then(|s| s.to_str())
+                                    .unwrap_or("")
+                                    .to_string();
+                                let filename = path
+                                    .file_name()
+                                    .and_then(|s| s.to_str())
+                                    .unwrap_or("")
+                                    .to_string();
+                                let file_size =
+                                    std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+
+                                let lw = LocalWallpaper::new(
+                                    folder_id,
+                                    stem,
+                                    path_str,
+                                    filename,
+                                    Resolution { width: 0, height: 0 },
+                                    file_size,
+                                );
+                                let _ = db.add_local_wallpaper(&lw);
+                            }
+                        }
+
                         let wallpapers = db
                             .get_local_wallpapers(None)
                             .map_err(|e| e.to_string())?;

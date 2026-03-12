@@ -681,4 +681,23 @@ impl Database {
         .map_err(|e| WallsetterError::Database(e.to_string()))?;
         Ok(())
     }
+
+    /// Returns the set of local_paths already tracked, for deduplication.
+    pub fn get_tracked_local_paths(&self) -> wallsetter_core::Result<std::collections::HashSet<String>> {
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| WallsetterError::Database(e.to_string()))?;
+        let mut stmt = conn
+            .prepare("SELECT local_path FROM local_wallpapers")
+            .map_err(|e| WallsetterError::Database(e.to_string()))?;
+        let iter = stmt
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(|e| WallsetterError::Database(e.to_string()))?;
+        let mut paths = std::collections::HashSet::new();
+        for p in iter {
+            paths.insert(p.map_err(|e| WallsetterError::Database(e.to_string()))?);
+        }
+        Ok(paths)
+    }
 }
