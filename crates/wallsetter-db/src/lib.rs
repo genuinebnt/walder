@@ -315,6 +315,19 @@ impl Database {
         Ok(folders)
     }
 
+    pub fn delete_bookmark_folder(&self, id: Uuid) -> wallsetter_core::Result<()> {
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| WallsetterError::Database(e.to_string()))?;
+        conn.execute(
+            "DELETE FROM bookmark_folders WHERE id = ?1",
+            [id.to_string()],
+        )
+        .map_err(|e| WallsetterError::Database(e.to_string()))?;
+        Ok(())
+    }
+
     // ──────────────────────────────────────────────
     // Preferences
     // ──────────────────────────────────────────────

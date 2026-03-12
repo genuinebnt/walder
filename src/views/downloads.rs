@@ -47,10 +47,18 @@ pub fn view<'a>(app: &'a WallsetterApp) -> Element<'a, Message> {
             crate::theme::button_secondary
         };
         sidebar_col = sidebar_col.push(
-            button(text(&folder.name).size(13))
-                .on_press(Message::SetDownloadViewTab(tab))
-                .style(style)
-                .width(Length::Fill),
+            row![
+                button(text(&folder.name).size(13))
+                    .on_press(Message::SetDownloadViewTab(tab))
+                    .style(style)
+                    .width(Length::Fill),
+                button(text("✕").size(11))
+                    .on_press(Message::DeleteDownloadFolder(folder.id))
+                    .style(crate::theme::button_danger)
+                    .padding([4, 6]),
+            ]
+            .spacing(4)
+            .align_y(iced::alignment::Vertical::Center)
         );
     }
 
@@ -272,43 +280,44 @@ fn library_view<'a>(app: &'a WallsetterApp) -> Element<'a, Message> {
 
     let total_items = all_items.len();
     let page_size = 20;
-    let total_pages = (total_items + page_size - 1) / page_size;
-    let total_pages = total_pages.max(1);
-
-    let current_page = app.downloads_page().clamp(1, total_pages);
-
-    let start_idx = (current_page - 1) * page_size;
-    let end_idx = (start_idx + page_size).min(total_items);
-
-    let items = &all_items[start_idx..end_idx];
+    
+    // For infinite scroll, downloads_page acts essentially as a multiplier of page_size
+    let end_idx = (app.downloads_page() as usize * page_size).min(total_items);
+    let items = &all_items[0..end_idx];
 
     let mut list = column![].spacing(10);
 
-    if total_pages > 1 {
-        let mut header = row![
-            text(format!(
-                "{} results | page {}/{}",
-                total_items, current_page, total_pages
-            ))
-            .size(13),
-        ]
-        .spacing(10)
-        .align_y(Alignment::Center);
+    let mut action_row = row![
+        text(format!("{} results", total_items,)).size(13),
+    ].spacing(10).align_y(Alignment::Center);
 
-        let mut prev_btn = button("Previous").style(crate::theme::button_secondary);
-        if current_page > 1 {
-            prev_btn = prev_btn.on_press(Message::PreviousDownloadsPage);
-        }
-
-        let mut next_btn = button("Next").style(crate::theme::button_secondary);
-        if current_page < total_pages {
-            next_btn = next_btn.on_press(Message::NextDownloadsPage);
-        }
-
-        header = header.push(prev_btn).push(next_btn);
-        
-        list = list.push(container(header));
+    let selected_count = app.selected_wallpapers().len();
+    
+    if selected_count > 0 {
+        action_row = action_row.push(
+            button(text(format!("Deselect All ({})", selected_count)))
+                .on_press(Message::DeselectAll)
+                .style(crate::theme::button_secondary),
+        ).push(
+            button(text("Delete Selected"))
+                .on_press(Message::DeleteSelectedDownloads)
+                .style(crate::theme::button_danger),
+        );
+    } else {
+        action_row = action_row.push(
+            button(text("Select All"))
+                .on_press(Message::SelectAll)
+                .style(crate::theme::button_secondary),
+        );
     }
+
+    action_row = action_row.push(
+        button(text("Delete All"))
+            .on_press(Message::DeleteAllDownloads)
+            .style(crate::theme::button_danger),
+    );
+
+    list = list.push(container(action_row).padding(iced::Padding { bottom: 10.0, ..Default::default() }));
 
     for lw in items {
         let thumb_content: Element<'a, Message> = if let Some(handle) = app.get_thumbnail(&lw.wallpaper_id)
@@ -353,10 +362,17 @@ fn library_view<'a>(app: &'a WallsetterApp) -> Element<'a, Message> {
         }
 
         let local_path = lw.local_path.clone();
+        
+        let is_selected = app.selected_wallpapers().contains(&lw.wallpaper_id);
+        let select_btn = button(text(if is_selected { "Selected ✓" } else { "Select" }))
+            .on_press(Message::TileClicked(lw.wallpaper_id.clone()))
+            .style(if is_selected { crate::theme::button_primary } else { crate::theme::button_secondary });
+
         let info = column![
             text(&lw.filename).size(13).width(Length::Fill),
             text(format!("{}×{}", lw.resolution.width, lw.resolution.height)).size(11),
             row![
+                select_btn,
                 button("Set as Wallpaper")
                     .on_press(Message::QuickSetLocalWallpaper(local_path))
                     .style(crate::theme::button_primary),
@@ -385,6 +401,7 @@ fn library_view<'a>(app: &'a WallsetterApp) -> Element<'a, Message> {
     }
 
     scrollable(list)
+        .on_scroll(Message::DownloadsScrolled)
         .height(Length::Fill)
         .style(crate::theme::scrollbar)
         .into()

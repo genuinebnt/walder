@@ -107,31 +107,20 @@ pub fn view<'a>(app: &'a WallsetterApp, wp: &'a Wallpaper) -> Element<'a, Messag
         .padding(12)
         .style(crate::theme::panel_subtle);
 
-        let has_prev = app.search_results().is_some_and(|r| {
-            r.wallpapers
-                .iter()
-                .position(|w| w.id == wp.id)
-                .is_some_and(|i| i > 0)
-        });
-        let has_next = app.search_results().is_some_and(|r| {
-            r.wallpapers
-                .iter()
-                .position(|w| w.id == wp.id)
-                .is_some_and(|i| i + 1 < r.wallpapers.len())
-        });
+        let (has_prev, has_next) = app.get_preview_navigation(wp);
 
         let mut prev_btn = button("← Prev")
             .style(crate::theme::button_secondary)
             .width(Length::FillPortion(1));
         if has_prev {
-            prev_btn = prev_btn.on_press(Message::PrevWallpaperInSearch);
+            prev_btn = prev_btn.on_press(Message::PrevWallpaper);
         }
 
         let mut next_btn = button("Next →")
             .style(crate::theme::button_secondary)
             .width(Length::FillPortion(1));
         if has_next {
-            next_btn = next_btn.on_press(Message::NextWallpaperInSearch);
+            next_btn = next_btn.on_press(Message::NextWallpaper);
         }
 
         let dl_folders = app.download_folders();

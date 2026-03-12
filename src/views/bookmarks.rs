@@ -59,10 +59,18 @@ pub fn view<'a>(app: &'a WallsetterApp) -> Element<'a, Message> {
             crate::theme::button_secondary
         };
         folder_col = folder_col.push(
-            button(text(&folder.name).size(13))
-                .on_press(Message::SelectFolder(Some(folder.id)))
-                .style(style)
-                .width(Length::Fill),
+            row![
+                button(text(&folder.name).size(13))
+                    .on_press(Message::SelectFolder(Some(folder.id)))
+                    .style(style)
+                    .width(Length::Fill),
+                button(text("✕").size(11))
+                    .on_press(Message::DeleteBookmarkFolder(folder.id))
+                    .style(crate::theme::button_danger)
+                    .padding([4, 6]),
+            ]
+            .spacing(4)
+            .align_y(iced::alignment::Vertical::Center)
         );
     }
 

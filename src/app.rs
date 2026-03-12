@@ -137,7 +137,7 @@ pub enum Message {
     CreateCollection,
     CollectionCreated(std::result::Result<BookmarkFolder, String>),
     RemoveBookmark(uuid::Uuid),
-
+    DeleteBookmarkFolder(uuid::Uuid),
     // Download Folders
     LoadDownloadContent,
     DownloadContentLoaded(
@@ -173,8 +173,7 @@ pub enum Message {
     PreviousPage,
     AuthorNextPage,
     AuthorPreviousPage,
-    NextDownloadsPage,
-    PreviousDownloadsPage,
+    LoadMoreDownloads,
 
     // Author works
     AuthorWorksLoaded(std::result::Result<SearchResult, String>),
@@ -202,12 +201,17 @@ pub enum Message {
     PreviewLoadingTick,
     DownloadsUpdated(Vec<DownloadTask>),
     ClearCompletedDownloads,
+    DownloadsScrolled(iced::widget::scrollable::Viewport),
+    DeleteSelectedDownloads,
+    DeleteAllDownloads,
+    DownloadsDeleted(std::result::Result<usize, String>),
+    DeleteDownloadFolder(uuid::Uuid),
     RetryFailedDownloads,
     RetryFailedCompleted(std::result::Result<Vec<uuid::Uuid>, String>),
 
     // Preview keyboard navigation
-    PrevWallpaperInSearch,
-    NextWallpaperInSearch,
+    PrevWallpaper,
+    NextWallpaper,
 
     // Theme & Settings
     ToggleTheme,
@@ -1486,13 +1490,109 @@ impl WallsetterApp {
 
                 Task::none()
             }
-            Message::NextDownloadsPage => {
-                self.downloads_page += 1;
-                self.queue_local_thumbnails()
+            Message::LoadMoreDownloads => {
+                let total = self.local_wallpapers_for_display().len();
+                let page_size = 20;
+                let max_pages = (total.max(1) + page_size - 1) / page_size;
+                if self.downloads_page < max_pages {
+                    self.downloads_page += 1;
+                    return self.queue_local_thumbnails();
+                }
+                Task::none()
             }
-            Message::PreviousDownloadsPage => {
-                self.downloads_page = self.downloads_page.saturating_sub(1).max(1);
-                self.queue_local_thumbnails()
+            Message::DownloadsScrolled(viewport) => {
+                let viewport_bounds = viewport.bounds();
+                let content_bounds = viewport.content_bounds();
+                if content_bounds.height > viewport_bounds.height {
+                    let absolute = viewport.absolute_offset();
+                    let max_offset = (content_bounds.height - viewport_bounds.height).max(0.0);
+                    if max_offset > 0.0 && (max_offset - absolute.y) <= 280.0 {
+                        return Task::done(Message::LoadMoreDownloads);
+                    }
+                }
+                Task::none()
+            }
+            Message::DeleteSelectedDownloads => {
+                if self.selected_wallpapers.is_empty() {
+                    return Task::none();
+                }
+                let db = self.db.clone();
+                let to_delete: Vec<_> = self.local_wallpapers_for_display()
+                    .into_iter()
+                    .filter(|lw| self.selected_wallpapers.contains(&lw.wallpaper_id))
+                    .map(|lw| (lw.id, lw.local_path.clone()))
+                    .collect();
+                
+                // Clear the selection since they are being deleted
+                self.selected_wallpapers.clear();
+
+                Task::perform(
+                    async move {
+                        let mut deleted = 0;
+                        for (id, path) in to_delete {
+                            if std::fs::remove_file(&path).is_ok() || !std::path::Path::new(&path).exists() {
+                                if db.remove_local_wallpaper(id).is_ok() {
+                                    deleted += 1;
+                                }
+                            }
+                        }
+                        Ok(deleted)
+                    },
+                    Message::DownloadsDeleted,
+                )
+            }
+            Message::DeleteAllDownloads => {
+                let db = self.db.clone();
+                let to_delete: Vec<_> = self.local_wallpapers_for_display()
+                    .into_iter()
+                    .map(|lw| (lw.id, lw.local_path.clone()))
+                    .collect();
+
+                self.selected_wallpapers.clear();
+                
+                Task::perform(
+                    async move {
+                        let mut deleted = 0;
+                        for (id, path) in to_delete {
+                            if std::fs::remove_file(&path).is_ok() || !std::path::Path::new(&path).exists() {
+                                if db.remove_local_wallpaper(id).is_ok() {
+                                    deleted += 1;
+                                }
+                            }
+                        }
+                        Ok(deleted)
+                    },
+                    Message::DownloadsDeleted,
+                )
+            }
+            Message::DownloadsDeleted(result) => {
+                match result {
+                    Ok(count) => {
+                        self.error_message = Some(format!("Deleted {count} downloads successfully."));
+                        return Task::done(Message::LoadDownloadContent);
+                    }
+                    Err(e) => {
+                        self.error_message = Some(format!("Failed to delete downloads: {e}"));
+                    }
+                }
+                Task::none()
+            }
+            Message::DeleteDownloadFolder(folder_id) => {
+                if let Err(e) = self.db.delete_download_folder(folder_id) {
+                    self.error_message = Some(format!("Failed to delete folder: {e}"));
+                } else {
+                    self.download_folders.retain(|f| f.id != folder_id);
+                    if self.selected_folder == Some(folder_id) {
+                        self.selected_folder = None;
+                    }
+                    if let DownloadViewTab::Library(Some(id)) = self.download_view_tab {
+                        if id == folder_id {
+                            self.download_view_tab = DownloadViewTab::Library(None);
+                        }
+                    }
+                    return Task::done(Message::LoadDownloadContent);
+                }
+                Task::none()
             }
             Message::ThumbnailLoaded(id, source_url, result) => {
                 match result {
@@ -2080,6 +2180,18 @@ impl WallsetterApp {
                 }
                 Task::perform(async { () }, |_| Message::LoadBookmarks)
             }
+            Message::DeleteBookmarkFolder(folder_id) => {
+                if let Err(e) = self.db.delete_bookmark_folder(folder_id) {
+                    self.error_message = Some(format!("Failed to delete collection: {e}"));
+                } else {
+                    self.bookmark_folders.retain(|f| f.id != folder_id);
+                    if self.selected_folder == Some(folder_id) {
+                        self.selected_folder = None;
+                    }
+                    return Task::done(Message::LoadBookmarks);
+                }
+                Task::none()
+            }
 
             Message::LoadDownloadContent => {
                 let db = self.db.clone();
@@ -2550,65 +2662,33 @@ impl WallsetterApp {
                     Task::batch(record_tasks)
                 }
             }
-            Message::PrevWallpaperInSearch => {
-                let target = if let View::Preview(current_wp) = &self.current_view {
-                    let current_id = current_wp.id.clone();
-                    self.search_results.as_ref().and_then(|results| {
-                        let pos = results.wallpapers.iter().position(|w| w.id == current_id)?;
-                        if pos > 0 {
-                            Some(results.wallpapers[pos - 1].clone())
-                        } else {
-                            None
-                        }
-                    })
+            Message::PrevWallpaper => {
+                let target_id = if let View::Preview(current_wp) = &self.current_view {
+                    self.get_adjacent_wallpaper(&current_wp.id, false)
                 } else {
                     None
                 };
-                if let Some(wp) = target {
+                if let Some(id) = target_id {
                     self.preview_loading_frame = 0;
-                    self.current_view = View::Preview(wp.clone());
-                    let local_path =
-                        Self::local_wallpaper_path(&self.preferences.download_dir, &wp);
-                    let mut tasks = vec![Task::perform(
-                        Self::fetch_wallpaper(self.provider.clone(), wp.id.clone()),
+                    return Task::perform(
+                        Self::fetch_wallpaper(self.provider.clone(), id),
                         Message::PreviewWallpaperLoaded,
-                    )];
-                    if !self.full_images.contains_key(&wp.id) {
-                        tasks.push(Task::perform(
-                            Self::fetch_full_image(wp.id.clone(), wp.full_url.clone(), local_path),
-                            |(id, res)| Message::FullImageLoaded(id, res),
-                        ));
-                    }
-                    return Task::batch(tasks);
+                    );
                 }
                 Task::none()
             }
-            Message::NextWallpaperInSearch => {
-                let target = if let View::Preview(current_wp) = &self.current_view {
-                    let current_id = current_wp.id.clone();
-                    self.search_results.as_ref().and_then(|results| {
-                        let pos = results.wallpapers.iter().position(|w| w.id == current_id)?;
-                        results.wallpapers.get(pos + 1).cloned()
-                    })
+            Message::NextWallpaper => {
+                let target_id = if let View::Preview(current_wp) = &self.current_view {
+                    self.get_adjacent_wallpaper(&current_wp.id, true)
                 } else {
                     None
                 };
-                if let Some(wp) = target {
+                if let Some(id) = target_id {
                     self.preview_loading_frame = 0;
-                    self.current_view = View::Preview(wp.clone());
-                    let local_path =
-                        Self::local_wallpaper_path(&self.preferences.download_dir, &wp);
-                    let mut tasks = vec![Task::perform(
-                        Self::fetch_wallpaper(self.provider.clone(), wp.id.clone()),
+                    return Task::perform(
+                        Self::fetch_wallpaper(self.provider.clone(), id),
                         Message::PreviewWallpaperLoaded,
-                    )];
-                    if !self.full_images.contains_key(&wp.id) {
-                        tasks.push(Task::perform(
-                            Self::fetch_full_image(wp.id.clone(), wp.full_url.clone(), local_path),
-                            |(id, res)| Message::FullImageLoaded(id, res),
-                        ));
-                    }
-                    return Task::batch(tasks);
+                    );
                 }
                 Task::none()
             }
@@ -2712,6 +2792,104 @@ impl WallsetterApp {
                 Task::none()
             }
         }
+    }
+
+    pub fn get_preview_navigation(&self, wp: &Wallpaper) -> (bool, bool) {
+        if let Some(prev) = &self.previous_view {
+            match &**prev {
+                View::Search => {
+                    if let Some(r) = &self.search_results {
+                        if let Some(i) = r.wallpapers.iter().position(|w| w.id == wp.id) {
+                            return (i > 0, i + 1 < r.wallpapers.len());
+                        }
+                    }
+                }
+                View::AuthorProfile(_) => {
+                    if let Some(r) = &self.author_results {
+                         if let Some(i) = r.wallpapers.iter().position(|w| w.id == wp.id) {
+                             return (i > 0, i + 1 < r.wallpapers.len());
+                         }
+                    }
+                }
+                View::Downloads => {
+                     let items = self.local_wallpapers_for_display();
+                     if let Some(i) = items.iter().position(|w| w.wallpaper_id == wp.id) {
+                         return (i > 0, i + 1 < items.len());
+                     }
+                }
+                _ => {}
+            }
+        }
+        
+        let items = self.local_wallpapers_for_display();
+        if let Some(i) = items.iter().position(|w| w.wallpaper_id == wp.id) {
+            return (i > 0, i + 1 < items.len());
+        }
+        if let Some(r) = &self.search_results {
+            if let Some(i) = r.wallpapers.iter().position(|w| w.id == wp.id) {
+                return (i > 0, i + 1 < r.wallpapers.len());
+            }
+        }
+        (false, false)
+    }
+
+    fn get_adjacent_wallpaper(&self, current_id: &str, next: bool) -> Option<String> {
+        if let Some(prev) = &self.previous_view {
+            match &**prev {
+                View::Search => {
+                    if let Some(r) = &self.search_results {
+                         if let Some(pos) = r.wallpapers.iter().position(|w| w.id == current_id) {
+                              if next {
+                                  return r.wallpapers.get(pos + 1).map(|w| w.id.clone());
+                              } else if pos > 0 {
+                                  return r.wallpapers.get(pos - 1).map(|w| w.id.clone());
+                              }
+                         }
+                    }
+                }
+                View::AuthorProfile(_) => {
+                    if let Some(r) = &self.author_results {
+                         if let Some(pos) = r.wallpapers.iter().position(|w| w.id == current_id) {
+                              if next {
+                                  return r.wallpapers.get(pos + 1).map(|w| w.id.clone());
+                              } else if pos > 0 {
+                                  return r.wallpapers.get(pos - 1).map(|w| w.id.clone());
+                              }
+                         }
+                    }
+                }
+                View::Downloads => {
+                     let items = self.local_wallpapers_for_display();
+                     if let Some(pos) = items.iter().position(|w| w.wallpaper_id == current_id) {
+                          if next {
+                              return items.get(pos + 1).map(|w| w.wallpaper_id.clone());
+                          } else if pos > 0 {
+                              return items.get(pos - 1).map(|w| w.wallpaper_id.clone());
+                          }
+                     }
+                }
+                _ => {}
+            }
+        }
+        
+        let items = self.local_wallpapers_for_display();
+        if let Some(pos) = items.iter().position(|w| w.wallpaper_id == current_id) {
+            if next {
+                return items.get(pos + 1).map(|w| w.wallpaper_id.clone());
+            } else if pos > 0 {
+                return items.get(pos - 1).map(|w| w.wallpaper_id.clone());
+            }
+        }
+        if let Some(r) = &self.search_results {
+            if let Some(pos) = r.wallpapers.iter().position(|w| w.id == current_id) {
+                if next {
+                    return r.wallpapers.get(pos + 1).map(|w| w.id.clone());
+                } else if pos > 0 {
+                    return r.wallpapers.get(pos - 1).map(|w| w.id.clone());
+                }
+            }
+        }
+        None
     }
 
     pub fn view(&self) -> Element<'_, Message> {
@@ -2867,10 +3045,10 @@ impl WallsetterApp {
                 use iced::keyboard::key::Named;
                 match key.as_ref() {
                     iced::keyboard::Key::Named(Named::ArrowLeft) => {
-                        Some(Message::PrevWallpaperInSearch)
+                        Some(Message::PrevWallpaper)
                     }
                     iced::keyboard::Key::Named(Named::ArrowRight) => {
-                        Some(Message::NextWallpaperInSearch)
+                        Some(Message::NextWallpaper)
                     }
                     _ => None,
                 }
