@@ -1,4 +1,4 @@
-use iced::widget::{button, column, container, image, progress_bar, row, scrollable, text, text_input};
+use iced::widget::{button, column, container, image, mouse_area, progress_bar, row, scrollable, text, text_input};
 use iced::{Alignment, Element, Length, Theme};
 
 use wallsetter_core::DownloadStatus;
@@ -311,8 +311,7 @@ fn library_view<'a>(app: &'a WallsetterApp) -> Element<'a, Message> {
     }
 
     for lw in items {
-        // Thumbnail: try cached thumbnail, fall back to local file
-        let thumb: Element<'a, Message> = if let Some(handle) = app.get_thumbnail(&lw.wallpaper_id)
+        let thumb_content: Element<'a, Message> = if let Some(handle) = app.get_thumbnail(&lw.wallpaper_id)
         {
             image(handle)
                 .width(Length::Fixed(96.0))
@@ -320,13 +319,16 @@ fn library_view<'a>(app: &'a WallsetterApp) -> Element<'a, Message> {
                 .content_fit(iced::ContentFit::Cover)
                 .into()
         } else {
-            let path = lw.local_path.clone();
-            image(iced::widget::image::Handle::from_path(path))
+            container(text("Loading...").size(11))
                 .width(Length::Fixed(96.0))
                 .height(Length::Fixed(68.0))
-                .content_fit(iced::ContentFit::Cover)
+                .align_x(iced::alignment::Horizontal::Center)
+                .align_y(iced::alignment::Vertical::Center)
                 .into()
         };
+
+        let thumb = mouse_area(thumb_content)
+            .on_press(Message::OpenBookmark(lw.wallpaper_id.clone()));
 
         // "Move to" folder buttons
         let lw_id = lw.id;

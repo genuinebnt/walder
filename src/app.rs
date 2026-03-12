@@ -496,6 +496,61 @@ impl WallsetterApp {
         (id, result)
     }
 
+    async fn fetch_local_thumbnail(
+        id: String,
+        local_path: String,
+    ) -> (
+        String,
+        String,
+        std::result::Result<iced::widget::image::Handle, String>,
+    ) {
+        let path = local_path.clone();
+        let result = tokio::task::spawn_blocking(move || {
+            let img = image::open(&path).map_err(|e| e.to_string())?;
+            let thumb = img.thumbnail(600, 600); 
+            let mut cursor = std::io::Cursor::new(Vec::new());
+            thumb.write_to(&mut cursor, image::ImageFormat::Jpeg).map_err(|e| e.to_string())?;
+            Ok(iced::widget::image::Handle::from_bytes(cursor.into_inner()))
+        })
+        .await
+        .unwrap_or_else(|e| Err(format!("Task panic: {e}")));
+
+        (id, local_path, result)
+    }
+
+    pub fn queue_local_thumbnails(&mut self) -> Task<Message> {
+        let items = self.local_wallpapers_for_display();
+        let total_items = items.len();
+        if total_items == 0 { 
+            return Task::none(); 
+        }
+        let page_size = 20;
+        let total_pages = (total_items + page_size - 1) / page_size;
+        let total_pages = total_pages.max(1);
+        let current_page = self.downloads_page.clamp(1, total_pages);
+        let start_idx = (current_page - 1) * page_size;
+        let end_idx = (start_idx + page_size).min(total_items);
+        let slice = &items[start_idx..end_idx];
+
+        let mut missing = Vec::new();
+        for wp in slice {
+            if !self.thumbnails.contains_key(&wp.wallpaper_id) && !self.thumbnail_sources.contains_key(&wp.wallpaper_id) {
+                missing.push((wp.wallpaper_id.clone(), wp.local_path.clone()));
+            }
+        }
+
+        let mut tasks = Vec::new();
+        for (id, path) in missing {
+            self.thumbnail_sources.insert(id.clone(), path.clone());
+            tasks.push(Task::perform(
+                Self::fetch_local_thumbnail(id, path),
+                |(id, url, res)| Message::ThumbnailLoaded(id, url, res)
+            ));
+        }
+        
+        Task::batch(tasks)
+    }
+
     fn local_wallpaper_path(download_dir: &str, wp: &Wallpaper) -> Option<std::path::PathBuf> {
         let mut expected = resolve_download_dir(download_dir);
         let extension = wp
@@ -1090,6 +1145,9 @@ impl WallsetterApp {
                             Message::AuthorWorksLoaded,
                         );
                     }
+                    View::Downloads => {
+                        return self.queue_local_thumbnails();
+                    }
                     View::Search => {
                         let offset = self.search_scroll_offset;
                         if offset.y > 0.0 {
@@ -1112,6 +1170,7 @@ impl WallsetterApp {
                     View::Search
                 };
                 let going_to_search = matches!(new_view, View::Search);
+                let going_to_downloads = matches!(new_view, View::Downloads);
                 self.current_view = new_view;
                 if going_to_search && self.search_scroll_offset.y > 0.0 {
                     let offset = self.search_scroll_offset;
@@ -1120,12 +1179,19 @@ impl WallsetterApp {
                         offset,
                     );
                 }
+                if going_to_downloads {
+                    return self.queue_local_thumbnails();
+                }
                 Task::none()
             }
             Message::GoForward => {
                 if let Some(next) = self.nav_forward_stack.pop() {
                     self.previous_view = Some(Box::new(self.current_view.clone()));
+                    let going_to_downloads = matches!(next, View::Downloads);
                     self.current_view = next;
+                    if going_to_downloads {
+                        return self.queue_local_thumbnails();
+                    }
                 }
                 Task::none()
             }
@@ -1422,11 +1488,11 @@ impl WallsetterApp {
             }
             Message::NextDownloadsPage => {
                 self.downloads_page += 1;
-                Task::none()
+                self.queue_local_thumbnails()
             }
             Message::PreviousDownloadsPage => {
                 self.downloads_page = self.downloads_page.saturating_sub(1).max(1);
-                Task::none()
+                self.queue_local_thumbnails()
             }
             Message::ThumbnailLoaded(id, source_url, result) => {
                 match result {
@@ -2103,6 +2169,9 @@ impl WallsetterApp {
                     Ok((folders, wallpapers)) => {
                         self.download_folders = folders;
                         self.local_wallpapers = wallpapers;
+                        if matches!(self.current_view, View::Downloads) {
+                            return self.queue_local_thumbnails();
+                        }
                     }
                     Err(e) => {
                         self.error_message = Some(format!("Failed to load download content: {}", e));
@@ -2157,7 +2226,7 @@ impl WallsetterApp {
             Message::SetDownloadViewTab(tab) => {
                 self.download_view_tab = tab;
                 self.downloads_page = 1;
-                Task::none()
+                self.queue_local_thumbnails()
             }
 
             Message::SetPendingDownloadFolder(folder_id) => {
