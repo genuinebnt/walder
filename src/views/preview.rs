@@ -107,7 +107,51 @@ pub fn view<'a>(app: &'a WallsetterApp, wp: &'a Wallpaper) -> Element<'a, Messag
         .padding(12)
         .style(crate::theme::panel_subtle);
 
+        let has_prev = app.search_results().is_some_and(|r| {
+            r.wallpapers
+                .iter()
+                .position(|w| w.id == wp.id)
+                .is_some_and(|i| i > 0)
+        });
+        let has_next = app.search_results().is_some_and(|r| {
+            r.wallpapers
+                .iter()
+                .position(|w| w.id == wp.id)
+                .is_some_and(|i| i + 1 < r.wallpapers.len())
+        });
+
+        let mut prev_btn = button("← Prev")
+            .style(crate::theme::button_secondary)
+            .width(Length::FillPortion(1));
+        if has_prev {
+            prev_btn = prev_btn.on_press(Message::PrevWallpaperInSearch);
+        }
+
+        let mut next_btn = button("Next →")
+            .style(crate::theme::button_secondary)
+            .width(Length::FillPortion(1));
+        if has_next {
+            next_btn = next_btn.on_press(Message::NextWallpaperInSearch);
+        }
+
+        let folders = app.bookmark_folders();
+        let collection_section: Element<'a, Message> = if !folders.is_empty() {
+            let mut col = column![text("Add to Collection").size(13)].spacing(4);
+            for folder in folders {
+                col = col.push(
+                    button(text(format!("+ {}", folder.name)).size(12))
+                        .on_press(Message::AddBookmarkToCollection(wp.clone(), folder.id))
+                        .style(crate::theme::button_secondary)
+                        .width(Length::Fill),
+                );
+            }
+            container(col).padding(10).style(crate::theme::panel_subtle).into()
+        } else {
+            column![].into()
+        };
+
         let actions = column![
+            row![prev_btn, next_btn].spacing(8),
             button("Back")
                 .on_press(Message::GoBack)
                 .style(crate::theme::button_secondary)
@@ -144,6 +188,7 @@ pub fn view<'a>(app: &'a WallsetterApp, wp: &'a Wallpaper) -> Element<'a, Messag
                         .padding(12)
                         .style(crate::theme::panel_subtle),
                     actions,
+                    collection_section,
                 ]
                 .spacing(12),
             )

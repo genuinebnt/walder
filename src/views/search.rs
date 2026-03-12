@@ -3,6 +3,7 @@ use iced::widget::{
     button, checkbox, column, container, image, mouse_area, pick_list, responsive, row, scrollable,
     text, text_input,
 };
+use crate::app::SEARCH_SCROLL_ID;
 use iced::{Alignment, Element, Length};
 
 use crate::app::{Message, ResolutionMode, WallsetterApp};
@@ -376,6 +377,7 @@ pub fn view<'a>(app: &'a WallsetterApp) -> Element<'a, Message> {
             .width(Length::Fill),
             search_button,
             select_all_button,
+            text(format!("Selected: {selected_count}")).size(13),
             button(sidebar_toggle_label)
                 .on_press(Message::ToggleSearchSidebar)
                 .style(crate::theme::button_secondary),
@@ -395,12 +397,12 @@ pub fn view<'a>(app: &'a WallsetterApp) -> Element<'a, Message> {
         .align_y(Alignment::Center),
     )
     .padding(12)
-    .style(crate::theme::panel);
+    .style(crate::theme::app_frame);
 
     let results_content = responsive(move |size| {
         let mut results_ctn = column![].spacing(12);
 
-        if app.is_searching() {
+        if app.is_searching() && app.search_results().is_none() {
             results_ctn = results_ctn.push(
                 container(text("Searching wallpapers...").size(18))
                     .padding(16)
@@ -436,7 +438,11 @@ pub fn view<'a>(app: &'a WallsetterApp) -> Element<'a, Message> {
                         .padding(20)
                         .style(crate::theme::panel),
                 );
-                return scrollable(results_ctn).height(Length::Fill).into();
+                return container(scrollable(results_ctn).height(Length::Fill))
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .clip(true)
+                    .into();
             }
 
             let available_width = if size.width <= 0.0 {
@@ -471,7 +477,7 @@ pub fn view<'a>(app: &'a WallsetterApp) -> Element<'a, Message> {
                         image(handle)
                             .width(Length::Fill)
                             .height(Length::Fixed(thumbnail_height))
-                            .content_fit(iced::ContentFit::Cover)
+                            .content_fit(iced::ContentFit::Contain)
                             .into()
                     } else {
                         container(text("Loading preview..."))
@@ -510,22 +516,35 @@ pub fn view<'a>(app: &'a WallsetterApp) -> Element<'a, Message> {
                 )
                 .on_press(Message::TileClicked(tile_click_id));
 
+                let thumbnail_region = container(thumbnail)
+                    .width(Length::Fill)
+                    .height(Length::Fixed(thumbnail_height))
+                    .clip(true);
+
                 let item = container(
                     column![
-                        button(thumbnail)
-                            .on_press(Message::SwitchView(crate::app::View::Preview(wp.clone())))
-                            .style(crate::theme::button_flat)
-                            .width(Length::Fill),
+                        mouse_area(
+                            container(thumbnail_region)
+                                .width(Length::Fill)
+                                .height(Length::Fixed(thumbnail_height))
+                                .clip(true),
+                        )
+                        .on_press(Message::SwitchView(crate::app::View::Preview(wp.clone()))),
                         container(non_image_area).width(Length::Fill),
                     ]
                     .spacing(8),
                 )
                 .padding(10)
                 .width(Length::Fixed(item_width))
+                .clip(true)
                 .style(if is_selected {
                     crate::theme::panel_selected
                 } else {
-                    crate::theme::panel_subtle
+                    match wp.purity {
+                        Purity::Nsfw => crate::theme::panel_nsfw,
+                        Purity::Sketchy => crate::theme::panel_sketchy,
+                        _ => crate::theme::panel_subtle,
+                    }
                 });
 
                 grid_row = grid_row.push(item);
@@ -540,6 +559,21 @@ pub fn view<'a>(app: &'a WallsetterApp) -> Element<'a, Message> {
 
             if items_in_row > 0 {
                 results_ctn = results_ctn.push(grid_row);
+            }
+
+            if app.is_loading_more_search_results() {
+                results_ctn = results_ctn.push(
+                    container(
+                        row![
+                            text("Loading more wallpapers").size(14),
+                            text("...").size(14),
+                        ]
+                        .spacing(8)
+                        .align_y(Alignment::Center),
+                    )
+                    .padding(10)
+                    .style(crate::theme::panel_subtle),
+                );
             }
         } else {
             results_ctn = results_ctn.push(
@@ -556,11 +590,16 @@ pub fn view<'a>(app: &'a WallsetterApp) -> Element<'a, Message> {
             );
         }
 
-        let mut results_scroll = scrollable(results_ctn).height(Length::Fill);
-        if app.has_more_search_pages() {
-            results_scroll = results_scroll.on_scroll(Message::SearchScrolled);
-        }
-        results_scroll.into()
+        let results_scroll = scrollable(results_ctn)
+            .id(scrollable::Id::new(SEARCH_SCROLL_ID))
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .on_scroll(Message::SearchScrolled);
+        container(results_scroll)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .clip(true)
+            .into()
     });
 
     let mut main_content = column![search_row]
@@ -586,18 +625,32 @@ pub fn view<'a>(app: &'a WallsetterApp) -> Element<'a, Message> {
                 .align_y(Alignment::Center),
             )
             .padding(10)
-            .style(crate::theme::panel),
+            .style(crate::theme::app_frame),
         );
     }
-    main_content = main_content.push(container(results_content).height(Length::Fill));
-
-    if app.is_search_sidebar_visible() {
-        row![sidebar, main_content]
-            .spacing(18)
+    main_content = main_content.push(
+        container(results_content)
             .width(Length::Fill)
             .height(Length::Fill)
-            .into()
+            .clip(true),
+    );
+
+    if app.is_search_sidebar_visible() {
+        container(
+            row![sidebar, main_content]
+                .spacing(18)
+                .width(Length::Fill)
+                .height(Length::Fill),
+        )
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .clip(true)
+        .into()
     } else {
-        main_content.into()
+        container(main_content)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .clip(true)
+            .into()
     }
 }

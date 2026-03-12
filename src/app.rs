@@ -1,4 +1,4 @@
-use iced::widget::{button, column, container, row, text};
+use iced::widget::{button, column, container, row, scrollable, text};
 use iced::{Element, Length, Task, Theme as IcedTheme};
 use reqwest;
 use std::collections::{HashMap, HashSet};
@@ -45,6 +45,7 @@ pub struct WallsetterApp {
     full_images: HashMap<String, iced::widget::image::Handle>,
     preview_loading_frame: usize,
     selected_wallpapers: HashSet<String>,
+    selected_wallpaper_cache: HashMap<String, Wallpaper>,
     resolution_mode: ResolutionMode,
     resolution_filter_input: String,
     atleast_resolution_input: String,
@@ -53,15 +54,21 @@ pub struct WallsetterApp {
     // Download state
     download_tasks: Vec<DownloadTask>,
 
-    // Bookmarks state
+    // Bookmarks / Collections state
     bookmarks: Vec<Bookmark>,
     bookmark_folders: Vec<BookmarkFolder>,
+    selected_folder: Option<uuid::Uuid>,
+    new_collection_name: String,
 
     // Error state
     error_message: Option<String>,
 
     // Navigation history
     previous_view: Option<Box<View>>,
+    nav_forward_stack: Vec<View>,
+
+    // Scroll position preservation
+    search_scroll_offset: scrollable::AbsoluteOffset,
 }
 
 #[derive(Debug, Clone)]
@@ -78,6 +85,7 @@ pub enum View {
 pub enum Message {
     // Navigation
     SwitchView(View),
+    GoForward,
 
     // Search
     SearchQueryChanged(String),
@@ -109,6 +117,14 @@ pub enum Message {
     AddBookmark(Wallpaper),
     OpenBookmark(String),
     BookmarkWallpaperLoaded(std::result::Result<Wallpaper, String>),
+
+    // Collections
+    AddBookmarkToCollection(Wallpaper, uuid::Uuid),
+    SelectFolder(Option<uuid::Uuid>),
+    NewCollectionNameChanged(String),
+    CreateCollection,
+    CollectionCreated(std::result::Result<BookmarkFolder, String>),
+    RemoveBookmark(uuid::Uuid),
 
     // Selection & Download
     TileClicked(String),
@@ -153,6 +169,13 @@ pub enum Message {
     Tick,
     PreviewLoadingTick,
     DownloadsUpdated(Vec<DownloadTask>),
+    ClearCompletedDownloads,
+    RetryFailedDownloads,
+    RetryFailedCompleted(std::result::Result<Vec<uuid::Uuid>, String>),
+
+    // Preview keyboard navigation
+    PrevWallpaperInSearch,
+    NextWallpaperInSearch,
 
     // Theme & Settings
     ToggleTheme,
@@ -170,6 +193,7 @@ pub enum SettingsMessage {
     SchedulerEnabledChanged(bool),
     SchedulerIntervalChanged(String),
     SchedulerShuffleChanged(bool),
+    SchedulerSourceChanged(SchedulerSource),
     Save,
 }
 
@@ -187,6 +211,8 @@ impl std::fmt::Display for ResolutionMode {
         }
     }
 }
+
+pub const SEARCH_SCROLL_ID: &str = "search_results_scroll";
 
 impl WallsetterApp {
     const GRID_COLUMN_PRESETS: [u32; 3] = [3, 4, 6];
@@ -254,6 +280,7 @@ impl WallsetterApp {
             full_images: HashMap::new(),
             preview_loading_frame: 0,
             selected_wallpapers: HashSet::new(),
+            selected_wallpaper_cache: HashMap::new(),
             resolution_mode,
             resolution_filter_input,
             atleast_resolution_input,
@@ -262,8 +289,12 @@ impl WallsetterApp {
             download_tasks: Vec::new(),
             bookmarks: Vec::new(),
             bookmark_folders: Vec::new(),
+            selected_folder: None,
+            new_collection_name: String::new(),
             error_message: None,
             previous_view: None,
+            nav_forward_stack: Vec::new(),
+            search_scroll_offset: scrollable::AbsoluteOffset::default(),
         };
 
         // Initial task (e.g., fetch initial wallpapers)
@@ -784,7 +815,8 @@ impl WallsetterApp {
                 if tag.is_empty() {
                     None
                 } else {
-                    Some(format!("{sign}{tag}"))
+                    // Keep # prefix so Wallhaven performs a proper tag search (sends as %23tag)
+                    Some(format!("{sign}#{tag}"))
                 }
             } else {
                 Some(format!("{sign}{unsigned}"))
@@ -873,6 +905,26 @@ impl WallsetterApp {
             .collect()
     }
 
+    fn cache_wallpapers<'a, I>(&mut self, wallpapers: I)
+    where
+        I: IntoIterator<Item = &'a Wallpaper>,
+    {
+        for wp in wallpapers {
+            self.selected_wallpaper_cache
+                .insert(wp.id.clone(), wp.clone());
+        }
+    }
+
+    fn selected_wallpapers_for_actions(&self) -> Vec<Wallpaper> {
+        let mut selected: Vec<Wallpaper> = self
+            .selected_wallpapers
+            .iter()
+            .filter_map(|id| self.selected_wallpaper_cache.get(id).cloned())
+            .collect();
+        selected.sort_by(|a, b| a.id.cmp(&b.id));
+        selected
+    }
+
     fn push_local_thumbnail_if_available(&mut self, task: &DownloadTask) {
         if self.thumbnails.contains_key(&task.wallpaper_id) {
             return;
@@ -911,6 +963,7 @@ impl WallsetterApp {
                     return Task::none();
                 }
 
+                self.nav_forward_stack.clear();
                 self.previous_view = Some(Box::new(self.current_view.clone()));
                 self.current_view = view.clone();
 
@@ -938,6 +991,28 @@ impl WallsetterApp {
                             ));
                         }
 
+                        // Preload thumbnails for adjacent wallpapers
+                        let adjacent: Vec<Wallpaper> =
+                            if let Some(results) = &self.search_results {
+                                if let Some(pos) =
+                                    results.wallpapers.iter().position(|w| w.id == wp.id)
+                                {
+                                    let start = pos.saturating_sub(2);
+                                    let end = (pos + 3).min(results.wallpapers.len());
+                                    results.wallpapers[start..end]
+                                        .iter()
+                                        .filter(|w| w.id != wp.id)
+                                        .cloned()
+                                        .collect()
+                                } else {
+                                    Vec::new()
+                                }
+                            } else {
+                                Vec::new()
+                            };
+                        let thumb_tasks = self.build_thumbnail_tasks_for_wallpapers(&adjacent);
+                        tasks.extend(thumb_tasks);
+
                         return Task::batch(tasks);
                     }
                     View::AuthorProfile(username) => {
@@ -955,16 +1030,42 @@ impl WallsetterApp {
                             Message::AuthorWorksLoaded,
                         );
                     }
+                    View::Search => {
+                        let offset = self.search_scroll_offset;
+                        if offset.y > 0.0 {
+                            return scrollable::scroll_to(
+                                scrollable::Id::new(SEARCH_SCROLL_ID),
+                                offset,
+                            );
+                        }
+                    }
                     _ => {}
                 }
 
                 Task::none()
             }
             Message::GoBack => {
-                if let Some(prev) = self.previous_view.take() {
-                    self.current_view = *prev;
+                let new_view = if let Some(prev) = self.previous_view.take() {
+                    self.nav_forward_stack.push(self.current_view.clone());
+                    *prev
                 } else {
-                    self.current_view = View::Search;
+                    View::Search
+                };
+                let going_to_search = matches!(new_view, View::Search);
+                self.current_view = new_view;
+                if going_to_search && self.search_scroll_offset.y > 0.0 {
+                    let offset = self.search_scroll_offset;
+                    return scrollable::scroll_to(
+                        scrollable::Id::new(SEARCH_SCROLL_ID),
+                        offset,
+                    );
+                }
+                Task::none()
+            }
+            Message::GoForward => {
+                if let Some(next) = self.nav_forward_stack.pop() {
+                    self.previous_view = Some(Box::new(self.current_view.clone()));
+                    self.current_view = next;
                 }
                 Task::none()
             }
@@ -995,6 +1096,7 @@ impl WallsetterApp {
                 self.related_tags.clear();
                 self.is_searching = true;
                 self.is_appending_search_results = false;
+                self.search_results = None;
                 self.active_filters.page = 1;
                 self.active_filters.seed = None;
                 self.sync_input_filters_into_active();
@@ -1002,8 +1104,6 @@ impl WallsetterApp {
 
                 let mut filters = self.active_filters.clone();
                 filters.query = Self::normalize_search_query_for_api(&self.search_query);
-
-                self.selected_wallpapers.clear();
 
                 Task::perform(
                     Self::fetch_initial_wallpapers(self.provider.clone(), filters),
@@ -1017,6 +1117,7 @@ impl WallsetterApp {
 
                 self.is_searching = true;
                 self.is_appending_search_results = false;
+                self.search_results = None;
                 self.active_filters.page = 1;
                 self.active_filters.seed = None;
                 self.sync_input_filters_into_active();
@@ -1024,15 +1125,15 @@ impl WallsetterApp {
                 let mut filters = self.active_filters.clone();
                 filters.query = Self::normalize_search_query_for_api(&self.search_query);
 
-                // Clear selection on new search
-                self.selected_wallpapers.clear();
-
                 Task::perform(
                     Self::fetch_initial_wallpapers(self.provider.clone(), filters),
                     Message::SearchCompleted,
                 )
             }
             Message::SearchScrolled(viewport) => {
+                // Always save scroll position for restoration
+                self.search_scroll_offset = viewport.absolute_offset();
+
                 if self.is_searching {
                     return Task::none();
                 }
@@ -1090,6 +1191,7 @@ impl WallsetterApp {
                             seed,
                         } = r;
 
+                        self.cache_wallpapers(&wallpapers);
                         let tasks = self.build_thumbnail_tasks_for_wallpapers(&wallpapers);
 
                         self.active_filters.page = current_page;
@@ -1148,6 +1250,7 @@ impl WallsetterApp {
 
                 match result {
                     Ok(results) => {
+                        self.cache_wallpapers(&results.wallpapers);
                         let tasks = self.build_thumbnail_tasks_for_wallpapers(&results.wallpapers);
 
                         self.author_results = Some(results);
@@ -1287,11 +1390,14 @@ impl WallsetterApp {
                 Task::none()
             }
             Message::PreviewWallpaperLoaded(result) => {
-                if let Ok(wallpaper) = result
-                    && let View::Preview(current) = &self.current_view
-                    && current.id == wallpaper.id
-                {
-                    self.current_view = View::Preview(wallpaper);
+                if let Ok(wallpaper) = result {
+                    self.selected_wallpaper_cache
+                        .insert(wallpaper.id.clone(), wallpaper.clone());
+                    if let View::Preview(current) = &self.current_view
+                        && current.id == wallpaper.id
+                    {
+                        self.current_view = View::Preview(wallpaper);
+                    }
                 }
                 Task::none()
             }
@@ -1305,10 +1411,23 @@ impl WallsetterApp {
                 Task::none()
             }
             Message::SelectAll => {
-                if let Some(results) = &self.search_results {
-                    for wp in &results.wallpapers {
-                        self.selected_wallpapers.insert(wp.id.clone());
-                    }
+                let wallpapers: Vec<Wallpaper> = match self.current_view {
+                    View::AuthorProfile(_) => self
+                        .author_results
+                        .as_ref()
+                        .map(|results| results.wallpapers.clone())
+                        .unwrap_or_default(),
+                    _ => self
+                        .search_results
+                        .as_ref()
+                        .map(|results| results.wallpapers.clone())
+                        .unwrap_or_default(),
+                };
+
+                for wp in wallpapers {
+                    self.selected_wallpaper_cache
+                        .insert(wp.id.clone(), wp.clone());
+                    self.selected_wallpapers.insert(wp.id);
                 }
                 Task::none()
             }
@@ -1321,77 +1440,94 @@ impl WallsetterApp {
                     return Task::none();
                 }
 
-                if let Some(results) = &self.search_results {
-                    let mut items = Vec::new();
-                    for wp in &results.wallpapers {
-                        if self.selected_wallpapers.contains(&wp.id) {
-                            let filename =
-                                format!("{}.{}", wp.id, wp.file_type.replace("image/", ""));
-                            items.push((wp.id.clone(), wp.full_url.clone(), filename));
-                        }
-                    }
+                let selected = self.selected_wallpapers_for_actions();
+                let unavailable = self
+                    .selected_wallpapers
+                    .len()
+                    .saturating_sub(selected.len());
 
-                    if !items.is_empty() {
-                        let dl_manager = self.downloader.clone();
-                        let dest = resolve_download_dir(&self.preferences.download_dir);
-
-                        // Clear selection after triggering download
-                        self.selected_wallpapers.clear();
-                        self.current_view = View::Downloads;
-
-                        return Task::perform(
-                            async move {
-                                let _ = dl_manager.enqueue_bulk(items, &dest).await;
-                            },
-                            |_| Message::Tick,
-                        );
-                    }
+                if selected.is_empty() {
+                    self.error_message = Some(
+                        "Selected wallpapers are unavailable for bulk actions yet. Open those pages again and retry."
+                            .to_string(),
+                    );
+                    return Task::none();
                 }
-                Task::none()
+
+                let items: Vec<(String, String, String)> = selected
+                    .into_iter()
+                    .map(|wp| {
+                        let filename = format!("{}.{}", wp.id, wp.file_type.replace("image/", ""));
+                        (wp.id, wp.full_url, filename)
+                    })
+                    .collect();
+
+                let dl_manager = self.downloader.clone();
+                let dest = resolve_download_dir(&self.preferences.download_dir);
+                self.current_view = View::Downloads;
+                self.error_message = if unavailable > 0 {
+                    Some(format!(
+                        "Queued {} selected wallpapers; {unavailable} unavailable.",
+                        items.len()
+                    ))
+                } else {
+                    None
+                };
+
+                Task::perform(
+                    async move {
+                        let _ = dl_manager.enqueue_bulk(items, &dest).await;
+                    },
+                    |_| Message::Tick,
+                )
             }
             Message::BookmarkSelected => {
                 if self.selected_wallpapers.is_empty() {
                     return Task::none();
                 }
 
-                if let Some(results) = &self.search_results {
-                    let mut added = 0_u32;
-                    let mut skipped = 0_u32;
-                    let mut failed = 0_u32;
+                let selected = self.selected_wallpapers_for_actions();
+                let unavailable = self
+                    .selected_wallpapers
+                    .len()
+                    .saturating_sub(selected.len());
 
-                    for wp in &results.wallpapers {
-                        if !self.selected_wallpapers.contains(&wp.id) {
-                            continue;
-                        }
-
-                        match self.db.is_bookmarked(&wp.id) {
-                            Ok(true) => skipped += 1,
-                            Ok(false) => {
-                                let bookmark = Bookmark::new(wp, None);
-                                if self.db.add_bookmark(&bookmark).is_ok() {
-                                    added += 1;
-                                } else {
-                                    failed += 1;
-                                }
-                            }
-                            Err(_) => failed += 1,
-                        }
-                    }
-
-                    self.selected_wallpapers.clear();
-
-                    if failed > 0 {
-                        self.error_message = Some(format!(
-                            "Bookmarked {added}, skipped {skipped}, failed {failed}."
-                        ));
-                    } else {
-                        self.error_message = None;
-                    }
-
-                    return Task::perform(async { () }, |_| Message::LoadBookmarks);
+                if selected.is_empty() {
+                    self.error_message = Some(
+                        "Selected wallpapers are unavailable for bulk actions yet. Open those pages again and retry."
+                            .to_string(),
+                    );
+                    return Task::none();
                 }
 
-                Task::none()
+                let mut added = 0_u32;
+                let mut skipped = 0_u32;
+                let mut failed = 0_u32;
+
+                for wp in &selected {
+                    match self.db.is_bookmarked(&wp.id) {
+                        Ok(true) => skipped += 1,
+                        Ok(false) => {
+                            let bookmark = Bookmark::new(wp, None);
+                            if self.db.add_bookmark(&bookmark).is_ok() {
+                                added += 1;
+                            } else {
+                                failed += 1;
+                            }
+                        }
+                        Err(_) => failed += 1,
+                    }
+                }
+
+                if failed > 0 || unavailable > 0 {
+                    self.error_message = Some(format!(
+                        "Bookmarked {added}, skipped {skipped}, failed {failed}, unavailable {unavailable}."
+                    ));
+                } else {
+                    self.error_message = None;
+                }
+
+                Task::perform(async { () }, |_| Message::LoadBookmarks)
             }
             Message::DownloadAuthorWorks => {
                 if let Some(results) = &self.author_results {
@@ -1462,6 +1598,7 @@ impl WallsetterApp {
                 let dl_manager = self.downloader.clone();
                 let dest = resolve_download_dir(&self.preferences.download_dir);
 
+                self.nav_forward_stack.clear();
                 self.previous_view = Some(Box::new(self.current_view.clone()));
                 self.current_view = View::Downloads;
 
@@ -1497,6 +1634,7 @@ impl WallsetterApp {
                     return Task::none();
                 }
 
+                self.nav_forward_stack.clear();
                 self.previous_view = Some(Box::new(self.current_view.clone()));
                 self.current_view = View::AuthorProfile(normalized.clone());
                 self.author_username = Some(normalized.clone());
@@ -1626,6 +1764,8 @@ impl WallsetterApp {
             Message::BookmarkWallpaperLoaded(result) => {
                 match result {
                     Ok(wallpaper) => {
+                        self.selected_wallpaper_cache
+                            .insert(wallpaper.id.clone(), wallpaper.clone());
                         self.previous_view = Some(Box::new(self.current_view.clone()));
                         self.current_view = View::Preview(wallpaper.clone());
                         self.preview_loading_frame = 0;
@@ -1651,6 +1791,73 @@ impl WallsetterApp {
                     }
                 }
                 Task::none()
+            }
+            Message::AddBookmarkToCollection(wp, folder_id) => {
+                match self.db.is_bookmarked(&wp.id) {
+                    Ok(false) => {
+                        let bookmark = Bookmark::new(&wp, Some(folder_id));
+                        if let Err(e) = self.db.add_bookmark(&bookmark) {
+                            self.error_message =
+                                Some(format!("Failed to add to collection: {e}"));
+                        } else {
+                            self.error_message = None;
+                            return Task::perform(async { () }, |_| Message::LoadBookmarks);
+                        }
+                    }
+                    Ok(true) => {
+                        self.error_message =
+                            Some("Already bookmarked. Remove first to change collection.".to_string());
+                    }
+                    Err(e) => {
+                        self.error_message = Some(format!("Failed to check bookmark: {e}"));
+                    }
+                }
+                Task::none()
+            }
+            Message::SelectFolder(folder_id) => {
+                self.selected_folder = folder_id;
+                Task::none()
+            }
+            Message::NewCollectionNameChanged(name) => {
+                self.new_collection_name = name;
+                Task::none()
+            }
+            Message::CreateCollection => {
+                let name = self.new_collection_name.trim().to_string();
+                if name.is_empty() {
+                    self.error_message = Some("Collection name cannot be empty.".to_string());
+                    return Task::none();
+                }
+                let db = self.db.clone();
+                let folder = BookmarkFolder::new(name);
+                Task::perform(
+                    async move {
+                        db.add_folder(&folder)
+                            .map_err(|e| e.to_string())
+                            .map(|_| folder)
+                    },
+                    Message::CollectionCreated,
+                )
+            }
+            Message::CollectionCreated(result) => {
+                match result {
+                    Ok(folder) => {
+                        self.new_collection_name.clear();
+                        self.bookmark_folders.push(folder);
+                        self.bookmark_folders
+                            .sort_by(|a, b| a.name.cmp(&b.name));
+                    }
+                    Err(e) => {
+                        self.error_message = Some(format!("Failed to create collection: {e}"));
+                    }
+                }
+                Task::none()
+            }
+            Message::RemoveBookmark(bookmark_id) => {
+                if let Err(e) = self.db.remove_bookmark(bookmark_id) {
+                    self.error_message = Some(format!("Failed to remove bookmark: {e}"));
+                }
+                Task::perform(async { () }, |_| Message::LoadBookmarks)
             }
             Message::ToggleCategory(cat, checked) => {
                 let categories = &mut self.active_filters.categories;
@@ -1814,6 +2021,102 @@ impl WallsetterApp {
 
                 Task::none()
             }
+            Message::PrevWallpaperInSearch => {
+                let target = if let View::Preview(current_wp) = &self.current_view {
+                    let current_id = current_wp.id.clone();
+                    self.search_results.as_ref().and_then(|results| {
+                        let pos = results.wallpapers.iter().position(|w| w.id == current_id)?;
+                        if pos > 0 {
+                            Some(results.wallpapers[pos - 1].clone())
+                        } else {
+                            None
+                        }
+                    })
+                } else {
+                    None
+                };
+                if let Some(wp) = target {
+                    self.preview_loading_frame = 0;
+                    self.current_view = View::Preview(wp.clone());
+                    let local_path =
+                        Self::local_wallpaper_path(&self.preferences.download_dir, &wp);
+                    let mut tasks = vec![Task::perform(
+                        Self::fetch_wallpaper(self.provider.clone(), wp.id.clone()),
+                        Message::PreviewWallpaperLoaded,
+                    )];
+                    if !self.full_images.contains_key(&wp.id) {
+                        tasks.push(Task::perform(
+                            Self::fetch_full_image(wp.id.clone(), wp.full_url.clone(), local_path),
+                            |(id, res)| Message::FullImageLoaded(id, res),
+                        ));
+                    }
+                    return Task::batch(tasks);
+                }
+                Task::none()
+            }
+            Message::NextWallpaperInSearch => {
+                let target = if let View::Preview(current_wp) = &self.current_view {
+                    let current_id = current_wp.id.clone();
+                    self.search_results.as_ref().and_then(|results| {
+                        let pos = results.wallpapers.iter().position(|w| w.id == current_id)?;
+                        results.wallpapers.get(pos + 1).cloned()
+                    })
+                } else {
+                    None
+                };
+                if let Some(wp) = target {
+                    self.preview_loading_frame = 0;
+                    self.current_view = View::Preview(wp.clone());
+                    let local_path =
+                        Self::local_wallpaper_path(&self.preferences.download_dir, &wp);
+                    let mut tasks = vec![Task::perform(
+                        Self::fetch_wallpaper(self.provider.clone(), wp.id.clone()),
+                        Message::PreviewWallpaperLoaded,
+                    )];
+                    if !self.full_images.contains_key(&wp.id) {
+                        tasks.push(Task::perform(
+                            Self::fetch_full_image(wp.id.clone(), wp.full_url.clone(), local_path),
+                            |(id, res)| Message::FullImageLoaded(id, res),
+                        ));
+                    }
+                    return Task::batch(tasks);
+                }
+                Task::none()
+            }
+            Message::ClearCompletedDownloads => {
+                let downloader = self.downloader.clone();
+                Task::perform(
+                    async move {
+                        downloader.clear_finished().await;
+                    },
+                    |_| Message::Tick,
+                )
+            }
+            Message::RetryFailedDownloads => {
+                let downloader = self.downloader.clone();
+                let dest = resolve_download_dir(&self.preferences.download_dir);
+                Task::perform(
+                    async move {
+                        downloader
+                            .retry_failed(&dest)
+                            .await
+                            .map_err(|e| e.to_string())
+                    },
+                    Message::RetryFailedCompleted,
+                )
+            }
+            Message::RetryFailedCompleted(result) => {
+                match result {
+                    Ok(ids) if ids.is_empty() => {}
+                    Ok(_) => {
+                        self.current_view = View::Downloads;
+                    }
+                    Err(e) => {
+                        self.error_message = Some(format!("Retry failed: {e}"));
+                    }
+                }
+                Task::none()
+            }
             Message::ToggleTheme => {
                 self.preferences.theme = match self.preferences.theme {
                     Theme::Light => Theme::Dark,
@@ -1850,6 +2153,9 @@ impl WallsetterApp {
                     }
                     SettingsMessage::SchedulerShuffleChanged(shuffle) => {
                         self.preferences.scheduler.shuffle = shuffle;
+                    }
+                    SettingsMessage::SchedulerSourceChanged(source) => {
+                        self.preferences.scheduler.source = source;
                     }
                     SettingsMessage::Save => {
                         self.preferences.max_parallel_downloads =
@@ -1895,6 +2201,7 @@ impl WallsetterApp {
                 .padding(14)
                 .width(Length::Fill)
                 .height(Length::Fill)
+                .clip(true)
                 .style(crate::theme::app_frame)
         ]
         .spacing(14)
@@ -1919,6 +2226,7 @@ impl WallsetterApp {
         container(content)
             .width(Length::Fill)
             .height(Length::Fill)
+            .clip(true)
             .into()
     }
 
@@ -1927,6 +2235,19 @@ impl WallsetterApp {
     }
 
     fn header_view(&self) -> Element<'_, Message> {
+        let can_go_back = self.previous_view.is_some();
+        let can_go_forward = !self.nav_forward_stack.is_empty();
+
+        let mut back_btn = button("←").style(crate::theme::button_secondary);
+        if can_go_back {
+            back_btn = back_btn.on_press(Message::GoBack);
+        }
+
+        let mut fwd_btn = button("→").style(crate::theme::button_secondary);
+        if can_go_forward {
+            fwd_btn = fwd_btn.on_press(Message::GoForward);
+        }
+
         let mut search = button("Search")
             .style(crate::theme::button_secondary)
             .on_press(Message::SwitchView(View::Search));
@@ -1970,6 +2291,8 @@ impl WallsetterApp {
                 ]
                 .spacing(2),
                 row![
+                    back_btn,
+                    fwd_btn,
                     search,
                     downloads,
                     bookmarks,
@@ -2004,6 +2327,21 @@ impl WallsetterApp {
                 iced::time::every(std::time::Duration::from_millis(120))
                     .map(|_| Message::PreviewLoadingTick),
             );
+        }
+
+        if matches!(self.current_view, View::Preview(_)) {
+            subscriptions.push(iced::keyboard::on_key_press(|key, _modifiers| {
+                use iced::keyboard::key::Named;
+                match key.as_ref() {
+                    iced::keyboard::Key::Named(Named::ArrowLeft) => {
+                        Some(Message::PrevWallpaperInSearch)
+                    }
+                    iced::keyboard::Key::Named(Named::ArrowRight) => {
+                        Some(Message::NextWallpaperInSearch)
+                    }
+                    _ => None,
+                }
+            }));
         }
 
         match subscriptions.len() {
@@ -2049,6 +2387,11 @@ impl WallsetterApp {
         self.is_searching
     }
 
+    pub fn is_loading_more_search_results(&self) -> bool {
+        self.is_searching && self.is_appending_search_results && self.search_results.is_some()
+    }
+
+    #[allow(dead_code)]
     pub fn has_more_search_pages(&self) -> bool {
         self.search_results
             .as_ref()
@@ -2112,6 +2455,25 @@ impl WallsetterApp {
     pub fn bookmark_folders(&self) -> &[BookmarkFolder] {
         &self.bookmark_folders
     }
+
+    pub fn selected_folder(&self) -> Option<uuid::Uuid> {
+        self.selected_folder
+    }
+
+    pub fn new_collection_name(&self) -> &str {
+        &self.new_collection_name
+    }
+
+    pub fn bookmarks_for_display(&self) -> Vec<&Bookmark> {
+        match self.selected_folder {
+            None => self.bookmarks.iter().collect(),
+            Some(folder_id) => self
+                .bookmarks
+                .iter()
+                .filter(|b| b.folder_id == Some(folder_id))
+                .collect(),
+        }
+    }
 }
 
 pub fn resolve_download_dir(raw: &str) -> std::path::PathBuf {
@@ -2152,17 +2514,21 @@ mod tests {
 
     #[test]
     fn normalize_search_query_supports_tag_aliases() {
+        // #tag syntax preserves # so Wallhaven does a proper tag search (%23tag)
         assert_eq!(
             WallsetterApp::normalize_search_query_for_api("#nature"),
-            Some("nature".to_string())
+            Some("#nature".to_string())
         );
+        // tag: prefix strips the keyword but not the hash (tag: is a UI alias, not sent to API)
         assert_eq!(
             WallsetterApp::normalize_search_query_for_api("tag:nature"),
             Some("nature".to_string())
         );
+        // tag: prefix strips the tag name as-is; # in rest is also stripped
+        // +#mountain preserves # since it uses # syntax directly
         assert_eq!(
             WallsetterApp::normalize_search_query_for_api("Tag:#nature +#mountain -tag:city"),
-            Some("nature +mountain -city".to_string())
+            Some("nature +#mountain -city".to_string())
         );
     }
 

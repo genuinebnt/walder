@@ -1,13 +1,17 @@
-use iced::widget::{button, column, container, image, responsive, row, scrollable, text};
+use iced::widget::{
+    button, column, container, image, mouse_area, responsive, row, scrollable, text,
+};
 use iced::{Alignment, Element, Length};
 
 use crate::app::{Message, View, WallsetterApp};
+use wallsetter_core::Purity;
 
 pub fn view<'a>(app: &'a WallsetterApp) -> Element<'a, Message> {
     responsive(move |size| {
         let username = app.author_username().unwrap_or("unknown");
         let results = app.author_results();
         let can_download_page = results.is_some_and(|r| !r.wallpapers.is_empty());
+        let selected_count = app.selected_wallpapers().len();
 
         let mut toolbar = row![
             button("Back")
@@ -28,6 +32,31 @@ pub fn view<'a>(app: &'a WallsetterApp) -> Element<'a, Message> {
                     .on_press(Message::DownloadAllAuthorWorks)
                     .style(crate::theme::button_secondary),
             );
+            toolbar = toolbar.push(
+                button("Select All")
+                    .on_press(Message::SelectAll)
+                    .style(crate::theme::button_secondary),
+            );
+        }
+
+        if selected_count > 0 {
+            toolbar = toolbar
+                .push(text(format!("Selected: {selected_count}")).size(13))
+                .push(
+                    button("Deselect")
+                        .on_press(Message::DeselectAll)
+                        .style(crate::theme::button_secondary),
+                )
+                .push(
+                    button("Download Selected")
+                        .on_press(Message::DownloadSelected)
+                        .style(crate::theme::button_primary),
+                )
+                .push(
+                    button("Bookmark Selected")
+                        .on_press(Message::BookmarkSelected)
+                        .style(crate::theme::button_secondary),
+                );
         }
 
         let mut content = column![
@@ -117,7 +146,7 @@ pub fn view<'a>(app: &'a WallsetterApp) -> Element<'a, Message> {
                             image(handle)
                                 .width(Length::Fill)
                                 .height(Length::Fixed(thumbnail_height))
-                                .content_fit(iced::ContentFit::Cover)
+                                .content_fit(iced::ContentFit::Contain)
                                 .into()
                         } else {
                             container(text("Loading preview..."))
@@ -128,12 +157,14 @@ pub fn view<'a>(app: &'a WallsetterApp) -> Element<'a, Message> {
                                 .into()
                         };
 
-                    let card = container(
+                    let is_selected = app.selected_wallpapers().contains(&wp.id);
+                    let thumbnail_region = container(thumbnail)
+                        .width(Length::Fill)
+                        .height(Length::Fixed(thumbnail_height))
+                        .clip(true);
+                    let tile_click_id = wp.id.clone();
+                    let non_image_area = mouse_area(
                         column![
-                            button(thumbnail)
-                                .on_press(Message::SwitchView(View::Preview(wp.clone())))
-                                .style(crate::theme::button_flat)
-                                .width(Length::Fill),
                             row![
                                 text(format!("{}x{}", wp.resolution.width, wp.resolution.height))
                                     .size(11),
@@ -152,9 +183,33 @@ pub fn view<'a>(app: &'a WallsetterApp) -> Element<'a, Message> {
                         ]
                         .spacing(8),
                     )
+                    .on_press(Message::TileClicked(tile_click_id));
+
+                    let card = container(
+                        column![
+                            mouse_area(
+                                container(thumbnail_region)
+                                    .width(Length::Fill)
+                                    .height(Length::Fixed(thumbnail_height))
+                                    .clip(true),
+                            )
+                            .on_press(Message::SwitchView(View::Preview(wp.clone()))),
+                            container(non_image_area).width(Length::Fill),
+                        ]
+                        .spacing(8),
+                    )
                     .padding(10)
                     .width(Length::Fixed(item_width))
-                    .style(crate::theme::panel_subtle);
+                    .clip(true)
+                    .style(if is_selected {
+                        crate::theme::panel_selected
+                    } else {
+                        match wp.purity {
+                            Purity::Nsfw => crate::theme::panel_nsfw,
+                            Purity::Sketchy => crate::theme::panel_sketchy,
+                            _ => crate::theme::panel_subtle,
+                        }
+                    });
 
                     current_row = current_row.push(card);
                     items_in_row += 1;
@@ -187,7 +242,11 @@ pub fn view<'a>(app: &'a WallsetterApp) -> Element<'a, Message> {
             }
         }
 
-        scrollable(content).into()
+        container(scrollable(content))
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .clip(true)
+            .into()
     })
     .into()
 }

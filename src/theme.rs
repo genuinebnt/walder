@@ -77,6 +77,26 @@ pub fn panel_subtle(theme: &IcedTheme) -> container::Style {
         })
 }
 
+pub fn panel_nsfw(_theme: &IcedTheme) -> container::Style {
+    container::Style::default()
+        .background(Color::from_rgba8(0x33, 0x00, 0x00, 0.45))
+        .border(Border {
+            color: Color::from_rgb8(0xE0, 0x30, 0x30),
+            width: 2.0,
+            ..border::rounded(10)
+        })
+}
+
+pub fn panel_sketchy(_theme: &IcedTheme) -> container::Style {
+    container::Style::default()
+        .background(Color::from_rgba8(0x33, 0x28, 0x00, 0.45))
+        .border(Border {
+            color: Color::from_rgb8(0xE0, 0xA0, 0x00),
+            width: 2.0,
+            ..border::rounded(10)
+        })
+}
+
 pub fn panel_selected(theme: &IcedTheme) -> container::Style {
     let palette = theme.extended_palette();
 
@@ -234,6 +254,7 @@ pub fn button_danger(theme: &IcedTheme, status: button::Status) -> button::Style
     }
 }
 
+#[allow(dead_code)]
 pub fn button_flat(theme: &IcedTheme, status: button::Status) -> button::Style {
     let palette = theme.extended_palette();
     let base = button::Style {

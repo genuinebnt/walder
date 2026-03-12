@@ -1,6 +1,8 @@
 use iced::widget::{button, checkbox, column, container, row, scrollable, text, text_input};
 use iced::{Alignment, Element, Length};
 
+use wallsetter_core::SchedulerSource;
+
 use crate::app::{Message, SettingsMessage, WallsetterApp};
 
 pub fn view<'a>(app: &'a WallsetterApp) -> Element<'a, Message> {
@@ -44,6 +46,51 @@ pub fn view<'a>(app: &'a WallsetterApp) -> Element<'a, Message> {
     .spacing(12)
     .align_y(Alignment::Center);
 
+    let current_source = &prefs.scheduler.source;
+    let is_download_dir_source = matches!(current_source, SchedulerSource::DownloadDir);
+
+    let mut source_col = column![
+        text("Wallpaper Source").size(13),
+        button(text(if is_download_dir_source {
+            "✓ Download Directory"
+        } else {
+            "Download Directory"
+        }).size(13))
+        .on_press(Message::SettingsChanged(
+            SettingsMessage::SchedulerSourceChanged(SchedulerSource::DownloadDir),
+        ))
+        .style(if is_download_dir_source {
+            crate::theme::button_primary
+        } else {
+            crate::theme::button_secondary
+        })
+        .width(Length::Fill),
+    ]
+    .spacing(6);
+
+    for folder in app.bookmark_folders() {
+        let is_selected = matches!(current_source, SchedulerSource::BookmarkFolder(id) if *id == folder.id);
+        let label = if is_selected {
+            format!("✓ Collection: {}", folder.name)
+        } else {
+            format!("Collection: {}", folder.name)
+        };
+        source_col = source_col.push(
+            button(text(label).size(13))
+                .on_press(Message::SettingsChanged(
+                    SettingsMessage::SchedulerSourceChanged(SchedulerSource::BookmarkFolder(
+                        folder.id,
+                    )),
+                ))
+                .style(if is_selected {
+                    crate::theme::button_primary
+                } else {
+                    crate::theme::button_secondary
+                })
+                .width(Length::Fill),
+        );
+    }
+
     let scheduler_section = container(
         column![
             text("Scheduler").size(22),
@@ -68,6 +115,9 @@ pub fn view<'a>(app: &'a WallsetterApp) -> Element<'a, Message> {
             checkbox("Shuffle wallpapers", prefs.scheduler.shuffle).on_toggle(|b| {
                 Message::SettingsChanged(SettingsMessage::SchedulerShuffleChanged(b))
             }),
+            container(source_col)
+                .padding(10)
+                .style(crate::theme::panel_subtle),
         ]
         .spacing(12),
     )

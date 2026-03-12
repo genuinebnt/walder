@@ -181,6 +181,33 @@ impl DownloadManager {
         self.broadcast(&tasks);
     }
 
+    /// Re-enqueue all failed tasks, removing them from the current list first.
+    pub async fn retry_failed(
+        &self,
+        destination: &Path,
+    ) -> wallsetter_core::Result<Vec<Uuid>> {
+        let failed: Vec<(String, String, String)> = {
+            let tasks = self.tasks.lock().await;
+            tasks
+                .values()
+                .filter(|t| t.status == DownloadStatus::Failed)
+                .map(|t| (t.wallpaper_id.clone(), t.url.clone(), t.filename.clone()))
+                .collect()
+        };
+
+        if failed.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        {
+            let mut tasks = self.tasks.lock().await;
+            tasks.retain(|_, t| t.status != DownloadStatus::Failed);
+            self.broadcast(&tasks);
+        }
+
+        self.enqueue_bulk(failed, destination).await
+    }
+
     async fn download_file(
         client: &reqwest::Client,
         url: &str,

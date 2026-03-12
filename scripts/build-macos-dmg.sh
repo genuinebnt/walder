@@ -20,7 +20,7 @@ if [[ "${BUILD_MODE}" != "release" && "${BUILD_MODE}" != "debug" ]]; then
   exit 1
 fi
 
-VERSION="${VERSION:-$(cargo pkgid -p walder | sed -E 's/.*#([0-9A-Za-z.-]+)$/\1/')}"
+VERSION="${VERSION:-$(cargo pkgid -p walder | sed -E 's/.*@([0-9A-Za-z.-]+)$/\1/')}"
 TARGET_BIN="${ROOT_DIR}/target/${BUILD_MODE}/${BIN_NAME}"
 
 APP_DIR="${DIST_DIR}/${APP_NAME}.app"

@@ -51,6 +51,23 @@ pub fn view<'a>(app: &'a WallsetterApp) -> Element<'a, Message> {
     .spacing(8)
     .align_y(Alignment::Center);
 
+    let has_finished = completed_count > 0 || failed_count > 0;
+    let mut action_row = row![].spacing(8).align_y(Alignment::Center);
+    if has_finished {
+        action_row = action_row.push(
+            button("Clear Finished")
+                .on_press(Message::ClearCompletedDownloads)
+                .style(crate::theme::button_secondary),
+        );
+    }
+    if failed_count > 0 {
+        action_row = action_row.push(
+            button("Retry Failed")
+                .on_press(Message::RetryFailedDownloads)
+                .style(crate::theme::button_primary),
+        );
+    }
+
     let mut tasks_list = column![].spacing(12);
 
     if tasks.is_empty() {
@@ -153,6 +170,7 @@ pub fn view<'a>(app: &'a WallsetterApp) -> Element<'a, Message> {
                 text("Downloads").size(26),
                 text("Track progress and set completed wallpapers quickly.").size(12),
                 summary_chips,
+                action_row,
             ]
             .spacing(8)
         )
