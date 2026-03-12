@@ -21,6 +21,21 @@ pub fn view<'a>(app: &'a WallsetterApp) -> Element<'a, Message> {
         .spacing(8)
         .align_y(Alignment::Center);
 
+        let dl_folders = app.download_folders();
+        let pending_dl_folder = app.pending_download_folder();
+
+        if !dl_folders.is_empty() && (can_download_page || selected_count > 0) {
+             let mut col = row![text("Save to:").size(13)].spacing(4).align_y(Alignment::Center);
+             let default_style = if pending_dl_folder.is_none() { crate::theme::button_primary } else { crate::theme::button_secondary };
+             col = col.push(button(text("Default").size(11)).on_press(Message::SetPendingDownloadFolder(None)).style(default_style));
+             for folder in dl_folders {
+                  let is_selected = pending_dl_folder == Some(folder.id);
+                  let style = if is_selected { crate::theme::button_primary } else { crate::theme::button_secondary };
+                  col = col.push(button(text(&folder.name).size(11)).on_press(Message::SetPendingDownloadFolder(Some(folder.id))).style(style));
+             }
+             toolbar = toolbar.push(container(col).padding([2, 6]).style(crate::theme::panel_subtle));
+        }
+
         if can_download_page {
             toolbar = toolbar.push(
                 button("Download This Page")

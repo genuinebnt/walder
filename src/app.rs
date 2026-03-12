@@ -70,6 +70,7 @@ pub struct WallsetterApp {
     pending_download_info: HashMap<String, (Option<uuid::Uuid>, Resolution)>,
     recorded_wallpaper_ids: HashSet<String>,
     download_view_tab: DownloadViewTab,
+    downloads_page: usize,
 
     // Error state
     error_message: Option<String>,
@@ -172,6 +173,8 @@ pub enum Message {
     PreviousPage,
     AuthorNextPage,
     AuthorPreviousPage,
+    NextDownloadsPage,
+    PreviousDownloadsPage,
 
     // Author works
     AuthorWorksLoaded(std::result::Result<SearchResult, String>),
@@ -334,6 +337,7 @@ impl WallsetterApp {
             pending_download_info: HashMap::new(),
             recorded_wallpaper_ids: HashSet::new(),
             download_view_tab: DownloadViewTab::Queue,
+            downloads_page: 1,
             error_message: None,
             previous_view: None,
             nav_forward_stack: Vec::new(),
@@ -391,6 +395,7 @@ impl WallsetterApp {
         downloader: Arc<DownloadManager>,
         username: String,
         download_dir: String,
+        folder_name: Option<String>,
         filters: SearchFilters,
     ) -> std::result::Result<usize, String> {
         let mut page = 1;
@@ -422,7 +427,16 @@ impl WallsetterApp {
         }
 
         let count = items.len();
-        let dest = resolve_download_dir(&download_dir);
+        let base_dest = resolve_download_dir(&download_dir);
+        let dest = match folder_name {
+            Some(name) => {
+                let d = base_dest.join(&name);
+                let _ = std::fs::create_dir_all(&d);
+                d
+            }
+            None => base_dest,
+        };
+
         downloader
             .enqueue_bulk(items, &dest)
             .await
@@ -1406,6 +1420,14 @@ impl WallsetterApp {
 
                 Task::none()
             }
+            Message::NextDownloadsPage => {
+                self.downloads_page += 1;
+                Task::none()
+            }
+            Message::PreviousDownloadsPage => {
+                self.downloads_page = self.downloads_page.saturating_sub(1).max(1);
+                Task::none()
+            }
             Message::ThumbnailLoaded(id, source_url, result) => {
                 match result {
                     Ok(handle) => {
@@ -1504,13 +1526,28 @@ impl WallsetterApp {
                     .into_iter()
                     .map(|wp| {
                         let filename = format!("{}.{}", wp.id, wp.file_type.replace("image/", ""));
+                        
+                        // Record pending info
+                        self.pending_download_info.insert(
+                            wp.id.clone(),
+                            (self.pending_download_folder, wp.resolution),
+                        );
+                        
                         (wp.id, wp.full_url, filename)
                     })
                     .collect();
 
                 let dl_manager = self.downloader.clone();
-                let dest = resolve_download_dir(&self.preferences.download_dir);
+                let base_dest = resolve_download_dir(&self.preferences.download_dir);
+                let folder_name = self.pending_download_folder.and_then(|fid| {
+                    self.download_folders
+                        .iter()
+                        .find(|f| f.id == fid)
+                        .map(|f| f.name.clone())
+                });
+
                 self.current_view = View::Downloads;
+                self.download_view_tab = DownloadViewTab::Queue;
                 self.error_message = if unavailable > 0 {
                     Some(format!(
                         "Queued {} selected wallpapers; {unavailable} unavailable.",
@@ -1522,6 +1559,14 @@ impl WallsetterApp {
 
                 Task::perform(
                     async move {
+                        let dest = match folder_name {
+                            Some(name) => {
+                                let d = base_dest.join(&name);
+                                let _ = std::fs::create_dir_all(&d);
+                                d
+                            }
+                            None => base_dest,
+                        };
                         let _ = dl_manager.enqueue_bulk(items, &dest).await;
                     },
                     |_| Message::Tick,
@@ -1587,16 +1632,39 @@ impl WallsetterApp {
                         .map(|wp| {
                             let filename =
                                 format!("{}.{}", wp.id, wp.file_type.replace("image/", ""));
+                            
+                            // Record pending info
+                            self.pending_download_info.insert(
+                                wp.id.clone(),
+                                (self.pending_download_folder, wp.resolution),
+                            );
+
                             (wp.id.clone(), wp.full_url.clone(), filename)
                         })
                         .collect();
 
                     let dl_manager = self.downloader.clone();
-                    let dest = resolve_download_dir(&self.preferences.download_dir);
+                    let base_dest = resolve_download_dir(&self.preferences.download_dir);
+                    let folder_name = self.pending_download_folder.and_then(|fid| {
+                        self.download_folders
+                            .iter()
+                            .find(|f| f.id == fid)
+                            .map(|f| f.name.clone())
+                    });
+
                     self.current_view = View::Downloads;
+                    self.download_view_tab = DownloadViewTab::Queue;
 
                     return Task::perform(
                         async move {
+                            let dest = match folder_name {
+                                Some(name) => {
+                                    let d = base_dest.join(&name);
+                                    let _ = std::fs::create_dir_all(&d);
+                                    d
+                                }
+                                None => base_dest,
+                            };
                             let _ = dl_manager.enqueue_bulk(items, &dest).await;
                         },
                         |_| Message::Tick,
@@ -1611,7 +1679,20 @@ impl WallsetterApp {
                     let downloader = self.downloader.clone();
                     let download_dir = self.preferences.download_dir.clone();
                     let filters = self.active_filters.clone();
+                    let folder_name = self.pending_download_folder.and_then(|fid| {
+                        self.download_folders
+                            .iter()
+                            .find(|f| f.id == fid)
+                            .map(|f| f.name.clone())
+                    });
+
+                    // Author's works pagination does not currently know all limits until fetched.
+                    // Tracking in `pending_download_info` for bulk all is tricky without IDs.
+                    // We might not record full pending_download_info for "All Author Works" or just
+                    // rely on existing folder resolution logic where available. For now it just downloads to dest.
+                    
                     self.current_view = View::Downloads;
+                    self.download_view_tab = DownloadViewTab::Queue;
 
                     return Task::perform(
                         Self::queue_all_author_works(
@@ -1619,6 +1700,7 @@ impl WallsetterApp {
                             downloader,
                             username.clone(),
                             download_dir,
+                            folder_name,
                             filters,
                         ),
                         Message::DownloadAllAuthorWorksCompleted,
@@ -2074,6 +2156,7 @@ impl WallsetterApp {
 
             Message::SetDownloadViewTab(tab) => {
                 self.download_view_tab = tab;
+                self.downloads_page = 1;
                 Task::none()
             }
 
@@ -2858,6 +2941,10 @@ impl WallsetterApp {
 
     pub fn download_folders(&self) -> &[DownloadFolder] {
         &self.download_folders
+    }
+
+    pub fn downloads_page(&self) -> usize {
+        self.downloads_page
     }
 
     pub fn local_wallpapers_for_display(&self) -> Vec<&LocalWallpaper> {

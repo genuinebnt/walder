@@ -612,25 +612,57 @@ pub fn view<'a>(app: &'a WallsetterApp) -> Element<'a, Message> {
         .width(Length::Fill)
         .height(Length::Fill);
     if selected_count > 0 {
+        let dl_folders = app.download_folders();
+        let pending_dl_folder = app.pending_download_folder();
+
+        let mut download_row = row![
+            text(format!("{selected_count} selected")).size(13),
+            button("Deselect")
+                .on_press(Message::DeselectAll)
+                .style(crate::theme::button_secondary),
+        ]
+        .spacing(10)
+        .align_y(Alignment::Center);
+
+        if dl_folders.is_empty() {
+             download_row = download_row.push(
+                 button("Download Selected")
+                     .on_press(Message::DownloadSelected)
+                     .style(crate::theme::button_primary)
+             );
+        } else {
+             download_row = download_row.push(text("Download to:").size(13));
+             
+             let default_style = if pending_dl_folder.is_none() { crate::theme::button_primary } else { crate::theme::button_secondary };
+             download_row = download_row.push(button(text("Default").size(12)).on_press(Message::SetPendingDownloadFolder(None)).style(default_style));
+             
+             for folder in dl_folders {
+                  let is_selected = pending_dl_folder == Some(folder.id);
+                  let style = if is_selected { crate::theme::button_primary } else { crate::theme::button_secondary };
+                  download_row = download_row.push(
+                      button(text(&folder.name).size(12))
+                          .on_press(Message::SetPendingDownloadFolder(Some(folder.id)))
+                          .style(style)
+                  );
+             }
+             
+             download_row = download_row.push(
+                 button("Download Selected")
+                     .on_press(Message::DownloadSelected)
+                     .style(crate::theme::button_primary)
+             );
+        }
+
+        download_row = download_row.push(
+            button("Bookmark Selected")
+                .on_press(Message::BookmarkSelected)
+                .style(crate::theme::button_secondary)
+        );
+
         main_content = main_content.push(
-            container(
-                row![
-                    text(format!("{selected_count} selected")).size(13),
-                    button("Deselect")
-                        .on_press(Message::DeselectAll)
-                        .style(crate::theme::button_secondary),
-                    button("Download Selected")
-                        .on_press(Message::DownloadSelected)
-                        .style(crate::theme::button_primary),
-                    button("Bookmark Selected")
-                        .on_press(Message::BookmarkSelected)
-                        .style(crate::theme::button_secondary),
-                ]
-                .spacing(10)
-                .align_y(Alignment::Center),
-            )
-            .padding(10)
-            .style(crate::theme::app_frame),
+            container(download_row)
+                .padding(10)
+                .style(crate::theme::app_frame),
         );
     }
     main_content = main_content.push(

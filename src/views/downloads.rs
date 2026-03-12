@@ -255,10 +255,10 @@ fn queue_view<'a>(app: &'a WallsetterApp) -> Element<'a, Message> {
 }
 
 fn library_view<'a>(app: &'a WallsetterApp) -> Element<'a, Message> {
-    let items = app.local_wallpapers_for_display();
+    let all_items = app.local_wallpapers_for_display();
     let download_folders = app.download_folders();
 
-    if items.is_empty() {
+    if all_items.is_empty() {
         return container(
             container(text("No downloaded wallpapers here yet.").size(15))
                 .padding(20)
@@ -270,7 +270,45 @@ fn library_view<'a>(app: &'a WallsetterApp) -> Element<'a, Message> {
         .into();
     }
 
+    let total_items = all_items.len();
+    let page_size = 20;
+    let total_pages = (total_items + page_size - 1) / page_size;
+    let total_pages = total_pages.max(1);
+
+    let current_page = app.downloads_page().clamp(1, total_pages);
+
+    let start_idx = (current_page - 1) * page_size;
+    let end_idx = (start_idx + page_size).min(total_items);
+
+    let items = &all_items[start_idx..end_idx];
+
     let mut list = column![].spacing(10);
+
+    if total_pages > 1 {
+        let mut header = row![
+            text(format!(
+                "{} results | page {}/{}",
+                total_items, current_page, total_pages
+            ))
+            .size(13),
+        ]
+        .spacing(10)
+        .align_y(Alignment::Center);
+
+        let mut prev_btn = button("Previous").style(crate::theme::button_secondary);
+        if current_page > 1 {
+            prev_btn = prev_btn.on_press(Message::PreviousDownloadsPage);
+        }
+
+        let mut next_btn = button("Next").style(crate::theme::button_secondary);
+        if current_page < total_pages {
+            next_btn = next_btn.on_press(Message::NextDownloadsPage);
+        }
+
+        header = header.push(prev_btn).push(next_btn);
+        
+        list = list.push(container(header));
+    }
 
     for lw in items {
         // Thumbnail: try cached thumbnail, fall back to local file
