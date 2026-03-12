@@ -192,7 +192,8 @@ pub fn view<'a>(app: &'a WallsetterApp, wp: &'a Wallpaper) -> Element<'a, Messag
                 ]
                 .spacing(12),
             )
-            .height(Length::Fill),
+            .height(Length::Fill)
+            .style(crate::theme::scrollbar),
         )
         .width(Length::Fixed(info_width))
         .height(Length::Fill)

@@ -144,5 +144,7 @@ pub fn view<'a>(app: &'a WallsetterApp) -> Element<'a, Message> {
     ]
     .spacing(14);
 
-    scrollable(content).into()
+    scrollable(content)
+        .style(crate::theme::scrollbar)
+        .into()
 }

@@ -438,11 +438,15 @@ pub fn view<'a>(app: &'a WallsetterApp) -> Element<'a, Message> {
                         .padding(20)
                         .style(crate::theme::panel),
                 );
-                return container(scrollable(results_ctn).height(Length::Fill))
-                    .width(Length::Fill)
-                    .height(Length::Fill)
-                    .clip(true)
-                    .into();
+                return container(
+                    scrollable(results_ctn)
+                        .height(Length::Fill)
+                        .style(crate::theme::scrollbar),
+                )
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .clip(true)
+                .into();
             }
 
             let available_width = if size.width <= 0.0 {
@@ -594,7 +598,8 @@ pub fn view<'a>(app: &'a WallsetterApp) -> Element<'a, Message> {
             .id(scrollable::Id::new(SEARCH_SCROLL_ID))
             .width(Length::Fill)
             .height(Length::Fill)
-            .on_scroll(Message::SearchScrolled);
+            .on_scroll(Message::SearchScrolled)
+            .style(crate::theme::scrollbar);
         container(results_scroll)
             .width(Length::Fill)
             .height(Length::Fill)

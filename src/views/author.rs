@@ -83,7 +83,9 @@ pub fn view<'a>(app: &'a WallsetterApp) -> Element<'a, Message> {
                     .padding(16)
                     .style(crate::theme::panel),
             );
-            return scrollable(content).into();
+            return scrollable(content)
+                .style(crate::theme::scrollbar)
+                .into();
         }
 
         match results {
@@ -242,7 +244,7 @@ pub fn view<'a>(app: &'a WallsetterApp) -> Element<'a, Message> {
             }
         }
 
-        container(scrollable(content))
+        container(scrollable(content).style(crate::theme::scrollbar))
             .width(Length::Fill)
             .height(Length::Fill)
             .clip(true)

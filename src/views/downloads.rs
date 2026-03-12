@@ -176,7 +176,9 @@ pub fn view<'a>(app: &'a WallsetterApp) -> Element<'a, Message> {
         )
         .padding(12)
         .style(crate::theme::panel),
-        scrollable(tasks_list).height(Length::Fill),
+        scrollable(tasks_list)
+            .height(Length::Fill)
+            .style(crate::theme::scrollbar),
     ]
     .spacing(12)
     .into()

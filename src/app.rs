@@ -2198,14 +2198,14 @@ impl WallsetterApp {
         let mut content = column![
             self.header_view(),
             container(page)
-                .padding(14)
+                .padding(12)
                 .width(Length::Fill)
                 .height(Length::Fill)
                 .clip(true)
                 .style(crate::theme::app_frame)
         ]
-        .spacing(14)
-        .padding(16);
+        .spacing(0)
+        .padding(0u16);
 
         if let Some(ref err) = self.error_message {
             content = content.push(
@@ -2238,78 +2238,82 @@ impl WallsetterApp {
         let can_go_back = self.previous_view.is_some();
         let can_go_forward = !self.nav_forward_stack.is_empty();
 
-        let mut back_btn = button("←").style(crate::theme::button_secondary);
+        // ── Nav arrows (left cluster) ──────────────────────────────────────
+        let mut back_btn = button("‹")
+            .style(crate::theme::button_ghost)
+            .padding([4, 10]);
         if can_go_back {
             back_btn = back_btn.on_press(Message::GoBack);
         }
 
-        let mut fwd_btn = button("→").style(crate::theme::button_secondary);
+        let mut fwd_btn = button("›")
+            .style(crate::theme::button_ghost)
+            .padding([4, 10]);
         if can_go_forward {
             fwd_btn = fwd_btn.on_press(Message::GoForward);
         }
 
-        let mut search = button("Search")
-            .style(crate::theme::button_secondary)
-            .on_press(Message::SwitchView(View::Search));
-        if matches!(self.current_view, View::Search) {
-            search = search.style(crate::theme::button_primary);
-        }
+        let nav_arrows = row![back_btn, fwd_btn].spacing(2);
 
-        let mut downloads = button("Downloads")
-            .style(crate::theme::button_secondary)
-            .on_press(Message::SwitchView(View::Downloads));
-        if matches!(self.current_view, View::Downloads) {
-            downloads = downloads.style(crate::theme::button_primary);
-        }
-
-        let mut bookmarks = button("Bookmarks")
-            .style(crate::theme::button_secondary)
-            .on_press(Message::SwitchView(View::Bookmarks));
-        if matches!(self.current_view, View::Bookmarks) {
-            bookmarks = bookmarks.style(crate::theme::button_primary);
-        }
-
-        let mut settings = button("Settings")
-            .style(crate::theme::button_secondary)
-            .on_press(Message::SwitchView(View::Settings));
-        if matches!(self.current_view, View::Settings) {
-            settings = settings.style(crate::theme::button_primary);
-        }
-
-        let theme_label = match self.preferences.theme {
-            Theme::Light => "Use Dark",
-            Theme::Dark => "Use Light",
+        // ── Segment control tabs (centre) ──────────────────────────────────
+        let tab = |label: &str, view: View, active: bool| {
+            let style: fn(&IcedTheme, button::Status) -> button::Style = if active {
+                crate::theme::tab_active
+            } else {
+                crate::theme::tab_inactive
+            };
+            button(text(label.to_owned()).size(13))
+                .on_press(Message::SwitchView(view))
+                .style(style)
+                .padding([5, 14])
         };
+
+        let is_search = matches!(self.current_view, View::Search);
+        let is_downloads = matches!(self.current_view, View::Downloads);
+        let is_bookmarks = matches!(self.current_view, View::Bookmarks);
+        let is_settings = matches!(self.current_view, View::Settings);
+
+        let segment_tabs = container(
+            row![
+                tab("Search", View::Search, is_search),
+                tab("Downloads", View::Downloads, is_downloads),
+                tab("Bookmarks", View::Bookmarks, is_bookmarks),
+                tab("Settings", View::Settings, is_settings),
+            ]
+            .spacing(2),
+        )
+        .padding([3, 4])
+        .style(crate::theme::panel_subtle);
+
+        // ── Right side: app wordmark + theme toggle ────────────────────────
+        let theme_icon = match self.preferences.theme {
+            Theme::Light => "◑",
+            Theme::Dark => "◐",
+        };
+
+        let right_cluster = row![
+            text("Walder").size(15),
+            button(text(theme_icon).size(14))
+                .style(crate::theme::button_ghost)
+                .padding([4, 8])
+                .on_press(Message::ToggleTheme),
+        ]
+        .spacing(8)
+        .align_y(iced::Alignment::Center);
 
         container(
             row![
-                column![
-                    text("Walder").size(25),
-                    text("Minimal wallpaper workflow, fast and focused.")
-                        .size(12)
-                        .color([0.60, 0.66, 0.74]),
-                ]
-                .spacing(2),
-                row![
-                    back_btn,
-                    fwd_btn,
-                    search,
-                    downloads,
-                    bookmarks,
-                    settings,
-                    button(theme_label)
-                        .style(crate::theme::button_secondary)
-                        .on_press(Message::ToggleTheme),
-                ]
-                .spacing(8)
-                .width(Length::Fill)
-                .align_y(iced::Alignment::Center)
+                nav_arrows,
+                container(segment_tabs)
+                    .width(Length::Fill)
+                    .align_x(iced::alignment::Horizontal::Center),
+                right_cluster,
             ]
-            .spacing(18)
+            .spacing(12)
             .align_y(iced::Alignment::Center),
         )
-        .padding(14)
-        .style(crate::theme::panel)
+        .padding([8, 14])
+        .style(crate::theme::toolbar)
         .into()
     }
 

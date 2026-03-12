@@ -88,7 +88,7 @@ pub fn view<'a>(app: &'a WallsetterApp) -> Element<'a, Message> {
         .style(crate::theme::panel_subtle),
     );
 
-    let sidebar = container(scrollable(folder_col).height(Length::Fill))
+    let sidebar = container(scrollable(folder_col).height(Length::Fill).style(crate::theme::scrollbar))
         .width(Length::Fixed(180.0))
         .height(Length::Fill)
         .padding(10)
@@ -188,7 +188,10 @@ pub fn view<'a>(app: &'a WallsetterApp) -> Element<'a, Message> {
             results_col = results_col.push(grid_row);
         }
 
-        scrollable(results_col).height(Length::Fill).into()
+        scrollable(results_col)
+            .height(Length::Fill)
+            .style(crate::theme::scrollbar)
+            .into()
     });
 
     column![
