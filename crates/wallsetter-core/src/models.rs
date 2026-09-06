@@ -303,6 +303,10 @@ pub struct DownloadTask {
     pub wallpaper_id: String,
     pub url: String,
     pub filename: String,
+    /// Absolute path this task writes to, captured when it was enqueued. The
+    /// download directory can change while a task is in flight, so consumers
+    /// must read the path from here rather than recomputing it.
+    pub destination: std::path::PathBuf,
     pub status: DownloadStatus,
     pub bytes_downloaded: u64,
     pub total_bytes: Option<u64>,
@@ -312,12 +316,18 @@ pub struct DownloadTask {
 }
 
 impl DownloadTask {
-    pub fn new(wallpaper_id: String, url: String, filename: String) -> Self {
+    pub fn new(
+        wallpaper_id: String,
+        url: String,
+        filename: String,
+        destination: std::path::PathBuf,
+    ) -> Self {
         Self {
             id: Uuid::new_v4(),
             wallpaper_id,
             url,
             filename,
+            destination,
             status: DownloadStatus::Queued,
             bytes_downloaded: 0,
             total_bytes: None,

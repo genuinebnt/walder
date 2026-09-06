@@ -5,7 +5,23 @@
 //! shape without breaking the UI.
 
 use serde::{Deserialize, Serialize};
+use std::path::Path;
 use wallsetter_core::*;
+
+/// Renders a filesystem path as a `file://` URL, which is what the Swift side
+/// decodes these fields into. A bare path yields a scheme-less URL that
+/// `AsyncImage` and `NSWorkspace` both reject.
+pub fn file_url(path: &Path) -> String {
+    let mut out = String::from("file://");
+    for byte in path.to_string_lossy().as_bytes() {
+        match byte {
+            b'/' | b'-' | b'_' | b'.' | b'~' => out.push(*byte as char),
+            b if b.is_ascii_alphanumeric() => out.push(*b as char),
+            b => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
+}
 
 // ── inbound ───────────────────────────────────────────────────────────────
 
@@ -34,6 +50,10 @@ pub struct FiltersDto {
     pub color: Option<String>,
     #[serde(default = "one")]
     pub page: u32,
+    /// Wallhaven's pagination seed. Random sort only stays stable across pages
+    /// when the seed from the first response is sent back.
+    #[serde(default)]
+    pub seed: Option<String>,
 }
 
 fn one() -> u32 {
@@ -120,7 +140,7 @@ impl FiltersDto {
             ratios: self.ratios.clone(),
             colors: self.color.clone().into_iter().collect(),
             page: self.page.max(1),
-            seed: None,
+            seed: self.seed.clone().filter(|s| !s.is_empty()),
             ai_art_filter: None,
         }
     }
@@ -184,6 +204,9 @@ pub struct SearchPageDto {
     #[serde(rename = "lastPage")]
     pub last_page: u32,
     pub total: u32,
+    /// Echoed back so the next page of a random sort stays consistent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub seed: Option<String>,
 }
 
 impl From<&SearchResult> for SearchPageDto {
@@ -193,6 +216,7 @@ impl From<&SearchResult> for SearchPageDto {
             current_page: r.current_page,
             last_page: r.last_page,
             total: r.total,
+            seed: r.seed.clone(),
         }
     }
 }
@@ -214,7 +238,9 @@ pub struct DownloadDto {
 }
 
 impl DownloadDto {
-    pub fn from_task(t: &DownloadTask, dir: &std::path::Path) -> Self {
+    /// The destination comes off the task itself: the download directory may
+    /// have changed since this one was enqueued.
+    pub fn from_task(t: &DownloadTask) -> Self {
         let state = match t.status {
             DownloadStatus::Queued => "Queued",
             DownloadStatus::Downloading => "Active",
@@ -234,7 +260,7 @@ impl DownloadDto {
             state: state.to_string(),
             progress,
             local_file: (t.status == DownloadStatus::Completed)
-                .then(|| dir.join(&t.filename).to_string_lossy().into_owned()),
+                .then(|| file_url(&t.destination)),
             error: t.error.clone(),
             speed_bps: t.speed_bps as i64,
         }

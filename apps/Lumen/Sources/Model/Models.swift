@@ -99,7 +99,7 @@ struct SearchFilters: Equatable {
         return n
     }
 
-    func wirePayload(page: Int) -> [String: Any] {
+    func wirePayload(page: Int, seed: String? = nil) -> [String: Any] {
         var payload: [String: Any] = [
             "query": query,
             "categories": categories.map(\.rawValue).sorted(),
@@ -113,6 +113,7 @@ struct SearchFilters: Equatable {
             "page": page
         ]
         if let color { payload["color"] = color }
+        if let seed, !seed.isEmpty { payload["seed"] = seed }
         return payload
     }
 }
@@ -124,6 +125,9 @@ struct SearchPage: Decodable {
     let currentPage: Int
     let lastPage: Int
     let total: Int
+    /// Present for a random sort; must be sent back to keep later pages
+    /// consistent with the first.
+    let seed: String?
 }
 
 // MARK: - Downloads

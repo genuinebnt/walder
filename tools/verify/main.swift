@@ -141,6 +141,16 @@ func run() async -> Int32 {
         return keys.isSubset(of: Set(payload.keys)) && (payload["page"] as? Int) == 2
     }
 
+    v.check("Random sort sends the seed back on later pages") {
+        var random = SearchFilters()
+        random.sorting = .random
+        let payload = random.wirePayload(page: 3, seed: "abc123")
+        return (payload["seed"] as? String) == "abc123"
+    }
+    v.check("No seed key when there is no seed") {
+        SearchFilters().wirePayload(page: 1)["seed"] == nil
+    }
+
     // ── appearance / layout controls ──────────────────────────────────────
     v.section("Appearance and layout controls")
     v.check("Appearance picker changes appearance") {
@@ -215,6 +225,12 @@ func run() async -> Int32 {
         store.savePreferences()
         return LumenCore.shared.status == "ready"
     }
+    v.check("Max parallel stepper reaches the core") {
+        let before = store.maxParallel
+        store.maxParallel = before == 8 ? 2 : 8
+        store.savePreferences()
+        return store.maxParallel != before && LumenCore.shared.status == "ready"
+    }
 
     // ── collections ───────────────────────────────────────────────────────
     v.section("Collections")
@@ -288,6 +304,29 @@ func run() async -> Int32 {
                 guard let done = store.downloads.first(where: { $0.state == .done }),
                       let local = done.localFile else { return false }
                 return FileManager.default.fileExists(atPath: local.path)
+            }
+            v.check("Finished download reports a file:// URL") {
+                guard let done = store.downloads.first(where: { $0.state == .done }),
+                      let local = done.localFile else { return false }
+                return local.isFileURL
+            }
+            await v.checkAsync("Set materialises a local file AppKit can open") {
+                guard let done = store.downloads.first(where: { $0.state == .done })
+                else { return false }
+                let path = try await LumenCore.shared.ensureLocal(
+                    url: sample.path.absoluteString, filename: done.filename)
+                guard let url = URL(string: path), url.isFileURL else { return false }
+                return FileManager.default.fileExists(atPath: url.path)
+            }
+            await v.checkAsync("A bad URL fails instead of caching an error body") {
+                do {
+                    _ = try await LumenCore.shared.ensureLocal(
+                        url: "https://wallhaven.cc/api/v1/w/definitely-not-a-wallpaper-xyz",
+                        filename: "verify-should-not-exist.jpg")
+                    return false        // a 404 body must not be reported as ok
+                } catch {
+                    return true
+                }
             }
             v.check("Clear Finished empties completed rows") {
                 store.clearFinished()

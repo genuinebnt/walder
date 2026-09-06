@@ -14,6 +14,10 @@ final class Store {
     var isLoading = false
     var errorMessage: String?
 
+    /// Wallhaven's pagination seed from the first page of a random sort. Later
+    /// pages must carry it, or they re-roll and repeat results.
+    private var searchSeed: String?
+
     // Library
     var favorites: [Wallpaper] = []
     var collections: [Collection] = []
@@ -31,7 +35,7 @@ final class Store {
     // Preferences (persisted by AppKit, mirrored into the core)
     @ObservationIgnored @AppStorage("apiKey") var apiKey = "" { didSet { pushPreferences() } }
     @ObservationIgnored @AppStorage("downloadDirectory") var downloadDirectory = "" { didSet { pushPreferences() } }
-    @ObservationIgnored @AppStorage("maxParallel") var maxParallel = 4
+    @ObservationIgnored @AppStorage("maxParallel") var maxParallel = 4 { didSet { pushPreferences() } }
     @ObservationIgnored @AppStorage("gridTheme") var gridThemeRaw = GridTheme.comfortable.rawValue
     @ObservationIgnored @AppStorage("appearance") var appearanceRaw = Appearance.system.rawValue
     @ObservationIgnored @AppStorage("rotationEnabled") var rotationEnabled = true { didSet { rearmRotation() } }
@@ -76,7 +80,9 @@ final class Store {
 
     private func pushPreferences() {
         guard coreReady else { return }
-        LumenCore.shared.setPreferences(apiKey: apiKey, downloadDirectory: downloadDirectory)
+        LumenCore.shared.setPreferences(apiKey: apiKey,
+                                        downloadDirectory: downloadDirectory,
+                                        maxParallel: maxParallel)
     }
 
     @MainActor
@@ -111,12 +117,16 @@ final class Store {
     @MainActor
     func search(reset: Bool = true) async {
         guard coreReady else { return }
-        if reset { page = 1 }
+        if reset {
+            page = 1
+            searchSeed = nil
+        }
         isLoading = true
         defer { isLoading = false }
         do {
-            let result = try await LumenCore.shared.search(filters, page: page)
+            let result = try await LumenCore.shared.search(filters, page: page, seed: searchSeed)
             lastPage = max(result.lastPage, 1)
+            if let seed = result.seed, !seed.isEmpty { searchSeed = seed }
             wallpapers = reset ? result.wallpapers : wallpapers + result.wallpapers
             remember(result.wallpapers)
             errorMessage = nil
@@ -299,7 +309,9 @@ final class Store {
 
     @MainActor
     func savePreferences() {
-        LumenCore.shared.setPreferences(apiKey: apiKey, downloadDirectory: downloadDirectory)
+        LumenCore.shared.setPreferences(apiKey: apiKey,
+                                        downloadDirectory: downloadDirectory,
+                                        maxParallel: maxParallel)
         rearmRotation()
         withAnimation(Tokens.quick) { savedConfirmation = true }
         Task {

@@ -15,6 +15,8 @@ pub struct DownloadManager {
     client: reqwest::Client,
     tasks: Arc<Mutex<HashMap<Uuid, DownloadTask>>>,
     semaphore: Arc<Semaphore>,
+    /// Tracked so the limit can be raised or lowered without a restart.
+    max_concurrent: Arc<std::sync::atomic::AtomicUsize>,
     progress_tx: watch::Sender<Vec<DownloadTask>>,
     progress_rx: watch::Receiver<Vec<DownloadTask>>,
     max_retries: u32,
@@ -31,9 +33,25 @@ impl DownloadManager {
                 .expect("Failed to build download client"),
             tasks: Arc::new(Mutex::new(HashMap::new())),
             semaphore: Arc::new(Semaphore::new(max_concurrent)),
+            max_concurrent: Arc::new(std::sync::atomic::AtomicUsize::new(max_concurrent)),
             progress_tx,
             progress_rx,
             max_retries: 3,
+        }
+    }
+
+    /// Changes how many downloads may run at once, taking effect as soon as
+    /// in-flight tasks release their permits.
+    pub fn set_max_concurrent(&self, limit: usize) {
+        use std::sync::atomic::Ordering;
+        let limit = limit.max(1);
+        let previous = self.max_concurrent.swap(limit, Ordering::SeqCst);
+        if limit > previous {
+            self.semaphore.add_permits(limit - previous);
+        } else if limit < previous {
+            // forget_permits only removes what is currently available; the rest
+            // is reclaimed as running tasks finish and try to release.
+            self.semaphore.forget_permits(previous - limit);
         }
     }
 
@@ -70,7 +88,8 @@ impl DownloadManager {
         filename: String,
         destination: &Path,
     ) -> wallsetter_core::Result<Uuid> {
-        let task = DownloadTask::new(wallpaper_id, url.clone(), filename.clone());
+        let dest_path = destination.join(&filename);
+        let task = DownloadTask::new(wallpaper_id, url.clone(), filename.clone(), dest_path.clone());
         let task_id = task.id;
 
         {
@@ -79,7 +98,6 @@ impl DownloadManager {
             self.broadcast(&tasks);
         }
 
-        let dest_path = destination.join(&filename);
         let client = self.client.clone();
         let tasks = self.tasks.clone();
         let semaphore = self.semaphore.clone();

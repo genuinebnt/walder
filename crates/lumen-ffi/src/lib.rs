@@ -61,6 +61,10 @@ struct Core {
     db: Database,
     downloads: DownloadManager,
     download_dir: RwLock<PathBuf>,
+    /// Where `lumen_ensure_local` stages files. Kept apart from the download
+    /// directory so setting a wallpaper can never race the download manager
+    /// writing the same path.
+    cache_dir: PathBuf,
 }
 
 static CORE: OnceLock<Core> = OnceLock::new();
@@ -144,6 +148,7 @@ pub unsafe extern "C" fn lumen_init(config_json: *const c_char) -> *mut c_char {
         // Already running — treat as a reconfigure.
         core.provider.write().unwrap().set_api_key(api_key);
         *core.download_dir.write().unwrap() = dir;
+        core.downloads.set_max_concurrent(max_parallel);
         return to_c(serde_json::json!({ "ok": true, "kind": "init", "data": "reconfigured" }).to_string());
     }
 
@@ -162,11 +167,17 @@ pub unsafe extern "C" fn lumen_init(config_json: *const c_char) -> *mut c_char {
 
         let db = Database::new(&data_dir.join("lumen.db"))?;
 
+        let cache_dir = directories::ProjectDirs::from("cc", "lumen", "Lumen")
+            .map(|d| d.cache_dir().to_path_buf())
+            .unwrap_or_else(|| data_dir.join("cache"));
+        std::fs::create_dir_all(&cache_dir)?;
+
         Ok(Core {
             provider: RwLock::new(WallhavenClient::new(api_key)),
             db,
             downloads: DownloadManager::new(max_parallel),
             download_dir: RwLock::new(dir),
+            cache_dir,
             runtime,
         })
     })();
@@ -198,12 +209,8 @@ fn spawn_download_watch(core: &'static Core) {
     let mut rx = core.downloads.subscribe();
     core.runtime.spawn(async move {
         while rx.changed().await.is_ok() {
-            let dir = core.download_dir.read().unwrap().clone();
-            let tasks: Vec<DownloadDto> = rx
-                .borrow()
-                .iter()
-                .map(|t| DownloadDto::from_task(t, &dir))
-                .collect();
+            let tasks: Vec<DownloadDto> =
+                rx.borrow().iter().map(DownloadDto::from_task).collect();
             emit(0, serde_json::to_string(&Envelope::ok("downloads", tasks)).unwrap_or_default());
         }
     });
@@ -351,12 +358,11 @@ pub extern "C" fn lumen_downloads_snapshot() -> *mut c_char {
     let Some(core) = core() else {
         return to_c(err_json("downloads", "core not initialised"));
     };
-    let dir = core.download_dir.read().unwrap().clone();
     let tasks: Vec<DownloadDto> = core
         .runtime
         .block_on(core.downloads.get_tasks())
         .iter()
-        .map(|t| DownloadDto::from_task(t, &dir))
+        .map(DownloadDto::from_task)
         .collect();
     to_c(serde_json::to_string(&Envelope::ok("downloads", tasks)).unwrap_or_default())
 }
@@ -387,31 +393,60 @@ pub unsafe extern "C" fn lumen_ensure_local(json: *const c_char) -> u64 {
     }
 
     core.runtime.spawn(async move {
-        let dir = core.download_dir.read().unwrap().clone();
-        let target = dir.join(&filename);
-        if target.exists() {
+        // A completed download is the best copy; use it rather than fetching
+        // again. Anything else is staged in the cache directory, which the
+        // download manager never writes to.
+        let downloaded = core.download_dir.read().unwrap().join(&filename);
+        if downloaded.is_file() {
             emit(
                 id,
-                serde_json::to_string(&Envelope::ok(
-                    "localFile",
-                    target.to_string_lossy().into_owned(),
-                ))
-                .unwrap_or_default(),
+                serde_json::to_string(&Envelope::ok("localFile", file_url(&downloaded)))
+                    .unwrap_or_default(),
             );
             return;
         }
+
+        let target = core.cache_dir.join(&filename);
+        if target.is_file() {
+            emit(
+                id,
+                serde_json::to_string(&Envelope::ok("localFile", file_url(&target)))
+                    .unwrap_or_default(),
+            );
+            return;
+        }
+
         let fetched = async {
-            std::fs::create_dir_all(&dir)?;
-            let bytes = reqwest::get(&url)
+            let response = reqwest::get(&url)
                 .await
-                .map_err(|e| WallsetterError::Http(e.to_string()))?
+                .map_err(|e| WallsetterError::Http(e.to_string()))?;
+            let status = response.status();
+            if !status.is_success() {
+                return Err(WallsetterError::Api {
+                    status: status.as_u16(),
+                    message: format!("could not fetch {url}"),
+                });
+            }
+            let bytes = response
                 .bytes()
                 .await
                 .map_err(|e| WallsetterError::Http(e.to_string()))?;
-            std::fs::write(&target, &bytes)?;
-            Ok::<_, WallsetterError>(target.to_string_lossy().into_owned())
+
+            // Write to a unique temporary file and rename, so a reader never
+            // sees a half-written image and two concurrent sets cannot
+            // interleave into one file.
+            let staging = core
+                .cache_dir
+                .join(format!(".{}.{}", uuid::Uuid::new_v4(), "part"));
+            std::fs::write(&staging, &bytes)?;
+            if let Err(e) = std::fs::rename(&staging, &target) {
+                let _ = std::fs::remove_file(&staging);
+                return Err(e.into());
+            }
+            Ok::<_, WallsetterError>(file_url(&target))
         }
         .await;
+
         match fetched {
             Ok(path) => emit(
                 id,
@@ -515,6 +550,9 @@ pub unsafe extern "C" fn lumen_set_preferences(json: *const c_char) -> *mut c_ch
         let resolved = resolve_dir(dir);
         let _ = std::fs::create_dir_all(&resolved);
         *core.download_dir.write().unwrap() = resolved;
+    }
+    if let Some(limit) = value.get("maxParallel").and_then(|v| v.as_u64()) {
+        core.downloads.set_max_concurrent(limit.clamp(1, 12) as usize);
     }
     to_c(serde_json::json!({ "ok": true, "kind": "preferences" }).to_string())
 }

@@ -41,15 +41,21 @@ final class LumenCore: @unchecked Sendable {
 
     var downloadDirectory: String { Self.takeString(lumen_download_dir()) }
 
-    func setPreferences(apiKey: String, downloadDirectory: String) {
-        let payload: [String: Any] = ["apiKey": apiKey, "downloadDir": downloadDirectory]
+    func setPreferences(apiKey: String, downloadDirectory: String, maxParallel: Int) {
+        let payload: [String: Any] = [
+            "apiKey": apiKey,
+            "downloadDir": downloadDirectory,
+            "maxParallel": maxParallel
+        ]
         _ = Self.takeString(lumen_set_preferences(Self.json(payload)))
     }
 
     // MARK: Async calls
 
-    func search(_ filters: SearchFilters, page: Int) async throws -> SearchPage {
-        try await call(SearchPage.self) { lumen_search(Self.json(filters.wirePayload(page: page))) }
+    func search(_ filters: SearchFilters, page: Int, seed: String? = nil) async throws -> SearchPage {
+        try await call(SearchPage.self) {
+            lumen_search(Self.json(filters.wirePayload(page: page, seed: seed)))
+        }
     }
 
     func details(id: String) async throws -> Wallpaper {
