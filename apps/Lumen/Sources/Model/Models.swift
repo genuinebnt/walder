@@ -173,10 +173,12 @@ struct FilterPreset: Identifiable, Codable, Equatable {
     var filters: SearchFilters
 }
 
-struct Collection: Identifiable, Hashable {
-    let id = UUID()
+/// A named set of wallpapers, stored by the core. Membership is independent of
+/// favouriting, and one wallpaper can sit in several collections.
+struct Collection: Identifiable, Hashable, Decodable {
+    let id: String
     var name: String
-    var items: [Wallpaper] = []
+    var wallpapers: [Wallpaper] = []
 }
 
 struct DisplayTarget: Identifiable, Hashable {

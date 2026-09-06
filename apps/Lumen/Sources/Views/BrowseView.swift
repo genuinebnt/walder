@@ -149,13 +149,6 @@ struct WallpaperTile: View {
         .aspectRatio(aspect, contentMode: .fill)
         .frame(maxWidth: .infinity)
         .clipped()
-        // Opening sits under the hover controls, so Set, Download and the
-        // favourite button take the click before this does.
-        .overlay {
-            Color.clear
-                .contentShape(.rect)
-                .onTapGesture(perform: open)
-        }
         .overlay { hoverLayer }
         .overlay { purityBorder }
         .clipShape(.rect(cornerRadius: theme.cornerRadius))
@@ -167,12 +160,18 @@ struct WallpaperTile: View {
         .scaleEffect(isHovered ? 1.014 : 1)
         .zIndex(isHovered ? 1 : 0)
         .animation(Tokens.normal, value: isHovered)
+        // Opening is the tile's own gesture. The controls in the hover layer
+        // are Buttons and consume their clicks first, so long as each declares
+        // a hit area — see TileButton.
+        .contentShape(.rect)
+        .onTapGesture(perform: open)
     }
 
     private var hoverLayer: some View {
         ZStack {
             LinearGradient(colors: [.black.opacity(0.45), .clear, .black.opacity(0.7)],
                            startPoint: .top, endPoint: .bottom)
+                .allowsHitTesting(false)
             VStack {
                 HStack(alignment: .top) {
                     Text(wallpaper.displayResolution)

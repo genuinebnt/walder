@@ -105,6 +105,36 @@ final class LumenCore: @unchecked Sendable {
         decodeSync([Wallpaper].self, Self.takeString(lumen_favorites_list())) ?? []
     }
 
+    // MARK: Collections
+
+    func collections() -> [Collection] {
+        decodeSync([Collection].self, Self.takeString(lumen_collections_list())) ?? []
+    }
+
+    func createCollection(named name: String) -> Collection? {
+        name.withCString { decodeSync(Collection.self, Self.takeString(lumen_collection_create($0))) }
+    }
+
+    @discardableResult
+    func deleteCollection(id: String) -> Bool {
+        id.withCString { pointer in
+            let reply = Self.takeString(lumen_collection_delete(pointer))
+            return (try? JSONDecoder().decode(Envelope<String?>.self, from: Data(reply.utf8)))?.ok ?? false
+        }
+    }
+
+    @discardableResult
+    func setCollectionMember(collectionID: String, wallpaperID: String, member: Bool) -> Bool {
+        let payload: [String: Any] = [
+            "collectionId": collectionID,
+            "wallpaperId": wallpaperID,
+            "member": member
+        ]
+        let reply = Self.takeString(lumen_collection_set_member(Self.json(payload)))
+        struct Flag: Decodable { let member: Bool }
+        return decodeSync(Flag.self, reply)?.member == member
+    }
+
     /// Returns the resulting state, or nil when the core rejected the toggle.
     func toggleFavorite(_ wallpaper: Wallpaper) -> Bool? {
         let reply = Self.takeString(lumen_favorite_toggle(Self.json(wallpaper.wirePayload)))

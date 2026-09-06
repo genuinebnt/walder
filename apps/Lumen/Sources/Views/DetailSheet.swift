@@ -167,6 +167,7 @@ struct DetailSheet: View {
                 }
 
                 actions
+                collections
                 uploader
                 metadata
                 palette
@@ -208,6 +209,37 @@ struct DetailSheet: View {
             if let url = wallpaper.url {
                 Link("Open on Wallhaven", destination: url)
                     .font(.system(size: 11.5))
+            }
+        }
+    }
+
+    /// Which collections hold this wallpaper, and a switch for each.
+    @ViewBuilder
+    private var collections: some View {
+        if !store.collections.isEmpty {
+            VStack(alignment: .leading, spacing: Tokens.s2) {
+                Text("COLLECTIONS").font(.sectionLabel).foregroundStyle(.secondary)
+                ForEach(store.collections) { collection in
+                    let member = store.isMember(wallpaper, of: collection)
+                    Button {
+                        store.setMembership(wallpaper, of: collection, member: !member)
+                    } label: {
+                        HStack {
+                            Image(systemName: member ? "checkmark.circle.fill" : "circle")
+                                .foregroundStyle(member ? Tokens.accent : Color.secondary.opacity(0.5))
+                            Text(collection.name).lineLimit(1)
+                            Spacer()
+                            Text("\(collection.wallpapers.count)")
+                                .font(.caption2Mono).foregroundStyle(.secondary)
+                        }
+                        .font(.system(size: 12))
+                        .padding(.horizontal, 11).padding(.vertical, 7)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(.quaternary.opacity(0.4), in: .rect(cornerRadius: Tokens.control))
+                        .contentShape(.rect)
+                    }
+                    .buttonStyle(.plain)
+                }
             }
         }
     }

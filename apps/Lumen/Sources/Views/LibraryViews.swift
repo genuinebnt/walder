@@ -129,22 +129,35 @@ struct CollectionsView: View {
     }
 
     private func card(_ collection: Collection) -> some View {
-        let items = collection.items.isEmpty ? Array(store.wallpapers.prefix(3)) : collection.items
+        let items = collection.wallpapers
         return VStack(spacing: 0) {
-            HStack(spacing: 2) {
-                thumb(items.first)
-                VStack(spacing: 2) {
-                    thumb(items.dropFirst().first)
-                    thumb(items.dropFirst(2).first)
+            Group {
+                if items.isEmpty {
+                    Rectangle().fill(.quaternary.opacity(0.5))
+                        .overlay {
+                            Text("Empty — add wallpapers from the preview")
+                                .font(.system(size: 11))
+                                .foregroundStyle(.secondary)
+                                .multilineTextAlignment(.center)
+                                .padding(Tokens.s3)
+                        }
+                } else {
+                    HStack(spacing: 2) {
+                        thumb(items.first)
+                        VStack(spacing: 2) {
+                            thumb(items.dropFirst().first)
+                            thumb(items.dropFirst(2).first)
+                        }
+                        .frame(width: 74)
+                    }
                 }
-                .frame(width: 74)
             }
             .frame(height: 128)
             .clipped()
 
             HStack {
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(collection.name).font(.system(size: 13, weight: .medium)).lineLimit(1)
+                    Text(collection.name).font(.rowTitle.weight(.medium)).lineLimit(1)
                     Text("\(items.count) wallpapers").font(.system(size: 11)).foregroundStyle(.secondary)
                 }
                 Spacer()
@@ -152,11 +165,20 @@ struct CollectionsView: View {
                     if let pick = items.randomElement() { store.setWallpaper(pick) }
                 }
                 .controlSize(.small)
+                .disabled(items.isEmpty)
             }
             .padding(Tokens.s3)
         }
         .card()
         .contentShape(.rect)
+        .contextMenu {
+            Button("Shuffle") {
+                if let pick = items.randomElement() { store.setWallpaper(pick) }
+            }
+            .disabled(items.isEmpty)
+            Divider()
+            Button("Delete Collection", role: .destructive) { store.deleteCollection(collection) }
+        }
     }
 
     private func thumb(_ wallpaper: Wallpaper?) -> some View {

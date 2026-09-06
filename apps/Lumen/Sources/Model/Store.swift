@@ -150,6 +150,7 @@ final class Store {
         }
         downloads = LumenCore.shared.downloadsSnapshot()
         reloadFavorites()
+        reloadCollections()
         rearmRotation()
     }
 
@@ -256,12 +257,53 @@ final class Store {
         withAnimation(Tokens.normal) { favorites = saved }
     }
 
+    // MARK: Collections
+
+    @MainActor
+    func reloadCollections() {
+        let stored = LumenCore.shared.collections()
+        for collection in stored { remember(collection.wallpapers) }
+        withAnimation(Tokens.normal) { collections = stored }
+    }
+
     @MainActor
     func createCollection(named name: String, seeding seedFromFavorites: Bool = false) {
         guard !name.trimmingCharacters(in: .whitespaces).isEmpty else { return }
-        withAnimation(Tokens.normal) {
-            collections.append(Collection(name: name, items: seedFromFavorites ? favorites : []))
+        guard let created = LumenCore.shared.createCollection(named: name) else {
+            errorMessage = "Could not create that collection."
+            return
         }
+        if seedFromFavorites {
+            for wallpaper in favorites {
+                _ = LumenCore.shared.setCollectionMember(collectionID: created.id,
+                                                         wallpaperID: wallpaper.id,
+                                                         member: true)
+            }
+        }
+        reloadCollections()
+    }
+
+    @MainActor
+    func deleteCollection(_ collection: Collection) {
+        LumenCore.shared.deleteCollection(id: collection.id)
+        reloadCollections()
+    }
+
+    func isMember(_ wallpaper: Wallpaper, of collection: Collection) -> Bool {
+        collection.wallpapers.contains { $0.id == wallpaper.id }
+    }
+
+    @MainActor
+    func setMembership(_ wallpaper: Wallpaper, of collection: Collection, member: Bool) {
+        // Membership joins against the wallpaper cache, which every searched
+        // wallpaper is already in; the core rejects anything it cannot resolve.
+        guard LumenCore.shared.setCollectionMember(collectionID: collection.id,
+                                                   wallpaperID: wallpaper.id,
+                                                   member: member) else {
+            errorMessage = "Could not update \(collection.name)."
+            return
+        }
+        reloadCollections()
     }
 
     // MARK: Downloads
@@ -336,7 +378,7 @@ final class Store {
         let pool: [Wallpaper]
         switch rotationSource {
         case "Downloads": pool = downloads.filter { $0.state == .done }.compactMap { known[$0.wallpaperId] }
-        case "Collection": pool = collections.flatMap(\.items)
+        case "Collection": pool = collections.flatMap(\.wallpapers)
         default: pool = favorites.isEmpty ? wallpapers : favorites
         }
         guard let pick = shuffle ? pool.randomElement() : pool.first else { return }

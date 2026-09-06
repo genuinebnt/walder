@@ -1086,5 +1086,57 @@ mod tests {
         db.remove_bookmark(bookmark.id).expect("remove");
         assert!(!db.is_bookmarked("toggle").expect("check"));
     }
-}
 
+    #[test]
+    fn collection_membership_survives_and_counts() {
+        let (db, _dir) = temp_db();
+        let folder = BookmarkFolder::new("Desert");
+        db.add_folder(&folder).expect("folder");
+
+        for id in ["one", "two"] {
+            db.cache_wallpaper(&wallpaper(id)).expect("cache");
+            db.add_to_collection(folder.id, id).expect("file");
+        }
+        // Filing the same wallpaper twice must not duplicate it.
+        db.add_to_collection(folder.id, "one").expect("file again");
+
+        let items = db.get_collection_wallpapers(folder.id).expect("read");
+        assert_eq!(items.len(), 2);
+        assert_eq!(db.collection_counts().expect("counts")[&folder.id], 2);
+
+        db.remove_from_collection(folder.id, "one").expect("unfile");
+        assert_eq!(db.get_collection_wallpapers(folder.id).expect("read").len(), 1);
+    }
+
+    #[test]
+    fn collection_membership_is_independent_of_favourites() {
+        let (db, _dir) = temp_db();
+        let folder = BookmarkFolder::new("Night");
+        db.add_folder(&folder).expect("folder");
+        let w = wallpaper("shared");
+        db.cache_wallpaper(&w).expect("cache");
+
+        db.add_to_collection(folder.id, "shared").expect("file");
+        assert!(!db.is_bookmarked("shared").expect("check"),
+                "filing into a collection must not favourite it");
+
+        db.add_bookmark(&Bookmark::new(&w, None)).expect("favourite");
+        assert_eq!(db.get_collection_wallpapers(folder.id).expect("read").len(), 1,
+                   "favouriting must not disturb collection membership");
+    }
+
+    #[test]
+    fn deleting_a_collection_takes_its_membership_but_not_the_wallpapers() {
+        let (db, _dir) = temp_db();
+        let folder = BookmarkFolder::new("Temporary");
+        db.add_folder(&folder).expect("folder");
+        db.cache_wallpaper(&wallpaper("keep")).expect("cache");
+        db.add_to_collection(folder.id, "keep").expect("file");
+
+        db.delete_bookmark_folder(folder.id).expect("delete");
+
+        assert!(db.get_collection_wallpapers(folder.id).expect("read").is_empty());
+        assert!(db.get_cached_wallpaper("keep").expect("lookup").is_some(),
+                "the wallpaper itself must outlive the collection");
+    }
+}

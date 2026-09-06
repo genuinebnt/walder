@@ -52,6 +52,18 @@ final class Verifier {
 
     func section(_ title: String) { print("\n\(title)") }
 
+    /// A rate limit is Wallhaven pushing back, not a defect. The harness makes
+    /// a lot of requests in a short window, so treat it as a skip — a gate that
+    /// fails at random stops being read.
+    func checkAPI(_ name: String, error: String?, _ body: () -> Bool) {
+        if let error, error.localizedCaseInsensitiveContains("rate limit")
+            || error.contains("429") {
+            skip(name, "rate limited by Wallhaven")
+            return
+        }
+        check(name) { body() }
+    }
+
     func summary() -> Int32 {
         print("\n\(passed + failures.count) checks · \(passed) passed · \(skipped.count) skipped")
         guard failures.isEmpty else {
@@ -296,6 +308,11 @@ func run() async -> Int32 {
 
     // ── collections ───────────────────────────────────────────────────────
     v.section("Collections")
+    // Collections live in the database now, so a run has to clean up after
+    // itself rather than relying on them being in-memory.
+    for stale in store.collections where stale.name.hasPrefix("Verify ") {
+        store.deleteCollection(stale)
+    }
     v.check("Create adds a collection") {
         let before = store.collections.count
         store.createCollection(named: "Verify set")
@@ -305,6 +322,21 @@ func run() async -> Int32 {
         let before = store.collections.count
         store.createCollection(named: "   ")
         return store.collections.count == before
+    }
+    v.check("A collection survives a relaunch") {
+        // The whole point: this used to be in memory and vanished on restart.
+        // Note: never boot() a second store here — boot registers the core's
+        // download callback, which would steal pushes from the store under
+        // test.
+        let reopened = Store(defaults: defaults)
+        reopened.reloadCollections()
+        return reopened.collections.contains { $0.name == "Verify set" }
+    }
+    v.check("Delete removes the collection") {
+        guard let created = store.collections.first(where: { $0.name == "Verify set" })
+        else { return false }
+        store.deleteCollection(created)
+        return !store.collections.contains { $0.name == "Verify set" }
     }
 
     // ── displays ──────────────────────────────────────────────────────────
@@ -343,8 +375,13 @@ func run() async -> Int32 {
         tagFilters.sorting = .relevance
         store.filters = tagFilters
         await store.search()
-        v.check("A #tag search reaches the API intact and returns results") {
-            store.errorMessage == nil && !store.wallpapers.isEmpty
+        v.checkAPI("A #tag search reaches the API intact and returns results",
+                   error: store.errorMessage) {
+            if let message = store.errorMessage {
+                print("        core reported: \(message)")
+                return false
+            }
+            return !store.wallpapers.isEmpty
         }
         v.check("An underscored tag survives the round trip") {
             var underscored = SearchFilters()
@@ -450,6 +487,39 @@ func run() async -> Int32 {
                 } catch {
                     return true
                 }
+            }
+            v.check("Filing into a collection persists and is reversible") {
+                store.createCollection(named: "Verify members")
+                guard let collection = store.collections.first(where: { $0.name == "Verify members" })
+                else { return false }
+
+                store.setMembership(sample, of: collection, member: true)
+                guard let filed = store.collections.first(where: { $0.id == collection.id }),
+                      store.isMember(sample, of: filed) else { return false }
+
+                let reopened = Store(defaults: defaults)
+                reopened.reloadCollections()
+                let persisted = reopened.collections
+                    .first(where: { $0.id == collection.id })?
+                    .wallpapers.contains { $0.id == sample.id } ?? false
+
+                store.setMembership(sample, of: filed, member: false)
+                let removed = !(store.collections
+                    .first(where: { $0.id == collection.id })
+                    .map { store.isMember(sample, of: $0) } ?? true)
+
+                store.deleteCollection(collection)
+                return persisted && removed
+            }
+            v.check("Filing does not favourite the wallpaper") {
+                store.createCollection(named: "Verify independence")
+                guard let collection = store.collections.first(where: { $0.name == "Verify independence" })
+                else { return false }
+                let wasFavorite = store.isFavorite(sample)
+                store.setMembership(sample, of: collection, member: true)
+                let unchanged = store.isFavorite(sample) == wasFavorite
+                store.deleteCollection(collection)
+                return unchanged
             }
             v.check("Tag search builds a #-prefixed query") {
                 store.filters.query = "#\(sample.tags.first ?? "nature")"

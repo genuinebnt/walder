@@ -33,6 +33,12 @@ uint64_t lumen_ensure_local(const char *json);
 char *lumen_favorites_list(void);
 char *lumen_favorite_toggle(const char *wallpaper_json);
 
+// Collections
+char *lumen_collections_list(void);
+char *lumen_collection_create(const char *name);
+char *lumen_collection_delete(const char *id);
+char *lumen_collection_set_member(const char *json);
+
 // Preferences
 char *lumen_set_preferences(const char *json);
 char *lumen_download_dir(void);
