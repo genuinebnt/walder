@@ -10,6 +10,8 @@ struct FocusView: View {
     @Environment(Store.self) private var store
     @Binding var selection: Wallpaper?
 
+    @State private var scrolledTo: String?
+
     private var items: [Wallpaper] { store.focusWallpapers }
     private var theme: GridTheme { store.gridTheme }
 
@@ -33,6 +35,9 @@ struct FocusView: View {
             }
             .padding(Tokens.s4)
         }
+        .scrollPosition(id: $scrolledTo, anchor: .top)
+        .onAppear { scrolledTo = store.scrollAnchor(for: "focus") }
+        .onChange(of: scrolledTo) { _, id in store.rememberScroll(id, for: "focus") }
         .scrollContentBackground(.hidden)
     }
 
@@ -168,6 +173,7 @@ struct FocusView: View {
                 }
             }
         }
+        .scrollTargetLayout()
         .transaction { $0.animation = nil }
     }
 

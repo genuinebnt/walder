@@ -5,6 +5,8 @@ struct BrowseView: View {
     let section: Section
     @Binding var selection: Wallpaper?
     @State private var hovered: String?
+    /// Drives .scrollPosition, so leaving and returning lands in the same spot.
+    @State private var scrolledTo: String?
 
     private var items: [Wallpaper] { section == .favorites ? store.favorites : store.wallpapers }
     private var theme: GridTheme { store.gridTheme }
@@ -29,6 +31,7 @@ struct BrowseView: View {
                         }
                     }
                 }
+                .scrollTargetLayout()
                 .transaction { $0.animation = nil }
 
                 if store.isLoading { loadingRow }
@@ -40,6 +43,9 @@ struct BrowseView: View {
             // catch an append, and layout changes animate on `theme` alone.
             .animation(Tokens.normal, value: items.count)
         }
+        .scrollPosition(id: $scrolledTo, anchor: .top)
+        .onAppear { scrolledTo = store.scrollAnchor(for: "browse") }
+        .onChange(of: scrolledTo) { _, id in store.rememberScroll(id, for: "browse") }
         .scrollContentBackground(.hidden)
         .searchable(text: Binding(get: { store.filters.query }, set: { store.filters.query = $0 }),
                     placement: .toolbar, prompt: "Search wallpapers or #tag")

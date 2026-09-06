@@ -663,6 +663,60 @@ func run() async -> Int32 {
         return store.downloads.count == before
     }
 
+    v.section("Scroll position")
+    v.check("An anchor is remembered per pane and kept apart") {
+        store.rememberScroll("abc123", for: "browse")
+        store.rememberScroll("xyz789", for: "focus")
+        return store.scrollAnchor(for: "browse") == "abc123"
+            && store.scrollAnchor(for: "focus") == "xyz789"
+    }
+    v.check("A nil anchor does not wipe the remembered one") {
+        store.rememberScroll(nil, for: "browse")
+        return store.scrollAnchor(for: "browse") == "abc123"
+    }
+    v.check("Forgetting clears just that pane") {
+        store.forgetScroll(for: "browse")
+        return store.scrollAnchor(for: "browse") == nil
+            && store.scrollAnchor(for: "focus") == "xyz789"
+    }
+    await v.checkAsync("A new search drops the browse anchor") {
+        store.rememberScroll("stale", for: "browse")
+        await store.search()
+        return store.scrollAnchor(for: "browse") == nil
+    }
+
+    v.section("Sized downloads")
+    v.check("Offered sizes never include an upscale") {
+        guard let sample = store.wallpapers.first else { return true }
+        let parts = sample.resolution.split(separator: "x")
+        let width = Double(parts.first ?? "0") ?? 0
+        // "This display" is always offered; the rest must fit inside the source.
+        return store.fittedSizes(for: sample).dropFirst().allSatisfy { $0.size.width <= width }
+    }
+    v.check("This display is always the first option") {
+        guard let sample = store.wallpapers.first else { return true }
+        guard let first = store.fittedSizes(for: sample).first else { return false }
+        return first.size == WallpaperFitter.mainPixelSize
+    }
+    await v.checkAsync("A sized download lands in the download directory") {
+        guard let done = store.downloads.first(where: { $0.state == .done }),
+              let local = done.localFile,
+              let wallpaper = store.wallpaper(for: done) else { return true }
+        let directory = URL(filePath: LumenCore.shared.downloadDirectory)
+        let target = CGSize(width: 800, height: 500)
+        let expected = directory.appending(
+            path: "\(local.deletingPathExtension().lastPathComponent)-800x500.jpg")
+        try? FileManager.default.removeItem(at: expected)
+
+        store.downloadFitted(wallpaper, to: target)
+        for _ in 0..<60 where !FileManager.default.fileExists(atPath: expected.path) {
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+        let made = FileManager.default.fileExists(atPath: expected.path)
+        try? FileManager.default.removeItem(at: expected)
+        return made
+    }
+
     v.section("Preview mode")
     v.check("Zoom survives stepping to the next image") {
         // The pane used to reset zoom on every step, dropping you out of

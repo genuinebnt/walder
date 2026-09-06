@@ -263,9 +263,22 @@ struct PreviewPane: View {
             .animation(Tokens.quick, value: justSet)
 
             HStack(spacing: Tokens.s2) {
-                Button { store.download(wallpaper) } label: {
+                Menu {
+                    Button("Download Original") { store.download(wallpaper) }
+                    Divider()
+                    // Wallhaven serves one file per wallpaper, so anything
+                    // other than the original is produced here.
+                    ForEach(store.fittedSizes(for: wallpaper), id: \.label) { option in
+                        Button("Resized · \(option.label)") {
+                            store.downloadFitted(wallpaper, to: option.size)
+                        }
+                    }
+                } label: {
                     Label("Download", systemImage: "arrow.down.circle").frame(maxWidth: .infinity)
+                } primaryAction: {
+                    store.download(wallpaper)
                 }
+                .menuStyle(.button)
                 Button { store.toggleFavorite(wallpaper) } label: {
                     Label(store.isFavorite(wallpaper) ? "Saved" : "Favorite",
                           systemImage: store.isFavorite(wallpaper) ? "heart.fill" : "heart")

@@ -227,6 +227,7 @@ final class Store {
             page = 1
             searchSeed = nil
             rememberFilters()
+            forgetScroll(for: "browse")
         }
         isLoading = true
         defer { isLoading = false }
@@ -502,6 +503,26 @@ final class Store {
         }
     }
 
+    // MARK: Scroll position
+    //
+    // Session state, keyed by pane. Opening a wallpaper or stepping away and
+    // back used to drop you at the top of the results, which is punishing
+    // several pages in.
+
+    /// Topmost wallpaper in each grid, so returning restores the same place.
+    private var scrollAnchors: [String: String] = [:]
+
+    func scrollAnchor(for pane: String) -> String? { scrollAnchors[pane] }
+
+    func rememberScroll(_ id: String?, for pane: String) {
+        guard let id else { return }
+        scrollAnchors[pane] = id
+    }
+
+    /// Dropped when the list underneath changes, since the anchor is an id in
+    /// a list that no longer exists.
+    func forgetScroll(for pane: String) { scrollAnchors[pane] = nil }
+
     // MARK: Preview mode
     //
     // Session state, not view state: SwiftUI re-creates the preview whenever
@@ -632,6 +653,47 @@ final class Store {
         }
         let size = screen.map(WallpaperFitter.pixelSize) ?? WallpaperFitter.mainPixelSize
         return DisplayFit(image: image, display: size)
+    }
+
+    /// Saves a copy cropped and scaled to a chosen size into the download
+    /// directory, rather than the original.
+    ///
+    /// Wallhaven has no per-resolution download, so a "download at this size"
+    /// has to be produced locally.
+    @MainActor
+    func downloadFitted(_ wallpaper: Wallpaper, to size: CGSize) {
+        Task {
+            do {
+                let source = try await LumenCore.shared.ensureLocal(
+                    url: wallpaper.path.absoluteString,
+                    filename: wallpaper.filename)
+                let directory = URL(filePath: LumenCore.shared.downloadDirectory)
+                _ = try WallpaperFitter.render(source, to: size, in: directory)
+                refreshDownloadedIDs()
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    /// Sizes offered for a fitted download: this display, plus the common ones
+    /// that are no larger than the source.
+    func fittedSizes(for wallpaper: Wallpaper) -> [(label: String, size: CGSize)] {
+        var offered: [(String, CGSize)] = []
+        let native = WallpaperFitter.mainPixelSize
+        offered.append(("This display · \(Int(native.width)) × \(Int(native.height))", native))
+
+        let parts = wallpaper.resolution.split(separator: "x")
+        let sourceWidth = Double(parts.first ?? "0") ?? 0
+        for size in ["3840x2160", "2560x1440", "1920x1080"] {
+            let dims = size.split(separator: "x")
+            guard let width = Double(dims.first ?? ""), let height = Double(dims.last ?? ""),
+                  width <= sourceWidth        // never offer an upscale
+            else { continue }
+            offered.append((size.replacingOccurrences(of: "x", with: " × "),
+                            CGSize(width: width, height: height)))
+        }
+        return offered
     }
 
     /// Crops and scales a copy to the display's exact pixels, then sets it.
@@ -780,6 +842,7 @@ final class Store {
     /// Clears the pane and records what is now in focus. The caller loads.
     @MainActor
     private func beginFocus(_ next: Focus) {
+        forgetScroll(for: "focus")
         withAnimation(Tokens.normal) {
             focus = next
             focusWallpapers = []

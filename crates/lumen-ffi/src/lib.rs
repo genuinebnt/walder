@@ -795,6 +795,10 @@ pub extern "C" fn lumen_downloaded_ids() -> *mut c_char {
         for entry in entries.flatten() {
             let name = entry.file_name();
             let name = name.to_string_lossy();
+            // A ".part" is a download in flight, not one you have.
+            if name.ends_with(".part") {
+                continue;
+            }
             let Some(rest) = name.strip_prefix("wallhaven-") else {
                 continue;
             };
