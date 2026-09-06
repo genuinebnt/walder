@@ -25,6 +25,7 @@ struct RootView: View {
     @State private var section: Section = .browse
     @State private var showFilters = false
     @State private var selection: Wallpaper?
+    @State private var columnVisibility: NavigationSplitViewVisibility = .automatic
 
     var body: some View {
         ZStack {
@@ -38,14 +39,25 @@ struct RootView: View {
                     withAnimation(Tokens.normal) { selection = nil }
                 }
                 .environment(store)
-                .transition(.opacity.combined(with: .scale(scale: 0.98)))
+                // The sidebar is a vibrancy region the split view draws itself,
+                // so an overlay alone does not cover it — hence the collapse
+                // below. This covers the title bar area the same way.
+                .ignoresSafeArea()
+                .transition(.opacity)
                 .zIndex(1)
+            }
+        }
+        // Previewing collapses the sidebar so a zoomed image gets the whole
+        // window instead of running into it.
+        .onChange(of: selection?.id) { _, id in
+            withAnimation(Tokens.normal) {
+                columnVisibility = id == nil ? .automatic : .detailOnly
             }
         }
     }
 
     private var splitView: some View {
-        NavigationSplitView {
+        NavigationSplitView(columnVisibility: $columnVisibility) {
             sidebar
         } detail: {
             content
