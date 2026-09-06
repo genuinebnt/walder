@@ -31,6 +31,14 @@ The SwiftUI rewrite closed most of the original list.
   pause-on-battery check.
 - **Per-display assignment** with fill / fit / stretch.
 - **Menu-bar quick-set**, toggleable from the sidebar.
+- **Full preview viewer** — ← / → step through the browsed list, Escape closes,
+  Space zooms, the inspector collapses for a full-bleed view.
+- **Clickable tags** (`#tag`), **uploader** (`@name`) and **palette** swatches,
+  each running the search they name.
+- **Filters persist across launches**, and save as named presets.
+- **Image cache** — decoded images held in memory, requests coalesced, ImageIO
+  downsampling to the drawn size, and a 512 MB disk cache. Switching layout is a
+  cache read rather than a re-download.
 
 Backend hardening in the same pass: WAL and enforced foreign keys, indices on
 every filtered column, a joined favourites read instead of a query per row, a
@@ -55,10 +63,14 @@ Carried forward, unchanged in priority.
   alongside the file, which the Spotlight item below also wants.
 - **Download at a custom resolution.**
 - **Resume an interrupted download** — the manager retries but restarts the file.
-- **Viewer navigation** — left/right arrow between wallpapers, preload a few in
-  each direction, a loading indicator until the full-resolution image renders.
 - **Scroll position** preserved when opening a wallpaper or switching tabs, and
   restored on return. Back / forward.
+- **Author profile as a pane.** Clicking an uploader searches `@name` today,
+  which is Wallhaven's own behaviour; a dedicated profile pane with their stats
+  would go further.
+- **The rest of wallhaven.cc's surface** — user collections (the provider crate
+  has `get_collections` already, unused), similar-wallpaper suggestions, and
+  browsing by tag page rather than by search.
 
 ---
 
