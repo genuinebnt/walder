@@ -270,6 +270,26 @@ func run() async -> Int32 {
             store.wallpapers.allSatisfy { $0.thumb.scheme?.hasPrefix("http") == true }
         }
 
+        // The old iced path stripped the leading "#", turning a tag search into
+        // a keyword search, and underscores broke it. The query now reaches the
+        // API untouched.
+        var tagFilters = SearchFilters()
+        tagFilters.query = "#nature"
+        tagFilters.sorting = .relevance
+        store.filters = tagFilters
+        await store.search()
+        v.check("A #tag search reaches the API intact and returns results") {
+            store.errorMessage == nil && !store.wallpapers.isEmpty
+        }
+        v.check("An underscored tag survives the round trip") {
+            var underscored = SearchFilters()
+            underscored.query = "#long_hair"
+            return (underscored.wirePayload(page: 1)["query"] as? String) == "#long_hair"
+        }
+
+        store.filters = SearchFilters()
+        await store.search()
+
         if let sample = store.wallpapers.first {
             v.check("Favorite toggle round-trips through the database") {
                 let before = store.isFavorite(sample)

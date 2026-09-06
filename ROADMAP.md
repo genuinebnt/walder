@@ -1,45 +1,156 @@
-# Wallpaper Downloader & Setter — Feature / Fix List
+# Lumen — Roadmap
 
-## Collections
-- [ ] Ability to download wallpapers directly into a custom collection
-- [ ] Ability to add existing downloaded wallpapers to a collection
-- [ ] Ability to select multiple downloaded wallpapers and categorize them into a collection
-- [ ] Shuffle and set wallpapers in a downloaded collection
+Native macOS Wallhaven client. SwiftUI front end (`apps/Lumen`) over a Rust core
+reached through a C ABI (`crates/lumen-ffi`).
 
-## Search
-- [ ] Make downloaded wallpapers searchable by tags
-- [ ] Fix issue where underscore (`_`) breaks tag searches
+Two gates guard every change, and both must pass before a feature is done:
 
-## Downloading
-- [ ] Ability to download wallpapers in a custom resolution
-- [ ] Ability to clear downloaded wallpapers list to reduce UI lag.
-- [ ] Ability to resume download and retry all failed downloads
+| Gate | Command | What it proves |
+| --- | --- | --- |
+| uidiff | `node tools/uidiff/uidiff.js` | every string and token the design draws exists in the app |
+| verify | `./tools/verify/run.sh` | every action a control binds to actually changes the state it owns |
 
-## Wallpaper Viewer
-- [ ] Navigate wallpapers using left arrow and right arrow keys
-- [ ] Ability to move back and forth between wallpapers in viewer
-- [ ] Preload the next few wallpapers and previous few wallpapers for smoother navigation
-- [ ] Show a small loading indicator until the full-resolution image is rendered
+`uidiff` compares source, not behaviour — a control that renders and does nothing
+passes it. `verify` is the half that catches that. Add a check when you add a
+control, and read the summary line rather than the exit code.
 
-## Content Indicators
-- [ ] Show red borders for NSFW wallpapers
-- [ ] Show yellow borders for sketchy wallpapers
+---
 
-## Navigation & State Management
-- [ ] Preserve scroll position when:
-    - opening a wallpaper
-    - switching to another tab
-- [ ] Restore the exact scroll position when returning
-- [ ] Add Back button
-- [ ] Add Forward button
+## Shipped
 
-## Miscellaneous Fixes
-- [ ] Fix tag search issues caused by underscores
+The SwiftUI rewrite closed most of the original list.
 
-## UI/UX & Aesthetics
-- [ ] macOS UI/UX Overhaul:
-    - Follow SwiftUI/macOS UI standards
-    - Use SF Symbols (if possible) or similar consistent iconography
-    - Improved typography (Inter/System Font)
-    - Native-like layout, spacing, and polish
-    - Smooth transitions and micro-animations
+- **macOS UI overhaul** — `NavigationSplitView`, SF Symbols, semantic colours,
+  one motion curve family, four grid themes (Compact / Grid / Cinema / Masonry).
+- **Purity borders** — red for NSFW, amber for sketchy, behind a setting.
+- **Clear finished / retry failed downloads.**
+- **Tag search with `#`, including underscores** — the old iced path stripped the
+  `#`, silently turning a tag search into a keyword search. The query now reaches
+  the API untouched; `verify` asserts it against the live endpoint.
+- **Rotation** — a real timer, re-armed by every schedule control, with a
+  pause-on-battery check.
+- **Per-display assignment** with fill / fit / stretch.
+- **Menu-bar quick-set**, toggleable from the sidebar.
+
+Backend hardening in the same pass: WAL and enforced foreign keys, indices on
+every filtered column, a joined favourites read instead of a query per row, a
+bounded wallpaper cache, `Retry-After` honoured on 429, and authenticated tag
+lookups.
+
+---
+
+## Still open from the original list
+
+Carried forward, unchanged in priority.
+
+- **Collections are in memory.** Creating one works; nothing persists across a
+  relaunch. They need to move into `wallsetter-db` alongside bookmark folders,
+  which already has the schema for it. Everything below under Collections
+  depends on this landing first.
+  - Download directly into a collection
+  - Add existing downloads to a collection
+  - Multi-select downloads and file them at once
+  - Shuffle and set from one collection
+- **Downloaded wallpapers searchable by tag** — needs tags written to disk
+  alongside the file, which the Spotlight item below also wants.
+- **Download at a custom resolution.**
+- **Resume an interrupted download** — the manager retries but restarts the file.
+- **Viewer navigation** — left/right arrow between wallpapers, preload a few in
+  each direction, a loading indicator until the full-resolution image renders.
+- **Scroll position** preserved when opening a wallpaper or switching tabs, and
+  restored on return. Back / forward.
+
+---
+
+## Phase 1 — cheap, high payoff
+
+Small, self-contained, no new dependencies.
+
+| Feature | Notes |
+| --- | --- |
+| **Duplicate detection** | Grey out results already on disk. Hash-based; the download history table already keys by wallpaper id, so the first cut is a join. |
+| **Bulk resolution rule** | Auto-skip anything below the largest connected display's native resolution. `NSScreen` already reports it in `WallpaperSetter.connectedDisplays()`. |
+| **Rotation history with undo** | "What was on my desktop last Tuesday", and a one-key revert. Needs a small table and a menu command; the recents list is already tracked in memory. |
+| **Similar to this** | From any wallpaper, search its tags plus dominant colour in one click. Wallhaven returns the palette, so no new model is needed. |
+| **Drag a tile to Finder** | `onDrag` with a file promise. Free once a wallpaper has a local file, which `ensureLocal` already guarantees. |
+
+## Phase 2 — the distinctive ones
+
+These are what would separate Lumen from every other Wallhaven downloader.
+
+| Feature | Why it stands out | Cost |
+| --- | --- | --- |
+| **Palette match** | Extract dominant colours and offer to set the system accent and highlight to match. Wallhaven returns each image's palette, so this is nearly free. | Low — the colours are already in `Wallpaper.colors`. Writing the accent needs a `defaults` write plus a distributed notification; unsupported API, so it needs a fallback. |
+| **Per-Space wallpapers** | macOS supports a different desktop per Space and almost nothing exposes it. Assign a collection to Space 3 and rotate only there. | High — no public API. Requires writing to the desktop picture database and a private CoreGraphics Space id. Fragile across releases; needs a version guard. |
+| **Dark-mode pairs** | Bind two wallpapers together and switch with the system appearance at sunrise/sunset. | Low — `NSApp.effectiveAppearance` KVO plus a pair table. |
+| **Menu-bar contrast guard** | Check luminance in the top strip of a candidate and warn when the menu bar will be illegible. | Low — sample the top 24pt of the decoded image; pure Core Graphics. |
+| **Crop to fit my display** | A pan/zoom pass before setting, so a 21:9 image is not centre-cropped badly on a 16:10 screen. Save the crop with the wallpaper. | Medium — a real editor surface, plus storing the crop rect per wallpaper per display. |
+| **Tag radar** | Subscribe to a tag or uploader; a Notification Center alert when new matches cross a favourite threshold. | Medium — needs background polling. `wallsetter-scheduler` already exists to host it. |
+| **Quick Look + Spotlight** | Write tags into file metadata so downloads are searchable in Finder. | Low — extended attributes on the downloaded file. Also unblocks "downloaded wallpapers searchable by tag" above. |
+| **Shortcuts actions** | "Set random wallpaper from Favorites", and a Focus-mode trigger. | Medium — App Intents, which needs the app to expose an intent extension. |
+| **Live preview on the desktop** | Set on hover, revert on Escape. | Low mechanically, but it writes the real desktop picture — needs a reliable revert path or it strands the user's wallpaper. |
+
+## Phase 3 — vector embeddings
+
+Worth doing, with one honest constraint: **only images already fetched can be
+embedded.** This works over the local library — downloads, favourites, browsed
+thumbnails — not Wallhaven's whole catalogue.
+
+**What it buys**
+
+- **Semantic search of the library** — "moody city at night", "warm minimal
+  desert", with no tags. Wallhaven's tag search cannot do this.
+- **True similar-to-this** — nearest neighbours by embedding beat tag overlap,
+  especially for style ("this exact grain and fog").
+- **Near-duplicate detection** — the same wallpaper at different resolutions, or
+  reposts. Cheap and immediately useful.
+- **Auto-collections** — cluster the library and propose collections ("42 images
+  cluster as dark forest"), which fills the Collections work above without
+  manual sorting.
+- **Taste-aware rotation** — embed favourites, rank browse results by distance to
+  that centroid. A "more like what I actually set" sort.
+- **Contextual rotation** — pick wallpapers near a text prompt: "calm, low
+  contrast" during work hours, "vivid" at the weekend.
+
+**How to build it on macOS**
+
+- `VNGenerateImageFeaturePrintRequest` gives similarity and dedupe with **no
+  model to ship** — but no text search.
+- Text→image needs a CLIP-class model converted to Core ML (~150–350 MB; the
+  image encoder runs on the Neural Engine, roughly 10–30 ms per thumbnail).
+  Text queries embed instantly.
+- Storage: 512–768 floats per image. At a few thousand wallpapers a flat cosine
+  scan in memory beats any index — **no vector database.** Persist as a BLOB in
+  `wallsetter-db`, keyed by wallpaper id; embed on download, lazily for browsed
+  thumbnails. Quantise to int8 if the library grows: 10k × 512 int8 is 5 MB.
+
+**Cost** — app size, a one-time model download, an embedding backfill pass, and a
+second search mode in the UI that has to be explained.
+
+**Sequencing.** Ship feature-print similarity and dedupe first: no model, no
+download, and it covers dedupe, similar-to-this and auto-collections. Add CLIP
+text search after, once there is evidence the library is large enough to want it.
+
+The two interesting screens, when this gets designed: a semantic search field
+with a similarity slider, and an auto-collections review sheet where proposed
+clusters are accepted or rejected.
+
+---
+
+## Not planned
+
+- **Windows and Linux front ends.** The Rust core is portable and the CLI still
+  builds everywhere, but `apps/Lumen` is AppKit-bound by design — per-display
+  and per-Space wallpapers have no cross-platform equivalent worth abstracting.
+- **Uploading to Wallhaven.** Out of scope for a browser and setter.
+- **A general image editor.** Crop-to-fit is deliberately the only editing
+  surface.
+
+---
+
+## Retiring the iced front end
+
+`src/` still holds the iced app and still compiles. It is not built into the
+bundle and has no path to one. Delete it once Lumen has run for a couple of
+weeks without a reason to fall back — at that point `Cargo.toml`'s root
+`[package]` and its `iced` dependency go with it.
