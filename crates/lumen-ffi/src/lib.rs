@@ -775,6 +775,70 @@ pub unsafe extern "C" fn lumen_collection_set_member(json: *const c_char) -> *mu
     }
 }
 
+// ── wallpaper history ─────────────────────────────────────────────────────
+
+/// Records what was just set, so it can be listed and undone.
+///
+/// `json`: `{ "wallpaperId": String?, "path": String, "label": String }`
+///
+/// # Safety
+/// `json` must be NUL-terminated UTF-8, or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn lumen_history_record(json: *const c_char) -> *mut c_char {
+    let raw = unsafe { str_from(json) };
+    let Some(core) = core() else {
+        return to_c(err_json("history", "core not initialised"));
+    };
+    let value: serde_json::Value = serde_json::from_str(&raw).unwrap_or(serde_json::Value::Null);
+    let path = value["path"].as_str().unwrap_or_default();
+    if path.is_empty() {
+        return to_c(err_json("history", "path is required"));
+    }
+    let label = value["label"].as_str().unwrap_or(path);
+    let wallpaper_id = value["wallpaperId"].as_str();
+
+    match core.db.record_wallpaper(wallpaper_id, path, label) {
+        Ok(()) => to_c(serde_json::json!({ "ok": true, "kind": "history" }).to_string()),
+        Err(e) => to_c(err_json("history", e)),
+    }
+}
+
+/// What has been on the desktop, most recent first.
+/// Caller frees with [`lumen_string_free`].
+#[unsafe(no_mangle)]
+pub extern "C" fn lumen_history(limit: u32) -> *mut c_char {
+    let Some(core) = core() else {
+        return to_c(err_json("history", "core not initialised"));
+    };
+    match core.db.wallpaper_history(limit.clamp(1, 200)) {
+        Ok(entries) => {
+            let list: Vec<HistoryEntryDto> = entries
+                .into_iter()
+                .map(|(wallpaper_id, path, label, set_at)| HistoryEntryDto {
+                    wallpaper_id,
+                    url: file_url(std::path::Path::new(&path)),
+                    label,
+                    set_at,
+                })
+                .collect();
+            to_c(serde_json::to_string(&Envelope::ok("history", list)).unwrap_or_default())
+        }
+        Err(e) => to_c(err_json("history", e)),
+    }
+}
+
+/// Drops the newest entry, so undo does not step back onto what is showing.
+#[unsafe(no_mangle)]
+pub extern "C" fn lumen_history_drop_latest() -> *mut c_char {
+    let Some(core) = core() else {
+        return to_c(err_json("history", "core not initialised"));
+    };
+    match core.db.drop_latest_history() {
+        Ok(()) => to_c(serde_json::json!({ "ok": true, "kind": "history" }).to_string()),
+        Err(e) => to_c(err_json("history", e)),
+    }
+}
+
 // ── imported folders ──────────────────────────────────────────────────────
 
 /// Extensions worth treating as a wallpaper. Deliberately narrow: the point is

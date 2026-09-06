@@ -29,9 +29,39 @@ struct ScheduleView: View {
                 HStack {
                     Button("Shuffle Now") { store.shuffleNow() }
                         .buttonStyle(.borderedProminent)
+                    Button("Undo Last Set") { store.undoWallpaper() }
+                        .disabled(!store.canUndoWallpaper)
                     Spacer()
                     if let current = store.current {
                         Text("Current: wallhaven-\(current.id)").font(.captionMono).foregroundStyle(.secondary)
+                    }
+                }
+            }
+
+            SwiftUI.Section("Recently Set") {
+                if store.history.isEmpty {
+                    Text("Nothing yet. Wallpapers you set are listed here.")
+                        .font(.system(size: 11.5)).foregroundStyle(.secondary)
+                } else {
+                    ForEach(store.history.prefix(12)) { entry in
+                        HStack(spacing: Tokens.s3) {
+                            CachedImage(url: entry.url) { image in
+                                image.resizable().scaledToFill()
+                            } placeholder: {
+                                Rectangle().fill(.quaternary)
+                            }
+                            .frame(width: 64, height: 40)
+                            .clipShape(.rect(cornerRadius: 6))
+
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(entry.label).font(.system(size: 12)).lineLimit(1)
+                                Text(entry.when)
+                                    .font(.caption2Mono).foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Button("Set Again") { store.restore(entry) }
+                                .controlSize(.small)
+                        }
                     }
                 }
             }

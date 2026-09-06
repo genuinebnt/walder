@@ -45,6 +45,11 @@ char *lumen_collection_create(const char *name);
 char *lumen_collection_delete(const char *id);
 char *lumen_collection_set_member(const char *json);
 
+// Wallpaper history
+char *lumen_history_record(const char *json);
+char *lumen_history(uint32_t limit);
+char *lumen_history_drop_latest(void);
+
 // Imported folders
 uint64_t lumen_library_import(const char *path);
 uint64_t lumen_library_rescan(void);

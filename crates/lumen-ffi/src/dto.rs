@@ -390,6 +390,17 @@ pub struct LocalWallpaperDto {
     pub is_favorite: bool,
 }
 
+/// One entry in the desktop's history.
+#[derive(Debug, Clone, Serialize)]
+pub struct HistoryEntryDto {
+    #[serde(rename = "wallpaperId")]
+    pub wallpaper_id: Option<String>,
+    pub url: String,
+    pub label: String,
+    #[serde(rename = "setAt")]
+    pub set_at: String,
+}
+
 /// Every callback payload is this envelope, so Swift decodes one shape.
 #[derive(Debug, Clone, Serialize)]
 pub struct Envelope<T: Serialize> {

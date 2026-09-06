@@ -49,6 +49,9 @@ struct LumenCommands: Commands {
                 .keyboardShortcut("r", modifiers: [.command, .shift])
             Button("Reload Results") { NotificationCenter.default.post(name: .lumenReload, object: nil) }
                 .keyboardShortcut("r")
+            Divider()
+            Button("Undo Last Set") { NotificationCenter.default.post(name: .lumenUndo, object: nil) }
+                .keyboardShortcut("z", modifiers: [.command, .shift])
         }
     }
 }
@@ -56,4 +59,5 @@ struct LumenCommands: Commands {
 extension Notification.Name {
     static let lumenShuffle = Notification.Name("lumen.shuffle")
     static let lumenReload = Notification.Name("lumen.reload")
+    static let lumenUndo = Notification.Name("lumen.undo")
 }

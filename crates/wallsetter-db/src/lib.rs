@@ -187,6 +187,20 @@ impl Database {
         )
         .map_err(|e| WallsetterError::Database(e.to_string()))?;
 
+        // What has actually been on the desktop, so "what was that one on
+        // Tuesday" has an answer and a set can be undone.
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS wallpaper_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                wallpaper_id TEXT,
+                local_path TEXT NOT NULL,
+                label TEXT NOT NULL,
+                set_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )",
+            [],
+        )
+        .map_err(|e| WallsetterError::Database(e.to_string()))?;
+
         // Indices for the columns the app actually filters and joins on.
         // Without them every favourite check is a full scan of bookmarks.
         conn.execute_batch(
@@ -213,7 +227,9 @@ impl Database {
              CREATE INDEX IF NOT EXISTS idx_imported_folder
                  ON imported_wallpapers(folder_id, added_at DESC);
              CREATE INDEX IF NOT EXISTS idx_imported_favorite
-                 ON imported_wallpapers(favorite);",
+                 ON imported_wallpapers(favorite);
+             CREATE INDEX IF NOT EXISTS idx_history_set_at
+                 ON wallpaper_history(set_at DESC);",
         )
         .map_err(|e| WallsetterError::Database(e.to_string()))?;
 
@@ -1383,6 +1399,103 @@ impl Database {
     }
 }
 
+impl Database {
+    // ──────────────────────────────────────────────
+    // Wallpaper history
+    // ──────────────────────────────────────────────
+
+    /// Records what was just set. Setting the same file twice in a row is not
+    /// recorded again, so undo steps to a genuinely different wallpaper.
+    pub fn record_wallpaper(
+        &self,
+        wallpaper_id: Option<&str>,
+        local_path: &str,
+        label: &str,
+    ) -> wallsetter_core::Result<()> {
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| WallsetterError::Database(e.to_string()))?;
+
+        let last: Option<String> = conn
+            .query_row(
+                "SELECT local_path FROM wallpaper_history ORDER BY id DESC LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|e| WallsetterError::Database(e.to_string()))?;
+        if last.as_deref() == Some(local_path) {
+            return Ok(());
+        }
+
+        conn.execute(
+            "INSERT INTO wallpaper_history (wallpaper_id, local_path, label)
+             VALUES (?1, ?2, ?3)",
+            (wallpaper_id, local_path, label),
+        )
+        .map_err(|e| WallsetterError::Database(e.to_string()))?;
+
+        // Keep it to a useful length rather than forever.
+        conn.execute(
+            "DELETE FROM wallpaper_history WHERE id NOT IN
+                (SELECT id FROM wallpaper_history ORDER BY id DESC LIMIT 200)",
+            [],
+        )
+        .map_err(|e| WallsetterError::Database(e.to_string()))?;
+        Ok(())
+    }
+
+    /// Most recent first: `(wallpaper_id, local_path, label, set_at)`.
+    pub fn wallpaper_history(
+        &self,
+        limit: u32,
+    ) -> wallsetter_core::Result<Vec<(Option<String>, String, String, String)>> {
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| WallsetterError::Database(e.to_string()))?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT wallpaper_id, local_path, label, set_at
+                 FROM wallpaper_history ORDER BY id DESC LIMIT ?1",
+            )
+            .map_err(|e| WallsetterError::Database(e.to_string()))?;
+        let rows = stmt
+            .query_map([limit], |row| {
+                Ok((
+                    row.get::<_, Option<String>>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                ))
+            })
+            .map_err(|e| WallsetterError::Database(e.to_string()))?;
+
+        let mut history = Vec::new();
+        for row in rows {
+            history.push(row.map_err(|e| WallsetterError::Database(e.to_string()))?);
+        }
+        Ok(history)
+    }
+
+    /// Drops the most recent entry, so undo does not walk back onto itself.
+    pub fn drop_latest_history(&self) -> wallsetter_core::Result<()> {
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| WallsetterError::Database(e.to_string()))?;
+        conn.execute(
+            "DELETE FROM wallpaper_history WHERE id = (
+                SELECT id FROM wallpaper_history ORDER BY id DESC LIMIT 1
+            )",
+            [],
+        )
+        .map_err(|e| WallsetterError::Database(e.to_string()))?;
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1636,6 +1749,44 @@ mod tests {
         assert!(db.imported_folders().expect("list").is_empty());
         // The cascade only works because foreign keys are enforced.
         assert!(db.imported_wallpapers(None, false).expect("read").is_empty());
+    }
+
+    #[test]
+    fn history_records_in_order_and_ignores_a_repeat() {
+        let (db, _dir) = temp_db();
+        db.record_wallpaper(Some("a"), "/tmp/a.jpg", "a").expect("record");
+        db.record_wallpaper(Some("b"), "/tmp/b.jpg", "b").expect("record");
+        // Setting the same file again must not create a step to undo through.
+        db.record_wallpaper(Some("b"), "/tmp/b.jpg", "b").expect("record");
+
+        let history = db.wallpaper_history(10).expect("read");
+        assert_eq!(history.len(), 2);
+        assert_eq!(history[0].1, "/tmp/b.jpg", "newest first");
+        assert_eq!(history[1].1, "/tmp/a.jpg");
+    }
+
+    #[test]
+    fn dropping_the_latest_steps_back_one() {
+        let (db, _dir) = temp_db();
+        for name in ["a", "b", "c"] {
+            db.record_wallpaper(Some(name), &format!("/tmp/{name}.jpg"), name)
+                .expect("record");
+        }
+        db.drop_latest_history().expect("drop");
+        let history = db.wallpaper_history(10).expect("read");
+        assert_eq!(history.len(), 2);
+        assert_eq!(history[0].1, "/tmp/b.jpg");
+    }
+
+    #[test]
+    fn history_is_bounded() {
+        let (db, _dir) = temp_db();
+        for index in 0..250 {
+            db.record_wallpaper(None, &format!("/tmp/{index}.jpg"), "x")
+                .expect("record");
+        }
+        // Trimmed on write, so it cannot grow without limit.
+        assert!(db.wallpaper_history(500).expect("read").len() <= 200);
     }
 }
 

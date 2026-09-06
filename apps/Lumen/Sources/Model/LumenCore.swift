@@ -129,6 +129,22 @@ final class LumenCore: @unchecked Sendable {
         Set(decodeSync([String].self, Self.takeString(lumen_downloaded_ids())) ?? [])
     }
 
+    // MARK: History
+
+    func recordHistory(wallpaperID: String?, path: String, label: String) {
+        var payload: [String: Any] = ["path": path, "label": label]
+        if let wallpaperID { payload["wallpaperId"] = wallpaperID }
+        _ = Self.takeString(lumen_history_record(Self.json(payload)))
+    }
+
+    func history(limit: Int = 40) -> [HistoryEntry] {
+        decodeSync([HistoryEntry].self, Self.takeString(lumen_history(UInt32(limit)))) ?? []
+    }
+
+    func dropLatestHistory() {
+        _ = Self.takeString(lumen_history_drop_latest())
+    }
+
     // MARK: Imported folders
 
     /// Scanning can take a moment on a large folder, so this is async.

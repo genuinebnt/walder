@@ -87,6 +87,9 @@ struct RootView: View {
         .onReceive(NotificationCenter.default.publisher(for: .lumenReload)) { _ in
             Task { await store.search() }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .lumenUndo)) { _ in
+            store.undoWallpaper()
+        }
         .onChange(of: section) { _, new in
             // Picking a sidebar item means leaving whatever was in focus, and
             // a selection made against a list you can no longer see.

@@ -173,6 +173,7 @@ final class Store {
         reloadCollections()
         refreshDownloadedIDs()
         reloadLibrary()
+        reloadHistory()
         rearmRotation()
     }
 
@@ -190,8 +191,10 @@ final class Store {
         // to what the grid marks as already held.
         for task in tasks where task.state == .done {
             guard let local = task.localFile else { continue }
+            let isNew = !downloadedIDs.contains(task.wallpaperId)
             attachLocalFile(local, to: task.wallpaperId)
             downloadedIDs.insert(task.wallpaperId)
+            if isNew { Task { await tagOnDisk(task.wallpaperId, at: local) } }
         }
     }
 
@@ -214,6 +217,25 @@ final class Store {
 
     /// True when this wallpaper is already in the download directory.
     func isDownloaded(_ wallpaper: Wallpaper) -> Bool { downloadedIDs.contains(wallpaper.id) }
+
+    /// Writes the wallpaper's tags and origin into the file, so Spotlight and
+    /// Finder can find it without Lumen running.
+    ///
+    /// Tags only come from the detail endpoint, so a wallpaper downloaded
+    /// straight from search results has none yet and is asked for here.
+    @MainActor
+    private func tagOnDisk(_ wallpaperId: String, at file: URL) async {
+        guard var wallpaper = known[wallpaperId] else { return }
+        if wallpaper.tags.isEmpty,
+           let detailed = try? await LumenCore.shared.details(id: wallpaperId) {
+            wallpaper.tags = detailed.tags
+            known[wallpaperId] = wallpaper
+        }
+        WallpaperMetadata.write(tags: wallpaper.tags,
+                                source: wallpaper.path,
+                                pageURL: wallpaper.url,
+                                to: file)
+    }
 
     /// The wallpaper behind a download row, if the session has seen it.
     func wallpaper(for task: DownloadTask) -> Wallpaper? { known[task.wallpaperId] }
@@ -425,6 +447,7 @@ final class Store {
                 // "All Spaces" additionally rewrites the system store, and
                 // falls back to the single-Space result if that is refused.
                 try WallpaperSetter.apply(fileURL: local, to: screen, fit: fit)
+                recordHistory(local, id: wallpaper.id, label: "wallhaven-\(wallpaper.id)")
 
                 // Sending to one display is a per-display choice, so it stays
                 // on the current Space regardless of the default scope.
@@ -504,6 +527,76 @@ final class Store {
         Task {
             try? await Task.sleep(for: .seconds(2.5))
             withAnimation(Tokens.normal) { savedConfirmation = false }
+        }
+    }
+
+    // MARK: History
+    //
+    // What has actually been on the desktop, so a wallpaper set an hour ago
+    // can be found again and the last set can be undone.
+
+    var history: [HistoryEntry] = []
+
+    @MainActor
+    func reloadHistory() {
+        guard coreReady else { return }
+        history = LumenCore.shared.history()
+    }
+
+    /// Called after every successful set.
+    @MainActor
+    private func recordHistory(_ file: URL, id: String?, label: String) {
+        LumenCore.shared.recordHistory(wallpaperID: id,
+                                       path: file.path(percentEncoded: false),
+                                       label: label)
+        reloadHistory()
+    }
+
+    /// True when there is something to go back to.
+    var canUndoWallpaper: Bool { history.count > 1 }
+
+    /// Puts back whatever was on the desktop before the current one.
+    @MainActor
+    func undoWallpaper() {
+        guard history.count > 1 else { return }
+        let previous = history[1]
+        guard FileManager.default.fileExists(atPath: previous.url.path) else {
+            errorMessage = "\(previous.label) is no longer on disk."
+            LumenCore.shared.dropLatestHistory()
+            reloadHistory()
+            return
+        }
+        do {
+            try WallpaperSetter.apply(fileURL: previous.url, to: nil, fit: .fill)
+            if wallpaperScope == .allSpaces {
+                try? SpacesWallpaper.applyEverywhere(fileURL: previous.url)
+            }
+            // Drop the entry we just stepped off, so undo keeps walking back
+            // rather than flipping between two wallpapers.
+            LumenCore.shared.dropLatestHistory()
+            reloadHistory()
+            if let id = previous.wallpaperId { current = known[id] }
+            errorMessage = nil
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    /// Sets a wallpaper straight from the history list.
+    @MainActor
+    func restore(_ entry: HistoryEntry) {
+        guard FileManager.default.fileExists(atPath: entry.url.path) else {
+            errorMessage = "\(entry.label) is no longer on disk."
+            return
+        }
+        do {
+            try WallpaperSetter.apply(fileURL: entry.url, to: nil, fit: .fill)
+            if wallpaperScope == .allSpaces {
+                try? SpacesWallpaper.applyEverywhere(fileURL: entry.url)
+            }
+            recordHistory(entry.url, id: entry.wallpaperId, label: entry.label)
+        } catch {
+            errorMessage = error.localizedDescription
         }
     }
 
@@ -607,6 +700,7 @@ final class Store {
         do {
             try WallpaperSetter.apply(fileURL: wallpaper.url, to: screen,
                                       fit: display?.fit ?? .fill)
+            recordHistory(wallpaper.url, id: nil, label: wallpaper.filename)
             if wallpaperScope == .allSpaces, display == nil {
                 try? SpacesWallpaper.applyEverywhere(fileURL: wallpaper.url)
             }
@@ -882,6 +976,7 @@ final class Store {
                     }
                 }
                 try WallpaperSetter.apply(fileURL: fitted, to: screen, fit: .fill)
+                recordHistory(fitted, id: wallpaper.id, label: "wallhaven-\(wallpaper.id) (fitted)")
                 if wallpaperScope == .allSpaces, display == nil {
                     try? SpacesWallpaper.applyEverywhere(fileURL: fitted)
                 }

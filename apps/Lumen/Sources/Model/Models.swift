@@ -403,6 +403,27 @@ struct LocalWallpaper: Identifiable, Hashable, Decodable {
     }
 }
 
+/// One wallpaper that has actually been on the desktop.
+struct HistoryEntry: Identifiable, Hashable, Decodable {
+    let wallpaperId: String?
+    let url: URL
+    let label: String
+    let setAt: String
+
+    var id: String { "\(setAt)|\(url.path)" }
+
+    /// "Sun 6 Sep, 11:22 pm" from SQLite's own timestamp format.
+    var when: String {
+        let parser = DateFormatter()
+        parser.dateFormat = "yyyy-MM-dd HH:mm:ss"
+        parser.timeZone = TimeZone(identifier: "UTC")
+        guard let date = parser.date(from: setAt) else { return setAt }
+        let display = DateFormatter()
+        display.dateFormat = "EEE d MMM, h:mm a"
+        return display.string(from: date)
+    }
+}
+
 /// Where a set applies. macOS gives each Space its own desktop picture, and
 /// `NSWorkspace` only ever writes the one you are looking at.
 enum WallpaperScope: String, Codable, CaseIterable, Identifiable {

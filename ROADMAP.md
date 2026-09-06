@@ -56,6 +56,10 @@ The SwiftUI rewrite closed most of the original list.
 - **Menu bar legibility** check, and **light/dark wallpaper pairing**.
 - **Imported folders** — point Lumen at folders you already keep wallpapers in,
   browse, favourite and set them. Favourites survive a rescan.
+- **Spotlight metadata** — a download's tags and origin are written into the
+  file, so Finder finds it by tag and Get Info shows where it came from.
+- **Wallpaper history** with undo — what has been on the desktop, set again
+  from the list, or step back with ⇧⌘Z.
 
 Backend hardening in the same pass: WAL and enforced foreign keys, indices on
 every filtered column, a joined favourites read instead of a query per row, a
@@ -66,8 +70,6 @@ lookups.
 
 ## Still open from the original list
 
-- **Downloaded wallpapers searchable by tag** — needs tags written to disk
-  alongside the file, which the Spotlight item below also wants.
 - **Back / forward** through panes. Scroll position is kept per pane now, but
   there is no history to step through.
 - **Author stats on the author pane** — uploads, favourites received. The API
@@ -81,11 +83,7 @@ Small, self-contained, no new dependencies.
 
 | Feature | Notes |
 | --- | --- |
-| **Duplicate detection** | Grey out results already on disk. Hash-based; the download history table already keys by wallpaper id, so the first cut is a join. |
 | **Bulk resolution rule** | Auto-skip anything below the largest connected display's native resolution. `NSScreen` already reports it in `WallpaperSetter.connectedDisplays()`. |
-| **Rotation history with undo** | "What was on my desktop last Tuesday", and a one-key revert. Needs a small table and a menu command; the recents list is already tracked in memory. |
-| **Similar to this** | From any wallpaper, search its tags plus dominant colour in one click. Wallhaven returns the palette, so no new model is needed. |
-| **Drag a tile to Finder** | `onDrag` with a file promise. Free once a wallpaper has a local file, which `ensureLocal` already guarantees. |
 
 ## Phase 2 — the distinctive ones
 
@@ -94,12 +92,9 @@ These are what would separate Lumen from every other Wallhaven downloader.
 | Feature | Why it stands out | Cost |
 | --- | --- | --- |
 | **Palette match** | Extract dominant colours and offer to set the system accent and highlight to match. Wallhaven returns each image's palette, so this is nearly free. | Low — the colours are already in `Wallpaper.colors`. Writing the accent needs a `defaults` write plus a distributed notification; unsupported API, so it needs a fallback. |
-| **Per-Space wallpapers** | macOS supports a different desktop per Space and almost nothing exposes it. Assign a collection to Space 3 and rotate only there. | High — no public API. Requires writing to the desktop picture database and a private CoreGraphics Space id. Fragile across releases; needs a version guard. |
-| **Dark-mode pairs** | Bind two wallpapers together and switch with the system appearance at sunrise/sunset. | Low — `NSApp.effectiveAppearance` KVO plus a pair table. |
-| **Menu-bar contrast guard** | Check luminance in the top strip of a candidate and warn when the menu bar will be illegible. | Low — sample the top 24pt of the decoded image; pure Core Graphics. |
+| **Per-Space wallpapers, individually** | "All Spaces" ships, but assigning a *different* wallpaper to each Space does not. The store models it; the missing piece is knowing which Space is which. | Medium now the store's shape is understood. |
 | **Crop to fit my display** | A pan/zoom pass before setting, so a 21:9 image is not centre-cropped badly on a 16:10 screen. Save the crop with the wallpaper. | Medium — a real editor surface, plus storing the crop rect per wallpaper per display. |
 | **Tag radar** | Subscribe to a tag or uploader; a Notification Center alert when new matches cross a favourite threshold. | Medium — needs background polling. `wallsetter-scheduler` already exists to host it. |
-| **Quick Look + Spotlight** | Write tags into file metadata so downloads are searchable in Finder. | Low — extended attributes on the downloaded file. Also unblocks "downloaded wallpapers searchable by tag" above. |
 | **Shortcuts actions** | "Set random wallpaper from Favorites", and a Focus-mode trigger. | Medium — App Intents, which needs the app to expose an intent extension. |
 | **Live preview on the desktop** | Set on hover, revert on Escape. | Low mechanically, but it writes the real desktop picture — needs a reliable revert path or it strands the user's wallpaper. |
 

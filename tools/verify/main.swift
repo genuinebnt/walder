@@ -589,10 +589,13 @@ func run() async -> Int32 {
         var probe = SearchFilters()
         probe.query = "like:\(sample.id)"
         probe.sorting = .relevance
-        guard let page = try? await LumenCore.shared.search(probe, page: 1) else {
-            return (false, store.errorMessage)
+        do {
+            let page = try await LumenCore.shared.search(probe, page: 1)
+            return (!page.wallpapers.isEmpty, nil)
+        } catch {
+            // Report the error so an upstream outage skips rather than fails.
+            return (false, error.localizedDescription)
         }
-        return (!page.wallpapers.isEmpty, nil)
     }
     v.check("File type reaches the query as type:") {
         var filters = SearchFilters()
@@ -661,6 +664,94 @@ func run() async -> Int32 {
         store.downloadSelected(from: store.wallpapers)
         store.setSelecting(false)
         return store.downloads.count == before
+    }
+
+    v.section("Spotlight metadata")
+    v.check("Tags and origin are written where Finder and Spotlight read them") {
+        let url = FileManager.default.temporaryDirectory
+            .appending(path: "lumen-verify-meta-\(UUID().uuidString).png")
+        defer { try? FileManager.default.removeItem(at: url) }
+        guard let rep = NSBitmapImageRep(
+            bitmapDataPlanes: nil, pixelsWide: 8, pixelsHigh: 8,
+            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+            colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0),
+              let png = rep.representation(using: .png, properties: [:]),
+              (try? png.write(to: url)) != nil else { return false }
+
+        let wrote = WallpaperMetadata.write(
+            tags: ["forest", "mist"],
+            source: URL(string: "https://w.wallhaven.cc/full/ab/wallhaven-abc.jpg"),
+            pageURL: URL(string: "https://wallhaven.cc/w/abc"),
+            to: url)
+        // Read back rather than trusting the write call.
+        return wrote
+            && WallpaperMetadata.keywords(of: url) == ["forest", "mist"]
+            && WallpaperMetadata.whereFroms(of: url).contains("https://wallhaven.cc/w/abc")
+    }
+    v.check("A missing file is declined rather than half-written") {
+        WallpaperMetadata.write(
+            tags: ["x"], source: nil, pageURL: nil,
+            to: URL(filePath: "/tmp/not-here-\(UUID().uuidString).png")) == false
+    }
+
+    v.section("Wallpaper history")
+    await v.checkAsync("Setting a wallpaper records it, and undo puts the last one back") {
+        // Two local files, so this does not depend on the network.
+        func makeFile(_ name: String) -> URL? {
+            let url = FileManager.default.temporaryDirectory
+                .appending(path: "lumen-verify-\(name)-\(UUID().uuidString).png")
+            guard let rep = NSBitmapImageRep(
+                bitmapDataPlanes: nil, pixelsWide: 16, pixelsHigh: 10,
+                bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0),
+                  let png = rep.representation(using: .png, properties: [:]),
+                  (try? png.write(to: url)) != nil else { return nil }
+            return url
+        }
+        guard let first = makeFile("one"), let second = makeFile("two") else { return false }
+        defer {
+            try? FileManager.default.removeItem(at: first)
+            try? FileManager.default.removeItem(at: second)
+        }
+
+        let scope = store.wallpaperScope
+        store.wallpaperScope = .thisSpace          // do not rewrite every Space
+        defer { store.wallpaperScope = scope }
+
+        let one = LocalWallpaper(id: "1", folderId: "f", url: first, path: first.path,
+                                 filename: first.lastPathComponent, fileSize: 1, isFavorite: false)
+        let two = LocalWallpaper(id: "2", folderId: "f", url: second, path: second.path,
+                                 filename: second.lastPathComponent, fileSize: 1, isFavorite: false)
+        store.setLocalWallpaper(one)
+        store.setLocalWallpaper(two)
+
+        let recorded = store.history.first?.label == two.filename
+            && store.history.dropFirst().first?.label == one.filename
+        guard recorded, store.canUndoWallpaper else {
+            print("        history: \(store.history.prefix(3).map(\.label))")
+            return false
+        }
+
+        store.undoWallpaper()
+        // Undo steps off the entry it left, so the newest is now the older one.
+        let steppedBack = store.history.first?.label == one.filename
+        if !steppedBack { print("        after undo: \(store.history.prefix(3).map(\.label))") }
+        return steppedBack
+    }
+    v.check("Restoring something that has been deleted says so") {
+        let entry = HistoryEntry(
+            wallpaperId: nil,
+            url: URL(filePath: "/tmp/gone-\(UUID().uuidString).png"),
+            label: "gone.png", setAt: "2026-09-07 00:00:00")
+        store.errorMessage = nil
+        store.restore(entry)
+        return store.errorMessage?.contains("no longer on disk") == true
+    }
+    v.check("A history timestamp reads as a date, not a raw string") {
+        let entry = HistoryEntry(wallpaperId: nil, url: URL(filePath: "/tmp/x.png"),
+                                 label: "x", setAt: "2026-09-07 14:30:00")
+        // Asserting on the minutes would depend on the machine's timezone.
+        return entry.when != entry.setAt && entry.when.contains("Sep")
     }
 
     v.section("Imported folders")
@@ -1194,18 +1285,21 @@ func run() async -> Int32 {
             v.check("Color(hex:) tolerates a leading #") {
                 Color(hex: "#424153") == Color(hex: "424153")
             }
-            await v.checkAsync("The detail endpoint fills in the uploader") {
+            await v.checkAPIAsync("The detail endpoint fills in the uploader") {
+                () -> (Bool, String?) in
                 // /search omits uploader entirely, so the preview has to ask.
                 // Some uploads are anonymous, so try a few before concluding
                 // the field never arrives.
+                var lastError: String?
                 for candidate in store.wallpapers.prefix(4) {
-                    if let detailed = try? await LumenCore.shared.details(id: candidate.id),
-                       detailed.uploader != nil {
-                        return true
+                    do {
+                        let detailed = try await LumenCore.shared.details(id: candidate.id)
+                        if detailed.uploader != nil { return (true, nil) }
+                    } catch {
+                        lastError = error.localizedDescription
                     }
                 }
-                print("        no uploader on the first four wallpapers")
-                return false
+                return (false, lastError)
             }
             v.check("Clear Finished empties completed rows") {
                 store.clearFinished()
