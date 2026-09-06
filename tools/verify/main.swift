@@ -603,6 +603,37 @@ func run() async -> Int32 {
         return true
     }
 
+    v.section("Preview mode")
+    v.check("Zoom survives stepping to the next image") {
+        // The pane used to reset zoom on every step, dropping you out of
+        // full-bleed each time you pressed the right arrow.
+        store.previewZoomed = false
+        store.togglePreviewZoom()
+        guard store.previewZoomed else { return false }
+        guard store.wallpapers.count >= 2 else { return true }
+        var pane = PreviewPane(items: store.wallpapers, selected: store.wallpapers[0]) { }
+        pane.stepForVerification(1)
+        return store.previewZoomed
+    }
+    v.check("Hiding the inspector survives a step too") {
+        store.previewShowsInspector = true
+        store.togglePreviewInspector()
+        guard !store.previewShowsInspector else { return false }
+        guard store.wallpapers.count >= 2 else { return true }
+        var pane = PreviewPane(items: store.wallpapers, selected: store.wallpapers[0]) { }
+        pane.stepForVerification(1)
+        let kept = !store.previewShowsInspector
+        store.togglePreviewInspector()
+        return kept
+    }
+    v.check("Both modes toggle back") {
+        let zoom = store.previewZoomed
+        store.togglePreviewZoom()
+        let flipped = store.previewZoomed != zoom
+        store.togglePreviewZoom()
+        return flipped && store.previewZoomed == zoom
+    }
+
     v.section("Selection and bulk actions")
     v.check("Select mode toggles and clears on exit") {
         store.setSelecting(true)

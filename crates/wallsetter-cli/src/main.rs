@@ -102,7 +102,7 @@ async fn main() -> anyhow::Result<()> {
     let db = Arc::new(Database::new(&db_path)?);
     let prefs = db.get_preferences()?;
 
-    let mut provider = WallhavenClient::new(prefs.api_key.clone());
+    let provider = WallhavenClient::new(prefs.api_key.clone());
     let downloader = DownloadManager::new(prefs.max_parallel_downloads as usize);
     let setter = DesktopWallpaperSetter::new();
 

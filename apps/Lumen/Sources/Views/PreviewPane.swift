@@ -20,8 +20,6 @@ struct PreviewPane: View {
     let opened: Wallpaper
 
     @State private var index: Int
-    @State private var showInspector = true
-    @State private var zoomed = false
     /// Briefly true after a set, so the button can confirm without the pane
     /// closing out from under you.
     @State private var justSet = false
@@ -54,7 +52,7 @@ struct PreviewPane: View {
     var body: some View {
         HStack(spacing: 0) {
             preview
-            if showInspector {
+            if store.previewShowsInspector {
                 Divider()
                 inspector
                     .transition(.move(edge: .trailing).combined(with: .opacity))
@@ -62,7 +60,7 @@ struct PreviewPane: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(.background)
-        .animation(Tokens.normal, value: showInspector)
+        .animation(Tokens.normal, value: store.previewShowsInspector)
         // As an overlay rather than a sheet, this has to ask for key focus.
         .focusable()
         .focusEffectDisabled()
@@ -73,7 +71,7 @@ struct PreviewPane: View {
         .onKeyPress(.rightArrow) { step(1); return .handled }
         .onKeyPress(.escape) { close(); return .handled }
         .onKeyPress(.space) {
-            withAnimation(Tokens.normal) { zoomed.toggle() }
+            store.togglePreviewZoom()
             return .handled
         }
         .task(id: wallpaper.id) {
@@ -92,13 +90,15 @@ struct PreviewPane: View {
 
     // MARK: Navigation
 
+    /// Drives the same stepping the arrow keys do, for the verify harness.
+    func stepForVerification(_ delta: Int) { step(delta) }
+
     private func step(_ delta: Int) {
         let next = index + delta
         guard items.indices.contains(next) else { return }
-        withAnimation(Tokens.quick) {
-            index = next
-            zoomed = false
-        }
+        // Deliberately leaves the zoom alone: stepping through images in
+        // full-bleed used to drop back to the fitted view every time.
+        withAnimation(Tokens.quick) { index = next }
     }
 
     /// What the preview is actually showing.
@@ -124,7 +124,7 @@ struct PreviewPane: View {
             CachedImage(url: currentSource, maxPixels: ImageDetail.preview) { image in
                 image
                     .resizable()
-                    .aspectRatio(contentMode: zoomed ? .fill : .fit)
+                    .aspectRatio(contentMode: store.previewZoomed ? .fill : .fit)
                     .transition(.opacity)
             } placeholder: {
                 ProgressView().controlSize(.large)
@@ -143,7 +143,7 @@ struct PreviewPane: View {
         // it spills under the inspector.
         .clipped()
         .contentShape(.rect)
-        .onTapGesture { withAnimation(Tokens.normal) { zoomed.toggle() } }
+        .onTapGesture { store.togglePreviewZoom() }
     }
 
     private var overlayChrome: some View {
@@ -169,9 +169,10 @@ struct PreviewPane: View {
                     .padding(.horizontal, 9).padding(.vertical, 4)
                     .background(.black.opacity(0.5), in: .rect(cornerRadius: 7))
                 Button {
-                    withAnimation(Tokens.normal) { showInspector.toggle() }
+                    store.togglePreviewInspector()
                 } label: {
-                    Image(systemName: showInspector ? "sidebar.trailing" : "sidebar.leading")
+                    Image(systemName: store.previewShowsInspector
+                          ? "sidebar.trailing" : "sidebar.leading")
                         .frame(width: 26, height: 26)
                         .background(.black.opacity(0.5), in: .circle)
                 }

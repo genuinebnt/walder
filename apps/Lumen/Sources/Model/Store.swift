@@ -484,6 +484,27 @@ final class Store {
         }
     }
 
+    // MARK: Preview mode
+    //
+    // Session state, not view state: SwiftUI re-creates the preview whenever
+    // the browsed list changes, and stepping to the next image used to drop
+    // you out of full-bleed back to the fitted view.
+
+    /// Image fills the pane and is cropped, rather than being letterboxed.
+    var previewZoomed = false
+    /// Inspector column is showing.
+    var previewShowsInspector = true
+
+    @MainActor
+    func togglePreviewZoom() {
+        withAnimation(Tokens.normal) { previewZoomed.toggle() }
+    }
+
+    @MainActor
+    func togglePreviewInspector() {
+        withAnimation(Tokens.normal) { previewShowsInspector.toggle() }
+    }
+
     // MARK: Selection
     //
     // Bulk actions run through the core in one transaction rather than a call
