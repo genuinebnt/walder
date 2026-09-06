@@ -78,7 +78,7 @@ struct BrowseView: View {
 
     private func open(_ wallpaper: Wallpaper) {
         withAnimation(Tokens.normal) { selection = wallpaper }
-        Task { await store.loadTags(for: wallpaper) }
+        Task { await store.loadDetails(for: wallpaper) }
     }
 
     /// Decodes the next screenful while the user is still looking at this one.

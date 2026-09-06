@@ -84,9 +84,16 @@ struct Chip: View {
 }
 
 extension Color {
+    /// Accepts "424153" or "#424153". Wallhaven sends the second form, and
+    /// `scanHexInt64` stops dead on the "#", which rendered every swatch black.
     init(hex: String) {
+        let cleaned = hex.trimmingCharacters(in: .whitespaces)
+            .trimmingPrefix("#")
         var value: UInt64 = 0
-        Scanner(string: hex).scanHexInt64(&value)
+        guard Scanner(string: String(cleaned)).scanHexInt64(&value) else {
+            self = .clear
+            return
+        }
         self.init(red: Double((value >> 16) & 0xFF) / 255,
                   green: Double((value >> 8) & 0xFF) / 255,
                   blue: Double(value & 0xFF) / 255)

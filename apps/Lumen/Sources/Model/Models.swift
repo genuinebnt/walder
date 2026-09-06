@@ -44,11 +44,12 @@ enum Category: String, Codable, CaseIterable, Identifiable {
 }
 
 enum Sorting: String, Codable, CaseIterable, Identifiable {
-    case toplist, dateAdded = "date_added", views, favorites, random, relevance
+    case toplist, hot, dateAdded = "date_added", views, favorites, random, relevance
     var id: String { rawValue }
     var label: String {
         switch self {
         case .toplist: "Top"
+        case .hot: "Hot"
         case .dateAdded: "Latest"
         case .views: "Views"
         case .favorites: "Favorites"
@@ -77,8 +78,12 @@ struct SearchFilters: Equatable, Codable {
     var topRange = "1M"
     var mode: ResolutionMode = .atLeast
     var resolution = "1920x1080"
+    /// Exact mode accepts several resolutions; At Least takes one.
+    var exactResolutions: Set<String> = []
     var ratios: Set<String> = []
     var color: String?
+    /// nil leaves AI art alone, false hides it, true shows only it.
+    var aiArt: Bool?
 
     static let ratioOptions = ["16x9", "16x10", "21x9", "4x3", "1x1", "9x16", "10x16"]
     static let resolutionOptions = ["1920x1080", "2560x1440", "3440x1440",
@@ -93,7 +98,33 @@ struct SearchFilters: Equatable, Codable {
                                "000000", "999999", "cccccc", "ffffff", "424153"]
 
     private enum CodingKeys: String, CodingKey {
-        case query, categories, purity, sorting, ascending, topRange, mode, resolution, ratios, color
+        case query, categories, purity, sorting, ascending, topRange, mode
+        case resolution, exactResolutions, ratios, color, aiArt
+    }
+
+    init() {}
+
+    /// Every field is optional on the way in. The synthesised decoder throws
+    /// when a key is missing, so adding one field would silently discard a
+    /// user's saved filters on their next launch.
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let fallback = SearchFilters()
+        query = try container.decodeIfPresent(String.self, forKey: .query) ?? fallback.query
+        categories = try container.decodeIfPresent(Set<Category>.self, forKey: .categories)
+            ?? fallback.categories
+        purity = try container.decodeIfPresent(Set<Purity>.self, forKey: .purity) ?? fallback.purity
+        sorting = try container.decodeIfPresent(Sorting.self, forKey: .sorting) ?? fallback.sorting
+        ascending = try container.decodeIfPresent(Bool.self, forKey: .ascending) ?? fallback.ascending
+        topRange = try container.decodeIfPresent(String.self, forKey: .topRange) ?? fallback.topRange
+        mode = try container.decodeIfPresent(ResolutionMode.self, forKey: .mode) ?? fallback.mode
+        resolution = try container.decodeIfPresent(String.self, forKey: .resolution)
+            ?? fallback.resolution
+        exactResolutions = try container.decodeIfPresent(Set<String>.self, forKey: .exactResolutions)
+            ?? fallback.exactResolutions
+        ratios = try container.decodeIfPresent(Set<String>.self, forKey: .ratios) ?? fallback.ratios
+        color = try container.decodeIfPresent(String.self, forKey: .color)
+        aiArt = try container.decodeIfPresent(Bool.self, forKey: .aiArt)
     }
 
     var activeCount: Int {
@@ -102,8 +133,10 @@ struct SearchFilters: Equatable, Codable {
         if purity != [.sfw] { n += 1 }
         if mode != .atLeast { n += 1 }
         if resolution != "1920x1080" { n += 1 }
+        n += exactResolutions.isEmpty ? 0 : 1
         n += ratios.isEmpty ? 0 : 1
         n += color == nil ? 0 : 1
+        n += aiArt == nil ? 0 : 1
         return n
     }
 
@@ -117,10 +150,12 @@ struct SearchFilters: Equatable, Codable {
             "topRange": topRange,
             "mode": mode.rawValue,
             "resolution": resolution,
+            "exactResolutions": exactResolutions.sorted(),
             "ratios": ratios.sorted(),
             "page": page
         ]
         if let color { payload["color"] = color }
+        if let aiArt { payload["aiArt"] = aiArt }
         if let seed, !seed.isEmpty { payload["seed"] = seed }
         return payload
     }

@@ -45,9 +45,36 @@ struct FiltersPopover: View {
                         ForEach(ResolutionMode.allCases) { Text($0.label).tag($0) }
                     }
                     .pickerStyle(.segmented).labelsHidden()
-                    ChipRow(options: SearchFilters.resolutionOptions,
-                            isSelected: { $0 == store.filters.resolution },
-                            select: { store.filters.resolution = $0 })
+
+                    // At Least takes one resolution; Exactly accepts several,
+                    // which is what Wallhaven's own form does.
+                    if store.filters.mode == .exactly {
+                        ChipRow(options: SearchFilters.resolutionOptions,
+                                isSelected: { store.filters.exactResolutions.contains($0) },
+                                select: { resolution in
+                                    withAnimation(Tokens.quick) {
+                                        if store.filters.exactResolutions.contains(resolution) {
+                                            store.filters.exactResolutions.remove(resolution)
+                                        } else {
+                                            store.filters.exactResolutions.insert(resolution)
+                                        }
+                                    }
+                                })
+                    } else {
+                        ChipRow(options: SearchFilters.resolutionOptions,
+                                isSelected: { $0 == store.filters.resolution },
+                                select: { store.filters.resolution = $0 })
+                    }
+                }
+                group("AI Art") {
+                    Picker("", selection: Binding(
+                        get: { store.filters.aiArt },
+                        set: { store.filters.aiArt = $0 })) {
+                        Text("Any").tag(Bool?.none)
+                        Text("Hide").tag(Bool?.some(false))
+                        Text("Only").tag(Bool?.some(true))
+                    }
+                    .pickerStyle(.segmented).labelsHidden()
                 }
                 group("Ratios") {
                     ChipRow(options: SearchFilters.ratioOptions,

@@ -5,6 +5,37 @@ use wallsetter_core::*;
 
 const BASE_URL: &str = "https://wallhaven.cc/api/v1";
 
+/// Wallhaven's gateway returns 502/503/504 under load, and a transient one
+/// surfaced to the user as a hard failure. Retry those a few times with
+/// backoff; everything else is returned as-is on the first attempt.
+const TRANSIENT_STATUSES: [u16; 4] = [502, 503, 504, 522];
+const MAX_ATTEMPTS: u32 = 3;
+
+async fn send_with_retry(
+    client: &Client,
+    url: &str,
+) -> wallsetter_core::Result<reqwest::Response> {
+    let mut attempt = 0;
+    loop {
+        attempt += 1;
+        let outcome = client.get(url).send().await;
+
+        let retryable = match &outcome {
+            // A connection reset or timeout is worth one more try.
+            Err(e) => e.is_timeout() || e.is_connect() || e.is_request(),
+            Ok(response) => TRANSIENT_STATUSES.contains(&response.status().as_u16()),
+        };
+
+        if !retryable || attempt >= MAX_ATTEMPTS {
+            return outcome.map_err(|e| WallsetterError::Http(e.to_string()));
+        }
+
+        let backoff = std::time::Duration::from_millis(300 * 2_u64.pow(attempt - 1));
+        debug!("retrying {url} in {backoff:?} (attempt {attempt})");
+        tokio::time::sleep(backoff).await;
+    }
+}
+
 /// Wallhaven sends `Retry-After` on a 429; falling back to a flat minute makes
 /// the client wait longer than it has to, or retry too early.
 fn retry_after_secs(response: &reqwest::Response) -> u64 {
@@ -340,12 +371,7 @@ impl Provider for WallhavenClient {
 
         debug!("Searching Wallhaven: {}", url.as_str());
 
-        let resp = self
-            .client
-            .get(url.as_str())
-            .send()
-            .await
-            .map_err(|e| WallsetterError::Http(e.to_string()))?;
+        let resp = send_with_retry(&self.client, url.as_str()).await?;
 
         let status = resp.status().as_u16();
         if status == 429 {
@@ -386,12 +412,7 @@ impl Provider for WallhavenClient {
 
         debug!("Fetching wallpaper: {id}");
 
-        let resp = self
-            .client
-            .get(url.as_str())
-            .send()
-            .await
-            .map_err(|e| WallsetterError::Http(e.to_string()))?;
+        let resp = send_with_retry(&self.client, url.as_str()).await?;
 
         let status = resp.status().as_u16();
         if status == 404 {
@@ -423,12 +444,7 @@ impl Provider for WallhavenClient {
             .map_err(|e| WallsetterError::Http(e.to_string()))?;
         self.add_auth(&mut url);
 
-        let resp = self
-            .client
-            .get(url.as_str())
-            .send()
-            .await
-            .map_err(|e| WallsetterError::Http(e.to_string()))?;
+        let resp = send_with_retry(&self.client, url.as_str()).await?;
 
         if !resp.status().is_success() {
             let status = resp.status().as_u16();
@@ -475,12 +491,7 @@ impl Provider for WallhavenClient {
             self.add_auth(&mut url);
         }
 
-        let resp = self
-            .client
-            .get(url.as_str())
-            .send()
-            .await
-            .map_err(|e| WallsetterError::Http(e.to_string()))?;
+        let resp = send_with_retry(&self.client, url.as_str()).await?;
 
         if !resp.status().is_success() {
             let status = resp.status().as_u16();
@@ -526,12 +537,7 @@ impl Provider for WallhavenClient {
             url.query_pairs_mut().append_pair("page", &page.to_string());
         }
 
-        let resp = self
-            .client
-            .get(url.as_str())
-            .send()
-            .await
-            .map_err(|e| WallsetterError::Http(e.to_string()))?;
+        let resp = send_with_retry(&self.client, url.as_str()).await?;
 
         if !resp.status().is_success() {
             let status = resp.status().as_u16();

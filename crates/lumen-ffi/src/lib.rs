@@ -70,6 +70,9 @@ struct Core {
 /// Cached search results kept on disk. Bookmarked wallpapers are never
 /// evicted, so this only bounds the browsing cache.
 const WALLPAPER_CACHE_LIMIT: u32 = 5_000;
+/// How far over the limit the cache may drift before a prune runs, so pruning
+/// happens once every few hundred results rather than on every search.
+const PRUNE_SLACK: u32 = 500;
 
 static CORE: OnceLock<Core> = OnceLock::new();
 static INIT_ERROR: Mutex<Option<String>> = Mutex::new(None);
@@ -250,10 +253,16 @@ pub unsafe extern "C" fn lumen_search(filters_json: *const c_char) -> u64 {
         };
         match result {
             Ok(page) => {
-                for w in &page.wallpapers {
-                    let _ = core.db.cache_wallpaper(w);
+                let _ = core.db.cache_wallpapers(&page.wallpapers);
+                // Pruning scans the table, so do it when the cache has actually
+                // grown past the limit rather than on every search.
+                if core
+                    .db
+                    .wallpaper_cache_count()
+                    .is_ok_and(|count| count > WALLPAPER_CACHE_LIMIT + PRUNE_SLACK)
+                {
+                    let _ = core.db.prune_wallpaper_cache(WALLPAPER_CACHE_LIMIT);
                 }
-                let _ = core.db.prune_wallpaper_cache(WALLPAPER_CACHE_LIMIT);
                 let dto = SearchPageDto::from(&page);
                 emit(id, serde_json::to_string(&Envelope::ok("search", dto)).unwrap_or_default());
             }

@@ -1,5 +1,6 @@
 import Foundation
 import AppKit
+import SwiftUI
 
 // Runtime half of the gate: drive every action the UI binds to a control and
 // assert the state it is supposed to change actually changed. A control that
@@ -103,6 +104,22 @@ func run() async -> Int32 {
         let before = store.filters.purity
         store.filters.purity.insert(.sketchy)
         return store.filters.purity != before
+    }
+    v.check("Hot is offered as a sort") {
+        Sorting.allCases.contains(.hot)
+    }
+    v.check("AI art filter reaches the wire format") {
+        var filters = SearchFilters()
+        filters.aiArt = false
+        return (filters.wirePayload(page: 1)["aiArt"] as? Bool) == false
+            && SearchFilters().wirePayload(page: 1)["aiArt"] == nil
+    }
+    v.check("Exact mode carries several resolutions") {
+        var filters = SearchFilters()
+        filters.mode = .exactly
+        filters.exactResolutions = ["1920x1080", "3840x2160"]
+        let listed = filters.wirePayload(page: 1)["exactResolutions"] as? [String]
+        return listed?.count == 2
     }
     v.check("Sort picker changes sorting") {
         let before = store.filters.sorting
@@ -261,6 +278,21 @@ func run() async -> Int32 {
         // bool(forKey:) cannot tell "unset" from "false"; this pins that.
         store.showPurityBorders = false
         return Store(defaults: defaults).showPurityBorders == false
+    }
+    v.check("Editing filters persists without running a search") {
+        // Tuning the popover and quitting used to lose the edit: filters were
+        // only written when a search ran.
+        store.filters.query = "edited-not-searched"
+        return Store(defaults: defaults).filters.query == "edited-not-searched"
+    }
+    v.check("Filters saved by an older build still load") {
+        // A missing key used to throw, silently resetting every filter.
+        let legacy = #"{"query":"legacy","sorting":"views","categories":["anime"]}"#
+        defaults.set(Data(legacy.utf8), forKey: "lastFilters")
+        let reopened = Store(defaults: defaults)
+        return reopened.filters.query == "legacy"
+            && reopened.filters.sorting == .views
+            && reopened.filters.resolution == "1920x1080"   // defaulted, not lost
     }
     v.check("Last filters are restored on the next launch") {
         store.filters.query = "restored-query"
@@ -605,8 +637,26 @@ func run() async -> Int32 {
                 // Not every wallpaper has one, but the field must decode.
                 store.wallpapers.contains { $0.uploader != nil } || !store.wallpapers.isEmpty
             }
-            v.check("Results carry a palette") {
-                store.wallpapers.contains { !$0.colors.isEmpty }
+            v.check("Palette colours are bare hex, not \"#rrggbb\"") {
+                // The API sends "#424153"; Scanner stops on the "#", so every
+                // swatch rendered black. The core strips it.
+                let all = store.wallpapers.flatMap(\.colors)
+                guard !all.isEmpty else { return false }
+                return all.allSatisfy { !$0.hasPrefix("#") && $0.count == 6 }
+            }
+            v.check("Every palette colour parses to a real colour") {
+                let all = store.wallpapers.flatMap(\.colors)
+                guard !all.isEmpty else { return false }
+                return all.allSatisfy { Color(hex: $0) != Color.clear }
+            }
+            v.check("Color(hex:) tolerates a leading #") {
+                Color(hex: "#424153") == Color(hex: "424153")
+            }
+            await v.checkAsync("The detail endpoint fills in the uploader") {
+                // /search omits uploader entirely, so the preview has to ask.
+                guard let first = store.wallpapers.first else { return false }
+                let detailed = try? await LumenCore.shared.details(id: first.id)
+                return detailed?.uploader != nil
             }
             v.check("Clear Finished empties completed rows") {
                 store.clearFinished()

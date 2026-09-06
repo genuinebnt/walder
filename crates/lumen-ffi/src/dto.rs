@@ -44,6 +44,9 @@ pub struct FiltersDto {
     pub mode: String,
     #[serde(default)]
     pub resolution: String,
+    /// Exact-match resolutions. Wallhaven accepts several, unlike `atleast`.
+    #[serde(default, rename = "exactResolutions")]
+    pub exact_resolutions: Vec<String>,
     #[serde(default)]
     pub ratios: Vec<String>,
     #[serde(default)]
@@ -54,6 +57,9 @@ pub struct FiltersDto {
     /// when the seed from the first response is sent back.
     #[serde(default)]
     pub seed: Option<String>,
+    /// `true` shows only AI art, `false` hides it, absent leaves it alone.
+    #[serde(default, rename = "aiArt")]
+    pub ai_art: Option<bool>,
 }
 
 fn one() -> u32 {
@@ -133,15 +139,27 @@ impl FiltersDto {
             },
             toplist_range: (sorting == Sorting::Toplist).then_some(toplist_range).flatten(),
             atleast: (!exactly).then_some(resolution).flatten(),
-            resolutions: match (exactly, resolution) {
-                (true, Some(r)) => vec![r],
-                _ => Vec::new(),
+            resolutions: if exactly {
+                // Several exact resolutions are allowed; fall back to the
+                // single value when none were picked.
+                let listed: Vec<Resolution> = self
+                    .exact_resolutions
+                    .iter()
+                    .filter_map(|r| parse_resolution(r))
+                    .collect();
+                if listed.is_empty() {
+                    resolution.into_iter().collect()
+                } else {
+                    listed
+                }
+            } else {
+                Vec::new()
             },
             ratios: self.ratios.clone(),
             colors: self.color.clone().into_iter().collect(),
             page: self.page.max(1),
             seed: self.seed.clone().filter(|s| !s.is_empty()),
-            ai_art_filter: None,
+            ai_art_filter: self.ai_art,
         }
     }
 }
@@ -196,7 +214,14 @@ impl From<&Wallpaper> for WallpaperDto {
                 .map(|d| d.format("%Y-%m-%d").to_string())
                 .unwrap_or_default(),
             uploader: w.uploader.clone().filter(|u| !u.is_empty()),
-            colors: w.colors.clone(),
+            // Wallhaven returns colours as "#424153"; the search parameter and
+            // the UI both want them bare, so strip it once here.
+            colors: w
+                .colors
+                .iter()
+                .map(|c| c.trim_start_matches('#').to_ascii_lowercase())
+                .filter(|c| c.len() == 6)
+                .collect(),
             tags: w.tags.iter().map(|t| t.name.clone()).collect(),
             local_file: None,
         }

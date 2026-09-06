@@ -585,6 +585,50 @@ impl Database {
     // Wallpaper Cache
     // ──────────────────────────────────────────────
 
+    /// Caches a page of results in one transaction.
+    ///
+    /// Caching them one at a time is one implicit transaction per row, so a
+    /// 24-result page paid 24 commits before the UI saw anything.
+    pub fn cache_wallpapers(&self, wallpapers: &[Wallpaper]) -> wallsetter_core::Result<()> {
+        if wallpapers.is_empty() {
+            return Ok(());
+        }
+        let mut conn = self
+            .pool
+            .get()
+            .map_err(|e| WallsetterError::Database(e.to_string()))?;
+        let transaction = conn
+            .transaction()
+            .map_err(|e| WallsetterError::Database(e.to_string()))?;
+        {
+            let mut stmt = transaction
+                .prepare_cached(
+                    "INSERT OR REPLACE INTO wallpapers (id, provider, data) VALUES (?1, ?2, ?3)",
+                )
+                .map_err(|e| WallsetterError::Database(e.to_string()))?;
+            for wallpaper in wallpapers {
+                let json = serde_json::to_string(wallpaper).map_err(WallsetterError::Json)?;
+                stmt.execute((&wallpaper.id, wallpaper.provider.to_string(), json))
+                    .map_err(|e| WallsetterError::Database(e.to_string()))?;
+            }
+        }
+        transaction
+            .commit()
+            .map_err(|e| WallsetterError::Database(e.to_string()))?;
+        Ok(())
+    }
+
+    /// Number of rows in the wallpaper cache, so callers can prune on a
+    /// threshold rather than after every search.
+    pub fn wallpaper_cache_count(&self) -> wallsetter_core::Result<u32> {
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| WallsetterError::Database(e.to_string()))?;
+        conn.query_row("SELECT COUNT(1) FROM wallpapers", [], |row| row.get(0))
+            .map_err(|e| WallsetterError::Database(e.to_string()))
+    }
+
     pub fn cache_wallpaper(&self, wallpaper: &Wallpaper) -> wallsetter_core::Result<()> {
         let conn = self
             .pool

@@ -7,7 +7,7 @@ import IOKit.ps
 @Observable
 final class Store {
     // Browsing
-    var filters: SearchFilters
+    var filters: SearchFilters { didSet { rememberFilters() } }
     var wallpapers: [Wallpaper] = []
     var page = 1
     var lastPage = 1
@@ -103,10 +103,19 @@ final class Store {
 
         // The filter set from last launch, so a tuned search survives a restart.
         filters = Self.loadJSON(SearchFilters.self, "lastFilters", from: defaults) ?? SearchFilters()
+        didFinishInit = true
     }
 
-    /// Records the current filters as the ones to restore next launch.
-    func rememberFilters() { saveJSON(filters, "lastFilters") }
+    /// Records the current filters as the ones to restore next launch. Called
+    /// from `filters.didSet`, so an edit survives even if no search follows.
+    func rememberFilters() {
+        guard didFinishInit else { return }
+        saveJSON(filters, "lastFilters")
+    }
+
+    /// `didSet` does not fire during `init`, but `filters` is assigned there and
+    /// this guards any future ordering change.
+    @ObservationIgnored private var didFinishInit = false
 
     // MARK: Filter presets
 
@@ -224,14 +233,31 @@ final class Store {
         await search(reset: false)
     }
 
+    /// Fills in what only the detail endpoint returns.
+    ///
+    /// `/search` omits `uploader` entirely and carries no tags, so the preview
+    /// has to ask for the single wallpaper before it can show either.
     @MainActor
-    func loadTags(for wallpaper: Wallpaper) async {
-        guard wallpaper.tags.isEmpty else { return }
+    func loadDetails(for wallpaper: Wallpaper) async {
+        guard wallpaper.tags.isEmpty || wallpaper.uploader == nil else { return }
         guard let detailed = try? await LumenCore.shared.details(id: wallpaper.id) else { return }
-        if let index = wallpapers.firstIndex(where: { $0.id == wallpaper.id }) {
-            wallpapers[index].tags = detailed.tags
+
+        func merge(into target: inout Wallpaper) {
+            if !detailed.tags.isEmpty { target.tags = detailed.tags }
+            if let uploader = detailed.uploader { target.uploader = uploader }
+            if !detailed.colors.isEmpty { target.colors = detailed.colors }
         }
-        known[wallpaper.id]?.tags = detailed.tags
+
+        if let index = wallpapers.firstIndex(where: { $0.id == wallpaper.id }) {
+            merge(into: &wallpapers[index])
+        }
+        if let index = favorites.firstIndex(where: { $0.id == wallpaper.id }) {
+            merge(into: &favorites[index])
+        }
+        if var cached = known[wallpaper.id] {
+            merge(into: &cached)
+            known[wallpaper.id] = cached
+        }
     }
 
     // MARK: Favorites

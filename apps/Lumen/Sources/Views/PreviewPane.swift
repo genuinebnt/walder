@@ -74,7 +74,7 @@ struct PreviewPane: View {
             return .handled
         }
         .task(id: wallpaper.id) {
-            await store.loadTags(for: wallpaper)
+            await store.loadDetails(for: wallpaper)
             prefetchNeighbours()
             await store.loadNextPageIfNeeded(after: wallpaper)
         }
