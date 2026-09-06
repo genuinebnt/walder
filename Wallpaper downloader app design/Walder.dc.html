@@ -1,0 +1,776 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<style>
+  html, body { margin:0; padding:0; background:#07080b; }
+  * { box-sizing:border-box; }
+  a { color:#0A84FF; text-decoration:none; }
+  a:hover { color:#409CFF; }
+  ::-webkit-scrollbar { width:9px; height:9px; }
+  ::-webkit-scrollbar-thumb { background:rgba(255,255,255,.18); border-radius:6px; border:2px solid transparent; background-clip:content-box; }
+  ::-webkit-scrollbar-track { background:transparent; }
+  @keyframes wSpin { to { transform:rotate(360deg); } }
+  @keyframes wRise { from { opacity:0; transform:translateY(8px) scale(.985); } to { opacity:1; transform:none; } }
+  @keyframes wFade { from { opacity:0; } to { opacity:1; } }
+</style>
+</helmet>
+<div style="font-family:-apple-system,'SF Pro Text','SF Pro Display','Helvetica Neue',Helvetica,sans-serif;-webkit-font-smoothing:antialiased;color:#F2F2F7;height:100vh;min-height:640px;padding:26px;position:relative;overflow:hidden;background:radial-gradient(120% 90% at 78% 8%,#1d2534 0%,#0d1017 55%,#07080b 100%)">
+
+  <div style="position:absolute;inset:0;background-image:{{ desktopBg }};background-size:cover;background-position:center;filter:blur(38px) saturate(1.15);opacity:.5;transform:scale(1.12)"></div>
+  <div style="position:absolute;inset:0;background:linear-gradient(180deg,rgba(7,8,11,.55),rgba(7,8,11,.82))"></div>
+
+  <!-- window -->
+  <div style="position:relative;height:100%;display:flex;border-radius:13px;overflow:hidden;background:rgba(20,20,23,.74);backdrop-filter:blur(44px) saturate(1.6);-webkit-backdrop-filter:blur(44px) saturate(1.6);box-shadow:0 0 0 .5px rgba(255,255,255,.14),0 40px 90px -20px rgba(0,0,0,.85),0 2px 6px rgba(0,0,0,.4)">
+
+    <!-- sidebar -->
+    <div style="width:216px;flex:0 0 216px;background:rgba(14,14,17,.5);border-right:.5px solid rgba(255,255,255,.09);display:flex;flex-direction:column">
+      <div style="height:52px;display:flex;align-items:center;gap:8px;padding:0 18px">
+        <div style="width:12px;height:12px;border-radius:50%;background:#FF5F57"></div>
+        <div style="width:12px;height:12px;border-radius:50%;background:#FEBC2E"></div>
+        <div style="width:12px;height:12px;border-radius:50%;background:#28C840"></div>
+      </div>
+      <div style="padding:6px 12px 14px;overflow-y:auto;flex:1">
+        <sc-for list="{{ nav }}" as="group" hint-placeholder-count="3">
+          <div style="margin:14px 0 6px;padding:0 10px;font-size:11px;font-weight:600;letter-spacing:.07em;color:rgba(242,242,247,.38)">{{ group.label }}</div>
+          <sc-for list="{{ group.items }}" as="item" hint-placeholder-count="3">
+            <div onClick="{{ item.go }}" style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:7px 10px;border-radius:7px;margin-bottom:1px;cursor:default;font-size:13.5px;font-weight:{{ item.weight }};color:{{ item.color }};background:{{ item.bg }}" style-hover="background:rgba(255,255,255,.07)">
+              <span style="display:flex;align-items:center;gap:9px;min-width:0"><span style="width:5px;height:5px;border-radius:50%;flex:0 0 5px;background:{{ item.dot }}"></span><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ item.label }}</span></span>
+              <sc-if value="{{ item.badge }}" hint-placeholder-val="{{ false }}">
+                <span style="font-size:11px;font-variant-numeric:tabular-nums;color:rgba(242,242,247,.45)">{{ item.badge }}</span>
+              </sc-if>
+            </div>
+          </sc-for>
+        </sc-for>
+      </div>
+      <div style="padding:12px 14px;border-top:.5px solid rgba(255,255,255,.07);display:flex;flex-direction:column;gap:8px">
+        <div onClick="{{ toggleMenuBar }}" style="font-size:12px;color:rgba(242,242,247,.6);padding:6px 8px;border-radius:6px" style-hover="background:rgba(255,255,255,.07);color:#F2F2F7">Menu bar quick-set</div>
+        <div style="font-size:11px;color:rgba(242,242,247,.3);padding:0 8px;font-family:ui-monospace,'SF Mono',Menlo,monospace">{{ apiState }}</div>
+      </div>
+    </div>
+
+    <!-- main -->
+    <div style="flex:1;min-width:0;display:flex;flex-direction:column;position:relative">
+
+      <!-- toolbar -->
+      <div style="height:52px;flex:0 0 52px;display:flex;align-items:center;gap:10px;padding:0 16px;border-bottom:.5px solid rgba(255,255,255,.08);background:rgba(24,24,27,.5)">
+        <div style="min-width:0;flex:0 1 auto;padding-right:6px">
+          <div style="font-size:13.5px;font-weight:600;letter-spacing:-.01em;white-space:nowrap">{{ title }}</div>
+          <div style="font-size:11px;color:rgba(242,242,247,.45);white-space:nowrap">{{ subtitle }}</div>
+        </div>
+        <div style="flex:1"></div>
+        <sc-if value="{{ isSearchable }}" hint-placeholder-val="{{ true }}">
+          <div style="display:flex;align-items:center;gap:8px">
+            <div style="display:flex;align-items:center;gap:7px;width:260px;height:28px;padding:0 10px;border-radius:7px;background:rgba(255,255,255,.08);border:.5px solid rgba(255,255,255,.1)">
+              <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="rgba(242,242,247,.5)" stroke-width="1.4"><circle cx="5" cy="5" r="3.4"></circle><line x1="7.6" y1="7.6" x2="10.6" y2="10.6" stroke-linecap="round"></line></svg>
+              <input value="{{ query }}" onChange="{{ onQuery }}" onKeyDown="{{ onQueryKey }}" placeholder="Search wallpapers or #tag" style="flex:1;min-width:0;background:none;border:0;outline:none;color:#F2F2F7;font-size:12.5px;font-family:inherit" />
+            </div>
+            <div onClick="{{ toggleFilters }}" style="height:28px;display:flex;align-items:center;gap:7px;padding:0 11px;border-radius:7px;font-size:12.5px;background:{{ filtersBg }};border:.5px solid rgba(255,255,255,.1);color:{{ filtersFg }}" style-hover="background:rgba(255,255,255,.14)">Filters<span style="font-variant-numeric:tabular-nums;opacity:.6">{{ filterCount }}</span></div>
+            <div style="display:flex;height:28px;padding:2px;border-radius:7px;background:rgba(255,255,255,.07);border:.5px solid rgba(255,255,255,.08)">
+              <sc-for list="{{ sizeOptions }}" as="opt" hint-placeholder-count="3">
+                <div onClick="{{ opt.pick }}" style="display:flex;align-items:center;padding:0 9px;border-radius:5px;font-size:12px;color:{{ opt.color }};background:{{ opt.bg }}">{{ opt.label }}</div>
+              </sc-for>
+            </div>
+          </div>
+        </sc-if>
+      </div>
+
+      <!-- content -->
+      <div ref="{{ scrollRef }}" onScroll="{{ onScroll }}" style="flex:1;overflow-y:auto;overflow-x:hidden;position:relative">
+
+        <sc-if value="{{ isGrid }}" hint-placeholder-val="{{ true }}">
+          <div style="padding:18px 16px 40px">
+            <sc-if value="{{ notice }}" hint-placeholder-val="{{ false }}">
+              <div style="margin-bottom:14px;padding:10px 13px;border-radius:9px;background:rgba(255,159,10,.11);border:.5px solid rgba(255,159,10,.3);font-size:12px;color:#FFCF80;font-family:ui-monospace,'SF Mono',Menlo,monospace">{{ notice }}</div>
+            </sc-if>
+            <div style="display:grid;gap:16px;grid-template-columns:repeat(auto-fill,minmax({{ tileMin }},1fr))">
+              <sc-for list="{{ tiles }}" as="t" hint-placeholder-count="6">
+                <div onMouseEnter="{{ t.enter }}" onMouseLeave="{{ t.leave }}" onClick="{{ t.open }}" style="position:relative;border-radius:11px;overflow:hidden;aspect-ratio:16/10;background:{{ t.bg }};box-shadow:{{ t.shadow }};transform:{{ t.transform }};transition:transform .22s cubic-bezier(.2,.8,.2,1),box-shadow .22s;animation:wRise .35s cubic-bezier(.2,.8,.2,1) both">
+                  <sc-if value="{{ t.src }}" hint-placeholder-val="{{ false }}">
+                    <img src="{{ t.src }}" alt="{{ t.alt }}" loading="lazy" style="width:100%;height:100%;object-fit:cover;display:block" />
+                  </sc-if>
+                  <sc-if value="{{ t.fallback }}" hint-placeholder-val="{{ true }}">
+                    <div style="position:absolute;inset:0;display:flex;align-items:flex-end;padding:12px;font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:11px;color:rgba(242,242,247,.5)">{{ t.alt }}</div>
+                  </sc-if>
+                  <div style="position:absolute;inset:0;opacity:{{ t.hover }};transition:opacity .18s;background:linear-gradient(180deg,rgba(0,0,0,.42) 0%,rgba(0,0,0,0) 34%,rgba(0,0,0,.66) 100%)"></div>
+                  <div style="position:absolute;top:10px;left:11px;right:11px;display:flex;align-items:center;justify-content:space-between;gap:8px;opacity:{{ t.hover }};transition:opacity .18s">
+                    <span style="padding:3px 7px;border-radius:5px;background:rgba(0,0,0,.5);backdrop-filter:blur(8px);font-size:10.5px;font-family:ui-monospace,'SF Mono',Menlo,monospace;letter-spacing:.02em">{{ t.res }}</span>
+                    <span onClick="{{ t.fav }}" style="width:24px;height:24px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.5);backdrop-filter:blur(8px)"><span style="width:8px;height:8px;border-radius:50%;background:{{ t.favColor }}"></span></span>
+                  </div>
+                  <div style="position:absolute;bottom:0;left:0;right:0;padding:11px 12px;display:flex;align-items:center;gap:7px;opacity:{{ t.hover }};transform:translateY({{ t.lift }});transition:opacity .18s,transform .22s cubic-bezier(.2,.8,.2,1)">
+                    <div onClick="{{ t.set }}" style="height:26px;display:flex;align-items:center;padding:0 11px;border-radius:13px;background:#0A84FF;font-size:12px;font-weight:590;box-shadow:0 2px 10px rgba(10,132,255,.45)">Set</div>
+                    <div onClick="{{ t.download }}" style="height:26px;display:flex;align-items:center;padding:0 11px;border-radius:13px;background:rgba(255,255,255,.22);backdrop-filter:blur(10px);font-size:12px;font-weight:500">Download</div>
+                    <div style="flex:1"></div>
+                    <span style="font-size:11px;color:rgba(255,255,255,.72);font-variant-numeric:tabular-nums">{{ t.meta }}</span>
+                  </div>
+                  <div style="position:absolute;inset:0;border-radius:11px;pointer-events:none;box-shadow:inset 0 0 0 {{ t.ringW }} {{ t.ring }},inset 0 0 0 .5px rgba(255,255,255,.09)"></div>
+                </div>
+              </sc-for>
+            </div>
+            <sc-if value="{{ loading }}" hint-placeholder-val="{{ true }}">
+              <div style="display:flex;align-items:center;justify-content:center;gap:10px;padding:34px;color:rgba(242,242,247,.5);font-size:12.5px">
+                <span style="width:14px;height:14px;border-radius:50%;border:1.6px solid rgba(255,255,255,.18);border-top-color:#0A84FF;animation:wSpin .8s linear infinite"></span>Loading more wallpapers
+              </div>
+            </sc-if>
+            <sc-if value="{{ isEmpty }}" hint-placeholder-val="{{ false }}">
+              <div style="padding:90px 20px;text-align:center;color:rgba(242,242,247,.4)">
+                <div style="font-size:17px;color:rgba(242,242,247,.7);margin-bottom:6px">{{ emptyTitle }}</div>
+                <div style="font-size:13px">{{ emptyBody }}</div>
+              </div>
+            </sc-if>
+          </div>
+        </sc-if>
+
+        <!-- collections -->
+        <sc-if value="{{ isCollections }}" hint-placeholder-val="{{ false }}">
+          <div style="padding:20px 18px 40px">
+            <div style="display:flex;gap:8px;margin-bottom:18px;max-width:420px">
+              <input value="{{ newCollection }}" onChange="{{ onNewCollection }}" placeholder="New collection name" style="flex:1;height:30px;padding:0 11px;border-radius:8px;background:rgba(255,255,255,.08);border:.5px solid rgba(255,255,255,.1);color:#F2F2F7;font-size:12.5px;font-family:inherit;outline:none" />
+              <div onClick="{{ createCollection }}" style="height:30px;display:flex;align-items:center;padding:0 14px;border-radius:8px;background:#0A84FF;font-size:12.5px;font-weight:560">Create</div>
+            </div>
+            <div style="display:grid;gap:16px;grid-template-columns:repeat(auto-fill,minmax(230px,1fr))">
+              <sc-for list="{{ collections }}" as="c" hint-placeholder-count="3">
+                <div style="border-radius:12px;overflow:hidden;background:rgba(255,255,255,.05);border:.5px solid rgba(255,255,255,.09)" style-hover="background:rgba(255,255,255,.08)">
+                  <div style="display:grid;grid-template-columns:2fr 1fr;gap:2px;aspect-ratio:16/9;background:rgba(255,255,255,.04)">
+                    <div style="background-image:{{ c.a }};background-size:cover;background-position:center"></div>
+                    <div style="display:grid;grid-template-rows:1fr 1fr;gap:2px">
+                      <div style="background-image:{{ c.b }};background-size:cover;background-position:center"></div>
+                      <div style="background-image:{{ c.c }};background-size:cover;background-position:center"></div>
+                    </div>
+                  </div>
+                  <div style="padding:11px 13px;display:flex;align-items:center;justify-content:space-between">
+                    <div>
+                      <div style="font-size:13px;font-weight:560">{{ c.name }}</div>
+                      <div style="font-size:11px;color:rgba(242,242,247,.45)">{{ c.count }}</div>
+                    </div>
+                    <div onClick="{{ c.shuffle }}" style="height:24px;display:flex;align-items:center;padding:0 10px;border-radius:12px;background:rgba(255,255,255,.1);font-size:11.5px">Shuffle</div>
+                  </div>
+                </div>
+              </sc-for>
+            </div>
+          </div>
+        </sc-if>
+
+        <!-- downloads -->
+        <sc-if value="{{ isDownloads }}" hint-placeholder-val="{{ false }}">
+          <div style="padding:18px 18px 40px;max-width:900px">
+            <div style="display:flex;gap:8px;margin-bottom:14px">
+              <div onClick="{{ clearFinished }}" style="height:27px;display:flex;align-items:center;padding:0 12px;border-radius:7px;background:rgba(255,255,255,.08);border:.5px solid rgba(255,255,255,.1);font-size:12px">Clear Finished</div>
+              <div onClick="{{ retryFailed }}" style="height:27px;display:flex;align-items:center;padding:0 12px;border-radius:7px;background:rgba(255,255,255,.08);border:.5px solid rgba(255,255,255,.1);font-size:12px">Retry Failed</div>
+            </div>
+            <sc-for list="{{ downloads }}" as="d" hint-placeholder-count="3">
+              <div style="display:flex;align-items:center;gap:13px;padding:11px 13px;border-radius:11px;background:rgba(255,255,255,.045);border:.5px solid rgba(255,255,255,.08);margin-bottom:9px">
+                <div style="width:74px;height:46px;flex:0 0 74px;border-radius:6px;overflow:hidden;background-image:{{ d.thumb }};background-size:cover;background-position:center;box-shadow:inset 0 0 0 .5px rgba(255,255,255,.1)"></div>
+                <div style="flex:1;min-width:0">
+                  <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+                    <span style="font-size:12.5px;font-family:ui-monospace,'SF Mono',Menlo,monospace">{{ d.name }}</span>
+                    <span style="padding:2px 7px;border-radius:999px;font-size:10.5px;font-weight:560;background:{{ d.chipBg }};color:{{ d.chipFg }}">{{ d.status }}</span>
+                    <span style="font-size:11px;color:rgba(242,242,247,.4)">{{ d.size }}</span>
+                  </div>
+                  <div style="height:4px;border-radius:2px;background:rgba(255,255,255,.1);overflow:hidden">
+                    <div style="height:100%;width:{{ d.pct }};background:{{ d.barColor }};border-radius:2px;transition:width .3s linear"></div>
+                  </div>
+                </div>
+                <div onClick="{{ d.set }}" style="height:26px;display:flex;align-items:center;padding:0 12px;border-radius:7px;background:{{ d.setBg }};font-size:12px;color:{{ d.setFg }}">Set</div>
+              </div>
+            </sc-for>
+            <sc-if value="{{ noDownloads }}" hint-placeholder-val="{{ false }}">
+              <div style="padding:80px 0;text-align:center;color:rgba(242,242,247,.4);font-size:13px">Nothing downloaded yet. Hover a wallpaper and hit Download.</div>
+            </sc-if>
+          </div>
+        </sc-if>
+
+        <!-- displays -->
+        <sc-if value="{{ isDisplays }}" hint-placeholder-val="{{ false }}">
+          <div style="padding:22px 18px 40px">
+            <div style="display:grid;gap:18px;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));max-width:1000px">
+              <sc-for list="{{ displays }}" as="d" hint-placeholder-count="3">
+                <div style="border-radius:12px;padding:14px;background:rgba(255,255,255,.045);border:.5px solid rgba(255,255,255,.09)">
+                  <div style="border-radius:8px;overflow:hidden;aspect-ratio:{{ d.ratio }};background:#0b0c10;background-image:{{ d.wall }};background-size:cover;background-position:center;box-shadow:inset 0 0 0 .5px rgba(255,255,255,.12);position:relative">
+                    <div style="position:absolute;top:0;left:0;right:0;height:12%;min-height:9px;background:rgba(0,0,0,.28);backdrop-filter:blur(6px)"></div>
+                  </div>
+                  <div style="display:flex;align-items:center;justify-content:space-between;margin-top:12px;gap:10px">
+                    <div style="min-width:0">
+                      <div style="font-size:13px;font-weight:560;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ d.name }}</div>
+                      <div style="font-size:11px;color:rgba(242,242,247,.45);font-family:ui-monospace,'SF Mono',Menlo,monospace">{{ d.res }}</div>
+                    </div>
+                    <div onClick="{{ d.assign }}" style="height:26px;display:flex;align-items:center;padding:0 11px;border-radius:7px;background:rgba(10,132,255,.18);border:.5px solid rgba(10,132,255,.45);color:#6AB8FF;font-size:12px;white-space:nowrap">Assign current</div>
+                  </div>
+                  <div style="display:flex;gap:6px;margin-top:10px">
+                    <sc-for list="{{ d.fits }}" as="f" hint-placeholder-count="3">
+                      <div onClick="{{ f.pick }}" style="flex:1;height:24px;display:flex;align-items:center;justify-content:center;border-radius:6px;font-size:11px;background:{{ f.bg }};color:{{ f.fg }}">{{ f.label }}</div>
+                    </sc-for>
+                  </div>
+                </div>
+              </sc-for>
+            </div>
+          </div>
+        </sc-if>
+
+        <!-- schedule + settings -->
+        <sc-if value="{{ isPrefs }}" hint-placeholder-val="{{ false }}">
+          <div style="padding:22px 18px 60px;max-width:660px">
+            <sc-for list="{{ prefSections }}" as="s" hint-placeholder-count="2">
+              <div style="margin-bottom:22px">
+                <div style="font-size:11px;font-weight:600;letter-spacing:.07em;color:rgba(242,242,247,.4);margin:0 4px 8px">{{ s.label }}</div>
+                <div style="border-radius:11px;background:rgba(255,255,255,.045);border:.5px solid rgba(255,255,255,.09);overflow:hidden">
+                  <sc-for list="{{ s.rows }}" as="r" hint-placeholder-count="3">
+                    <div style="display:flex;align-items:center;justify-content:space-between;gap:14px;padding:11px 14px;border-top:{{ r.border }}">
+                      <div style="min-width:0">
+                        <div style="font-size:13px">{{ r.label }}</div>
+                        <sc-if value="{{ r.hint }}" hint-placeholder-val="{{ false }}">
+                          <div style="font-size:11px;color:rgba(242,242,247,.42);margin-top:2px">{{ r.hint }}</div>
+                        </sc-if>
+                      </div>
+                      <div style="flex:0 0 auto;display:flex;align-items:center;gap:6px">
+                        <sc-if value="{{ r.isToggle }}" hint-placeholder-val="{{ false }}">
+                          <div onClick="{{ r.toggle }}" style="width:40px;height:23px;border-radius:12px;padding:2px;background:{{ r.toggleBg }};transition:background .18s">
+                            <div style="width:19px;height:19px;border-radius:50%;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.4);transform:translateX({{ r.knob }});transition:transform .18s cubic-bezier(.2,.8,.2,1)"></div>
+                          </div>
+                        </sc-if>
+                        <sc-if value="{{ r.isInput }}" hint-placeholder-val="{{ false }}">
+                          <input value="{{ r.value }}" onChange="{{ r.onInput }}" placeholder="{{ r.placeholder }}" type="{{ r.type }}" style="width:230px;height:27px;padding:0 10px;border-radius:7px;background:rgba(255,255,255,.08);border:.5px solid rgba(255,255,255,.12);color:#F2F2F7;font-size:12px;font-family:ui-monospace,'SF Mono',Menlo,monospace;outline:none" />
+                        </sc-if>
+                        <sc-if value="{{ r.isSegment }}" hint-placeholder-val="{{ false }}">
+                          <div style="display:flex;padding:2px;border-radius:7px;background:rgba(255,255,255,.07);border:.5px solid rgba(255,255,255,.09)">
+                            <sc-for list="{{ r.options }}" as="o" hint-placeholder-count="3">
+                              <div onClick="{{ o.pick }}" style="padding:4px 10px;border-radius:5px;font-size:11.5px;background:{{ o.bg }};color:{{ o.fg }}">{{ o.label }}</div>
+                            </sc-for>
+                          </div>
+                        </sc-if>
+                      </div>
+                    </div>
+                  </sc-for>
+                </div>
+              </div>
+            </sc-for>
+            <div style="display:flex;align-items:center;gap:10px">
+              <div onClick="{{ savePrefs }}" style="height:29px;display:flex;align-items:center;padding:0 14px;border-radius:8px;background:#0A84FF;font-size:12.5px;font-weight:560;box-shadow:0 2px 10px rgba(10,132,255,.35)">Save Preferences</div>
+              <span style="font-size:11.5px;color:rgba(48,209,88,.9);opacity:{{ savedOpacity }};transition:opacity .3s">Saved to local store</span>
+            </div>
+          </div>
+        </sc-if>
+      </div>
+
+      <!-- filters popover -->
+      <sc-if value="{{ filtersOpen }}" hint-placeholder-val="{{ false }}">
+        <div style="position:absolute;top:56px;right:14px;width:308px;max-height:calc(100% - 74px);overflow-y:auto;border-radius:12px;padding:14px;z-index:30;background:rgba(30,30,34,.86);backdrop-filter:blur(34px) saturate(1.6);border:.5px solid rgba(255,255,255,.13);box-shadow:0 24px 60px -12px rgba(0,0,0,.8);animation:wRise .18s ease-out both">
+          <sc-for list="{{ filterGroups }}" as="g" hint-placeholder-count="4">
+            <div style="margin-bottom:15px">
+              <div style="font-size:11px;font-weight:600;letter-spacing:.06em;color:rgba(242,242,247,.42);margin-bottom:7px">{{ g.label }}</div>
+              <sc-if value="{{ g.isChecks }}" hint-placeholder-val="{{ true }}">
+                <div style="display:flex;flex-direction:column;gap:5px">
+                  <sc-for list="{{ g.items }}" as="c" hint-placeholder-count="3">
+                    <div onClick="{{ c.toggle }}" style="display:flex;align-items:center;gap:9px;font-size:12.5px;padding:3px 2px;border-radius:5px" style-hover="background:rgba(255,255,255,.06)">
+                      <span style="width:15px;height:15px;border-radius:4px;flex:0 0 15px;display:flex;align-items:center;justify-content:center;background:{{ c.boxBg }};box-shadow:inset 0 0 0 .5px {{ c.boxBorder }}">
+                        <svg width="9" height="9" viewBox="0 0 10 10" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" style="opacity:{{ c.checkOpacity }}"><polyline points="1.6,5.2 3.9,7.4 8.4,2.6"></polyline></svg>
+                      </span>
+                      <span style="color:{{ c.color }}">{{ c.label }}</span>
+                    </div>
+                  </sc-for>
+                </div>
+              </sc-if>
+              <sc-if value="{{ g.isSegment }}" hint-placeholder-val="{{ false }}">
+                <div style="display:flex;padding:2px;border-radius:7px;background:rgba(255,255,255,.07);border:.5px solid rgba(255,255,255,.09)">
+                  <sc-for list="{{ g.items }}" as="o" hint-placeholder-count="2">
+                    <div onClick="{{ o.pick }}" style="flex:1;text-align:center;padding:5px 6px;border-radius:5px;font-size:11.5px;background:{{ o.bg }};color:{{ o.fg }}">{{ o.label }}</div>
+                  </sc-for>
+                </div>
+              </sc-if>
+              <sc-if value="{{ g.isChips }}" hint-placeholder-val="{{ false }}">
+                <div style="display:flex;flex-wrap:wrap;gap:6px">
+                  <sc-for list="{{ g.items }}" as="o" hint-placeholder-count="4">
+                    <div onClick="{{ o.pick }}" style="padding:4px 9px;border-radius:999px;font-size:11.5px;font-family:ui-monospace,'SF Mono',Menlo,monospace;background:{{ o.bg }};color:{{ o.fg }};box-shadow:inset 0 0 0 .5px {{ o.border }}">{{ o.label }}</div>
+                  </sc-for>
+                </div>
+              </sc-if>
+              <sc-if value="{{ g.isColors }}" hint-placeholder-val="{{ false }}">
+                <div style="display:grid;grid-template-columns:repeat(10,1fr);gap:5px">
+                  <sc-for list="{{ g.items }}" as="s" hint-placeholder-count="20">
+                    <div onClick="{{ s.pick }}" style="aspect-ratio:1;border-radius:4px;background:{{ s.hex }};box-shadow:inset 0 0 0 .5px rgba(255,255,255,.2),0 0 0 {{ s.ringW }} #0A84FF"></div>
+                  </sc-for>
+                </div>
+              </sc-if>
+            </div>
+          </sc-for>
+          <div style="display:flex;gap:8px;padding-top:4px">
+            <div onClick="{{ applyFilters }}" style="flex:1;height:28px;display:flex;align-items:center;justify-content:center;border-radius:7px;background:#0A84FF;font-size:12.5px;font-weight:560">Search</div>
+            <div onClick="{{ resetFilters }}" style="height:28px;display:flex;align-items:center;padding:0 12px;border-radius:7px;background:rgba(255,255,255,.09);font-size:12.5px">Clear</div>
+          </div>
+        </div>
+      </sc-if>
+
+      <!-- detail sheet -->
+      <sc-if value="{{ detail }}" hint-placeholder-val="{{ false }}">
+        <div onClick="{{ closeDetail }}" style="position:absolute;inset:0;z-index:40;display:flex;align-items:center;justify-content:center;padding:26px;background:rgba(8,9,12,.62);backdrop-filter:blur(18px);animation:wFade .16s ease-out both">
+          <div onClick="{{ stop }}" style="display:flex;gap:0;max-width:1100px;width:100%;max-height:100%;border-radius:14px;overflow:hidden;background:rgba(26,26,29,.92);border:.5px solid rgba(255,255,255,.13);box-shadow:0 40px 90px -18px rgba(0,0,0,.9);animation:wRise .24s cubic-bezier(.2,.8,.2,1) both">
+            <div style="flex:1;min-width:0;background:#07080b;display:flex;align-items:center;justify-content:center;position:relative">
+              <img src="{{ detail.src }}" alt="{{ detail.alt }}" style="max-width:100%;max-height:100%;display:block;object-fit:contain" />
+              <div style="position:absolute;top:12px;left:14px;padding:4px 9px;border-radius:6px;background:rgba(0,0,0,.55);backdrop-filter:blur(10px);font-size:11px;font-family:ui-monospace,'SF Mono',Menlo,monospace">{{ detail.res }}</div>
+            </div>
+            <div style="width:302px;flex:0 0 302px;padding:18px;overflow-y:auto;display:flex;flex-direction:column;gap:16px;border-left:.5px solid rgba(255,255,255,.1)">
+              <div>
+                <div style="font-size:15px;font-weight:600;letter-spacing:-.01em">{{ detail.title }}</div>
+                <div style="font-size:11.5px;color:rgba(242,242,247,.45);margin-top:3px">{{ detail.byline }}</div>
+              </div>
+              <div style="display:flex;flex-direction:column;gap:8px">
+                <div onClick="{{ setDetail }}" style="height:31px;display:flex;align-items:center;justify-content:center;border-radius:8px;background:#0A84FF;font-size:12.5px;font-weight:590;box-shadow:0 2px 12px rgba(10,132,255,.4)">Set as Wallpaper</div>
+                <div style="display:flex;gap:8px">
+                  <div onClick="{{ downloadDetail }}" style="flex:1;height:29px;display:flex;align-items:center;justify-content:center;border-radius:8px;background:rgba(255,255,255,.1);border:.5px solid rgba(255,255,255,.12);font-size:12.5px">Download</div>
+                  <div onClick="{{ favDetail }}" style="flex:1;height:29px;display:flex;align-items:center;justify-content:center;border-radius:8px;background:{{ detail.favBg }};border:.5px solid rgba(255,255,255,.12);font-size:12.5px;color:{{ detail.favFg }}">{{ detail.favLabel }}</div>
+                </div>
+              </div>
+              <div style="display:flex;flex-direction:column;gap:1px;border-radius:9px;overflow:hidden;background:rgba(255,255,255,.05)">
+                <sc-for list="{{ detail.meta }}" as="m" hint-placeholder-count="5">
+                  <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 11px;font-size:12px">
+                    <span style="color:rgba(242,242,247,.5)">{{ m.k }}</span>
+                    <span style="font-family:ui-monospace,'SF Mono',Menlo,monospace;text-align:right">{{ m.v }}</span>
+                  </div>
+                </sc-for>
+              </div>
+              <div>
+                <div style="font-size:11px;font-weight:600;letter-spacing:.06em;color:rgba(242,242,247,.4);margin-bottom:8px">IMAGE TAGS</div>
+                <div style="display:flex;flex-wrap:wrap;gap:6px">
+                  <sc-for list="{{ detail.tags }}" as="tag" hint-placeholder-count="5">
+                    <div onClick="{{ tag.search }}" style="padding:4px 9px;border-radius:999px;background:rgba(255,255,255,.09);font-size:11.5px;color:rgba(242,242,247,.8)" style-hover="background:rgba(10,132,255,.25);color:#fff">{{ tag.label }}</div>
+                  </sc-for>
+                </div>
+              </div>
+              <div>
+                <div style="font-size:11px;font-weight:600;letter-spacing:.06em;color:rgba(242,242,247,.4);margin-bottom:8px">SEND TO DISPLAY</div>
+                <div style="display:flex;flex-direction:column;gap:6px">
+                  <sc-for list="{{ detail.displays }}" as="d" hint-placeholder-count="3">
+                    <div onClick="{{ d.assign }}" style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:7px 11px;border-radius:8px;background:rgba(255,255,255,.06);font-size:12px" style-hover="background:rgba(255,255,255,.11)">
+                      <span>{{ d.name }}</span><span style="font-size:11px;color:{{ d.stateColor }}">{{ d.state }}</span>
+                    </div>
+                  </sc-for>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </sc-if>
+    </div>
+  </div>
+
+  <!-- menu bar popover -->
+  <sc-if value="{{ menuBarOpen }}" hint-placeholder-val="{{ false }}">
+    <div style="position:absolute;top:18px;right:18px;width:322px;z-index:60;border-radius:13px;padding:13px;background:rgba(30,30,34,.8);backdrop-filter:blur(40px) saturate(1.7);border:.5px solid rgba(255,255,255,.15);box-shadow:0 30px 70px -14px rgba(0,0,0,.85);animation:wRise .2s cubic-bezier(.2,.8,.2,1) both">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:11px">
+        <div style="font-size:12.5px;font-weight:600;letter-spacing:-.01em">Walder</div>
+        <div onClick="{{ toggleMenuBar }}" style="font-size:11px;color:rgba(242,242,247,.45)" style-hover="color:#F2F2F7">Close</div>
+      </div>
+      <div style="border-radius:9px;overflow:hidden;aspect-ratio:16/10;background-image:{{ desktopBg }};background-size:cover;background-position:center;box-shadow:inset 0 0 0 .5px rgba(255,255,255,.14)"></div>
+      <div style="display:flex;align-items:center;justify-content:space-between;margin:10px 2px 12px">
+        <div style="font-size:11.5px;color:rgba(242,242,247,.55);font-family:ui-monospace,'SF Mono',Menlo,monospace">{{ currentLabel }}</div>
+        <div style="font-size:11.5px;color:rgba(242,242,247,.4)">{{ nextChange }}</div>
+      </div>
+      <div style="display:flex;gap:7px;margin-bottom:12px">
+        <div onClick="{{ shuffleNow }}" style="flex:1;height:28px;display:flex;align-items:center;justify-content:center;border-radius:8px;background:#0A84FF;font-size:12px;font-weight:560">Shuffle now</div>
+        <div onClick="{{ toggleRotate }}" style="height:28px;display:flex;align-items:center;padding:0 12px;border-radius:8px;background:{{ rotateBg }};border:.5px solid rgba(255,255,255,.12);font-size:12px;color:{{ rotateFg }}">{{ rotateLabel }}</div>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px">
+        <sc-for list="{{ recents }}" as="r" hint-placeholder-count="3">
+          <div onClick="{{ r.set }}" style="aspect-ratio:16/10;border-radius:6px;background-image:{{ r.thumb }};background-size:cover;background-position:center;box-shadow:inset 0 0 0 .5px rgba(255,255,255,.14)"></div>
+        </sc-for>
+      </div>
+    </div>
+  </sc-if>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;startView&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;Browse&quot;,&quot;Toplist&quot;,&quot;Favorites&quot;,&quot;Downloads&quot;,&quot;Collections&quot;,&quot;Displays&quot;,&quot;Schedule&quot;,&quot;Settings&quot;],&quot;default&quot;:&quot;Browse&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;tileSize&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;Small&quot;,&quot;Medium&quot;,&quot;Large&quot;],&quot;default&quot;:&quot;Large&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;defaultSort&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;toplist&quot;,&quot;date_added&quot;,&quot;views&quot;,&quot;favorites&quot;,&quot;random&quot;],&quot;default&quot;:&quot;toplist&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;showMenuBar&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:false,&quot;tsType&quot;:&quot;boolean&quot;},&quot;safeMode&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;}}">
+const COLORS = ["660000","990000","cc0000","cc3333","ea4c88","993399","663399","333399","0066cc","0099cc","66cccc","77cc33","669900","336600","666600","999900","cccc33","ffff00","ffcc33","ff9900","ff6600","cc6633","996633","663300","000000","999999","cccccc","ffffff","424153"];
+const RATIOS = ["16x9","16x10","21x9","4x3","1x1","9x16","10x16"];
+const RES = ["1920x1080","2560x1440","3440x1440","3840x2160","5120x2880","6016x3384"];
+const SORTS = [["toplist","Top"],["date_added","Latest"],["views","Views"],["favorites","Favorites"],["random","Random"]];
+const PH = "repeating-linear-gradient(135deg,rgba(255,255,255,.055) 0 9px,rgba(255,255,255,.02) 9px 18px)";
+
+const SEED = [
+  ["a1", "3840x2160", "16x9", 184203, 2841], ["a2", "5120x2880", "16x9", 96410, 1502],
+  ["a3", "2560x1440", "16x9", 74122, 998], ["a4", "3440x1440", "21x9", 61208, 874],
+  ["a5", "1920x1080", "16x9", 152880, 2033], ["a6", "3840x2400", "16x10", 44190, 611],
+  ["a7", "2880x1800", "16x10", 38702, 552], ["a8", "6016x3384", "16x9", 29455, 402],
+  ["a9", "3840x2160", "16x9", 88301, 1284], ["b1", "2560x1600", "16x10", 51044, 733],
+  ["b2", "1920x1200", "16x10", 33810, 470], ["b3", "3840x2160", "16x9", 120557, 1690]
+];
+const seeded = (page) => SEED.map(([sid, res, ratio, views, favs], i) => {
+  const key = "walder-" + page + "-" + sid;
+  return {
+    id: key, src: "https://picsum.photos/seed/" + key + "/900/560",
+    full: "https://picsum.photos/seed/" + key + "/2400/1500",
+    res: res.replace("x", " × "), ratio, views, favs, cat: i % 4 === 0 ? "anime" : "general",
+    purity: "sfw", colors: [], size: 3.2e6 + i * 4.1e5, type: "image/jpeg",
+    added: "2026-0" + (1 + (i % 8)) + "-1" + (i % 9), sample: true
+  };
+});
+
+class Component extends DCLogic {
+  state = {
+    view: "browse", query: "", page: 1, items: seeded(1), loading: false,
+    notice: "Sample imagery — live Wallhaven results replace this as soon as the API is reachable (browser sandbox blocks wallhaven.cc; the packaged app is not restricted).",
+    sorting: "toplist", order: "desc", topRange: "1M", tile: "L",
+    categories: { general: true, anime: true, people: false },
+    purity: { sfw: true, sketchy: false, nsfw: false },
+    mode: "atleast", atleast: "1920x1080", ratios: [], color: null,
+    filtersOpen: false, hover: null, detail: null, detailTags: null,
+    favorites: [], downloads: [], collections: [], newCollection: "",
+    current: null, recents: [], rotate: true, interval: "1h", shuffle: true,
+    source: "Favorites", apiKey: "", dir: "~/Pictures/Walder", parallel: "4",
+    displays: [
+      { id: "d1", name: "Built-in Retina Display", res: "3456 × 2234", ratio: "16/10", fit: "Fill", wall: null },
+      { id: "d2", name: "Studio Display", res: "5120 × 2880", ratio: "16/9", fit: "Fill", wall: null },
+      { id: "d3", name: "iPad Air — Sidecar", res: "2360 × 1640", ratio: "4/3", fit: "Fit", wall: null }
+    ],
+    saved: 0
+  };
+
+  componentDidMount() {
+    if (this.props.startView) this.setState({ view: this.props.startView.toLowerCase() });
+    if (this.props.tileSize) this.setState({ tile: this.props.tileSize[0].toUpperCase() });
+    if (this.props.showMenuBar) this.setState({ menuBarOpen: true });
+    if (this.props.safeMode) this.setState({ purity: { sfw: true, sketchy: false, nsfw: false } });
+    if (this.props.defaultSort) this.setState({ sorting: this.props.defaultSort });
+    this.load(1, true);
+    this.tick = setInterval(() => this.pump(), 260);
+  }
+  componentWillUnmount() { clearInterval(this.tick); }
+
+  bits(o, keys) { return keys.map(k => (o[k] ? "1" : "0")).join(""); }
+
+  async load(page, reset) {
+    const s = this.state;
+    const p = new URLSearchParams({
+      page: String(page),
+      categories: this.bits(s.categories, ["general", "anime", "people"]),
+      purity: this.bits(s.purity, ["sfw", "sketchy", "nsfw"]),
+      sorting: s.sorting, order: s.order
+    });
+    if (s.query) p.set("q", s.query);
+    if (s.sorting === "toplist") p.set("topRange", s.topRange);
+    if (s.mode === "exact") p.set("resolutions", s.atleast); else p.set("atleast", s.atleast);
+    if (s.ratios.length) p.set("ratios", s.ratios.join(","));
+    if (s.color) p.set("colors", s.color);
+    if (s.apiKey) p.set("apikey", s.apiKey);
+    this.setState({ loading: true });
+    try {
+      const r = await fetch("https://wallhaven.cc/api/v1/search?" + p.toString());
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      const j = await r.json();
+      const items = (j.data || []).map(w => ({
+        id: w.id, src: w.thumbs && (w.thumbs.large || w.thumbs.original || w.thumbs.small),
+        full: w.path, res: w.resolution, ratio: w.ratio, views: w.views, favs: w.favorites,
+        cat: w.category, purity: w.purity, colors: w.colors || [], size: w.file_size,
+        type: w.file_type, added: (w.created_at || "").slice(0, 10), url: w.url
+      }));
+      this.setState(st => ({
+        items: reset ? items : st.items.concat(items), page, loading: false, notice: "",
+        current: st.current || items[0] || null
+      }));
+    } catch (e) {
+      const fake = seeded(page);
+      this.setState(st => ({
+        items: reset ? fake : st.items.concat(fake), page, loading: false,
+        notice: "Sample imagery — wallhaven.cc/api/v1 is unreachable from the browser sandbox (" + e.message + "). The packaged app makes the same request without CORS restrictions."
+      }));
+    }
+  }
+
+  pump() {
+    const act = this.state.downloads.filter(d => d.status === "Active");
+    if (!act.length) return;
+    this.setState(st => ({
+      downloads: st.downloads.map(d => d.status !== "Active" ? d :
+        (d.pct + 9 >= 100 ? { ...d, pct: 100, status: "Done" } : { ...d, pct: d.pct + 9 }))
+    }));
+  }
+
+  go(v) { return () => this.setState({ view: v, filtersOpen: false }); }
+  setWall(it) {
+    this.setState(st => ({
+      current: it, recents: [it].concat(st.recents.filter(r => r.id !== it.id)).slice(0, 6),
+      displays: st.displays.map(d => ({ ...d, wall: d.wall || it }))
+    }));
+  }
+  fav(it) {
+    this.setState(st => ({
+      favorites: st.favorites.some(f => f.id === it.id)
+        ? st.favorites.filter(f => f.id !== it.id) : st.favorites.concat([it])
+    }));
+  }
+  download(it) {
+    this.setState(st => st.downloads.some(d => d.id === it.id) ? {} : ({
+      downloads: [{ id: it.id, item: it, name: "wallhaven-" + it.id + ".jpg", pct: 4, status: "Active", size: it.size ? (it.size / 1048576).toFixed(1) + " MB" : "—" }].concat(st.downloads)
+    }));
+  }
+  async openDetail(it) {
+    this.setState({ detail: it, detailTags: null });
+    if (it.fallback) return;
+    try {
+      const r = await fetch("https://wallhaven.cc/api/v1/w/" + it.id + (this.state.apiKey ? "?apikey=" + this.state.apiKey : ""));
+      const j = await r.json();
+      this.setState({ detailTags: (j.data.tags || []).map(t => t.name), detailUploader: j.data.uploader && j.data.uploader.username });
+    } catch (e) { /* keep silent, sheet still works */ }
+  }
+
+  seg(active, val, label, fn) {
+    return { label, pick: fn, bg: active === val ? "rgba(255,255,255,.16)" : "transparent", fg: active === val ? "#F2F2F7" : "rgba(242,242,247,.55)" };
+  }
+
+  renderVals() {
+    const s = this.state;
+    const grid = { browse: 1, toplist: 1, favorites: 1 };
+    const gridItems = s.view === "favorites" ? s.favorites : s.items;
+    const titles = {
+      browse: ["Browse", "Wallhaven · " + (s.query ? '"' + s.query + '"' : "all wallpapers")],
+      toplist: ["Toplist", "Most favorited · past " + s.topRange],
+      favorites: ["Favorites", s.favorites.length + " saved"],
+      collections: ["Collections", s.collections.length + " local collections"],
+      downloads: ["Downloads", s.downloads.filter(d => d.status === "Active").length + " active · " + s.downloads.length + " total"],
+      displays: ["Displays", s.displays.length + " connected"],
+      schedule: ["Schedule", s.rotate ? "Rotating every " + s.interval : "Rotation paused"],
+      settings: ["Settings", "Local preferences and API access"]
+    };
+    const t = titles[s.view] || titles.browse;
+    const currentThumb = s.current && s.current.src ? "url(" + s.current.src + ")" : PH;
+
+    const navItem = (v, label, badge) => ({
+      label, badge: badge || null, go: this.go(v),
+      weight: s.view === v ? "590" : "450",
+      color: s.view === v ? "#F2F2F7" : "rgba(242,242,247,.72)",
+      bg: s.view === v ? "rgba(255,255,255,.11)" : "transparent",
+      dot: s.view === v ? "#0A84FF" : "rgba(242,242,247,.22)"
+    });
+
+    const tiles = gridItems.map(it => {
+      const h = s.hover === it.id;
+      const isFav = s.favorites.some(f => f.id === it.id);
+      return {
+        id: it.id, src: it.src, fallback: !it.src, alt: it.src ? "wallhaven " + it.id : "wallpaper thumbnail",
+        res: it.res, meta: it.favs ? it.favs.toLocaleString() + " favs" : it.ratio,
+        bg: it.src ? "#101216" : PH,
+        hover: h ? 1 : 0, lift: h ? "0px" : "6px",
+        transform: h ? "translateY(-3px) scale(1.012)" : "none",
+        shadow: h ? "0 18px 40px -10px rgba(0,0,0,.75)" : "0 2px 10px rgba(0,0,0,.35)",
+        ring: it.purity === "nsfw" ? "#FF453A" : it.purity === "sketchy" ? "#FF9F0A" : "transparent",
+        ringW: it.purity === "sfw" ? "0px" : "2px",
+        favColor: isFav ? "#0A84FF" : "rgba(255,255,255,.55)",
+        enter: () => this.setState({ hover: it.id }),
+        leave: () => this.setState({ hover: null }),
+        open: () => this.openDetail(it),
+        set: e => { e.stopPropagation(); this.setWall(it); },
+        download: e => { e.stopPropagation(); this.download(it); },
+        fav: e => { e.stopPropagation(); this.fav(it); }
+      };
+    });
+
+    const check = (label, on, toggle, color) => ({
+      label, toggle, color: color || "rgba(242,242,247,.85)",
+      boxBg: on ? "#0A84FF" : "rgba(255,255,255,.07)",
+      boxBorder: on ? "#0A84FF" : "rgba(255,255,255,.22)",
+      checkOpacity: on ? 1 : 0
+    });
+    const tgl = (obj, key) => () => this.setState({ [obj]: { ...s[obj], [key]: !s[obj][key] } });
+
+    const filterGroups = [
+      { label: "CATEGORY", isChecks: true, items: [
+        check("General", s.categories.general, tgl("categories", "general")),
+        check("Anime", s.categories.anime, tgl("categories", "anime")),
+        check("People", s.categories.people, tgl("categories", "people"))] },
+      { label: "PURITY", isChecks: true, items: [
+        check("SFW", s.purity.sfw, tgl("purity", "sfw")),
+        check("Sketchy", s.purity.sketchy, tgl("purity", "sketchy"), "#FFCF80"),
+        check("NSFW", s.purity.nsfw, tgl("purity", "nsfw"), "#FF8A80")] },
+      { label: "SORT BY", isChips: true, items: SORTS.map(([v, l]) => ({
+        label: l, pick: () => this.setState({ sorting: v }),
+        bg: s.sorting === v ? "rgba(10,132,255,.22)" : "rgba(255,255,255,.06)",
+        fg: s.sorting === v ? "#6AB8FF" : "rgba(242,242,247,.7)",
+        border: s.sorting === v ? "rgba(10,132,255,.5)" : "rgba(255,255,255,.1)" })) },
+      { label: "ORDER", isSegment: true, items: [
+        this.seg(s.order, "desc", "Descending", () => this.setState({ order: "desc" })),
+        this.seg(s.order, "asc", "Ascending", () => this.setState({ order: "asc" }))] },
+      { label: "RESOLUTION MODE", isSegment: true, items: [
+        this.seg(s.mode, "atleast", "At Least", () => this.setState({ mode: "atleast" })),
+        this.seg(s.mode, "exact", "Exactly", () => this.setState({ mode: "exact" }))] },
+      { label: "RESOLUTIONS", isChips: true, items: RES.map(r => ({
+        label: r, pick: () => this.setState({ atleast: r }),
+        bg: s.atleast === r ? "rgba(10,132,255,.22)" : "rgba(255,255,255,.06)",
+        fg: s.atleast === r ? "#6AB8FF" : "rgba(242,242,247,.7)",
+        border: s.atleast === r ? "rgba(10,132,255,.5)" : "rgba(255,255,255,.1)" })) },
+      { label: "RATIOS", isChips: true, items: RATIOS.map(r => ({
+        label: r, pick: () => this.setState({ ratios: s.ratios.includes(r) ? s.ratios.filter(x => x !== r) : s.ratios.concat([r]) }),
+        bg: s.ratios.includes(r) ? "rgba(10,132,255,.22)" : "rgba(255,255,255,.06)",
+        fg: s.ratios.includes(r) ? "#6AB8FF" : "rgba(242,242,247,.7)",
+        border: s.ratios.includes(r) ? "rgba(10,132,255,.5)" : "rgba(255,255,255,.1)" })) },
+      { label: "COLOR", isColors: true, items: COLORS.map(c => ({
+        hex: "#" + c, ringW: s.color === c ? "2px" : "0px",
+        pick: () => this.setState({ color: s.color === c ? null : c }) })) }
+    ];
+
+    const filterCount = [
+      s.ratios.length, s.color ? 1 : 0, s.purity.sketchy ? 1 : 0, s.purity.nsfw ? 1 : 0,
+      s.categories.people ? 1 : 0, s.mode === "exact" ? 1 : 0
+    ].reduce((a, b) => a + b, 0);
+
+    const d = s.detail;
+    const detail = !d ? null : {
+      src: d.src || "", alt: "wallhaven " + d.id, res: d.res,
+      title: d.fallback ? "Placeholder wallpaper" : "wallhaven-" + d.id,
+      byline: (this.state.detailUploader ? "by " + this.state.detailUploader + " · " : "") + (d.cat || "general") + " · " + (d.purity || "sfw"),
+      favBg: s.favorites.some(f => f.id === d.id) ? "rgba(10,132,255,.2)" : "rgba(255,255,255,.1)",
+      favFg: s.favorites.some(f => f.id === d.id) ? "#6AB8FF" : "#F2F2F7",
+      favLabel: s.favorites.some(f => f.id === d.id) ? "Saved" : "Favorite",
+      meta: [
+        { k: "Resolution", v: d.res }, { k: "Ratio", v: d.ratio },
+        { k: "File", v: (d.type || "").replace("image/", "").toUpperCase() + (d.size ? " · " + (d.size / 1048576).toFixed(1) + " MB" : "") },
+        { k: "Views", v: (d.views || 0).toLocaleString() },
+        { k: "Favorites", v: (d.favs || 0).toLocaleString() },
+        { k: "Added", v: d.added || "—" }
+      ],
+      tags: (s.detailTags || (d.colors || []).map(c => c)).map(x => ({
+        label: String(x).replace(/^#/, "#"), search: () => this.setState({ query: String(x), detail: null }, () => this.load(1, true))
+      })),
+      displays: s.displays.map(dd => ({
+        name: dd.name,
+        state: dd.wall && dd.wall.id === d.id ? "Current" : "Assign",
+        stateColor: dd.wall && dd.wall.id === d.id ? "#30D158" : "rgba(242,242,247,.4)",
+        assign: () => this.setState(st => ({ displays: st.displays.map(x => x.id === dd.id ? { ...x, wall: d } : x), current: d }))
+      }))
+    };
+
+    const chip = st => st === "Done" ? ["rgba(48,209,88,.2)", "#6EE787"] : st === "Failed" ? ["rgba(255,69,58,.2)", "#FF938A"] : st === "Queued" ? ["rgba(255,255,255,.12)", "rgba(242,242,247,.7)"] : ["rgba(10,132,255,.22)", "#6AB8FF"];
+
+    const inputRow = (label, hint, value, key, type) => ({
+      label, hint, isInput: true, value, type: type || "text", placeholder: label,
+      onInput: e => this.setState({ [key]: e.target.value })
+    });
+    const segRow = (label, hint, opts, val, key) => ({
+      label, hint, isSegment: true,
+      options: opts.map(o => this.seg(val, o, o, () => this.setState({ [key]: o })))
+    });
+    const toggleRow = (label, hint, on, key) => ({
+      label, hint, isToggle: true, toggle: () => this.setState({ [key]: !s[key] }),
+      toggleBg: on ? "#30D158" : "rgba(255,255,255,.16)", knob: on ? "17px" : "0px"
+    });
+    const withBorders = rows => rows.map((r, i) => ({ ...r, border: i === 0 ? "none" : ".5px solid rgba(255,255,255,.07)" }));
+
+    const prefSections = s.view === "schedule" ? [
+      { label: "ROTATION", rows: withBorders([
+        toggleRow("Change wallpaper automatically", "Runs through the scheduler crate", s.rotate, "rotate"),
+        segRow("Interval", null, ["15m", "1h", "6h", "Daily"], s.interval, "interval"),
+        segRow("Source", null, ["Favorites", "Collection", "Downloads"], s.source, "source"),
+        toggleRow("Shuffle wallpapers", "Otherwise plays in order", s.shuffle, "shuffle")]) },
+      { label: "SCOPE", rows: withBorders([
+        segRow("Apply to", null, ["All displays", "Main only", "Per display"], s.scope || "All displays", "scope"),
+        toggleRow("Pause on battery", "Skips downloads while unplugged", !!s.pauseBattery, "pauseBattery")]) }
+    ] : [
+      { label: "WALLHAVEN", rows: withBorders([
+        inputRow("Wallhaven API Key", "Required for NSFW results and higher rate limits", s.apiKey, "apiKey", "password"),
+        inputRow("Download directory", null, s.dir, "dir"),
+        inputRow("Max parallel downloads", null, s.parallel, "parallel")]) },
+      { label: "BEHAVIOUR", rows: withBorders([
+        segRow("Wallpaper source", null, ["Download Directory", "Cache"], s.wsource || "Download Directory", "wsource"),
+        toggleRow("Prefer local file in preview", "Avoids re-downloading the full image", s.preferLocal !== false, "preferLocal"),
+        toggleRow("Show purity borders", "Red for NSFW, amber for sketchy", s.borders !== false, "borders"),
+        toggleRow("Launch at login as menu bar item", null, !!s.launch, "launch")]) }
+    ];
+
+    const collections = (s.collections.length ? s.collections : [{ name: "Untitled", items: [] }]).map(c => {
+      const pool = c.items.length ? c.items : s.favorites.length ? s.favorites : s.items.slice(0, 3);
+      const bg = i => pool[i] && pool[i].src ? "url(" + pool[i].src + ")" : PH;
+      return { name: c.name, count: (c.items.length || pool.length) + " wallpapers", a: bg(0), b: bg(1), c: bg(2), shuffle: () => { const p = pool[Math.floor(Math.random() * pool.length)]; if (p) this.setWall(p); } };
+    });
+
+    return {
+      desktopBg: currentThumb,
+      title: t[0], subtitle: t[1],
+      nav: [
+        { label: "LIBRARY", items: [navItem("browse", "Browse"), navItem("toplist", "Toplist"), navItem("favorites", "Favorites", s.favorites.length || null)] },
+        { label: "LOCAL", items: [navItem("downloads", "Downloads", s.downloads.length || null), navItem("collections", "Collections", s.collections.length || null)] },
+        { label: "SYSTEM", items: [navItem("displays", "Displays", s.displays.length), navItem("schedule", "Schedule"), navItem("settings", "Settings")] }
+      ],
+      apiState: s.notice ? "api: offline" : "api: wallhaven v1",
+      isSearchable: !!grid[s.view], isGrid: !!grid[s.view],
+      isCollections: s.view === "collections", isDownloads: s.view === "downloads",
+      isDisplays: s.view === "displays", isPrefs: s.view === "schedule" || s.view === "settings",
+      query: s.query,
+      onQuery: e => this.setState({ query: e.target.value }),
+      onQueryKey: e => { if (e.key === "Enter") this.load(1, true); },
+      toggleFilters: () => this.setState({ filtersOpen: !s.filtersOpen }),
+      filtersOpen: s.filtersOpen, filterGroups, filterCount: filterCount || "",
+      filtersBg: s.filtersOpen ? "rgba(10,132,255,.25)" : "rgba(255,255,255,.08)",
+      filtersFg: s.filtersOpen ? "#8FCBFF" : "#F2F2F7",
+      applyFilters: () => { this.setState({ filtersOpen: false }); this.load(1, true); },
+      resetFilters: () => this.setState({ ratios: [], color: null, mode: "atleast", atleast: "1920x1080", categories: { general: true, anime: true, people: false }, purity: { sfw: true, sketchy: false, nsfw: false } }),
+      sizeOptions: [
+        this.seg(s.tile, "S", "Compact", () => this.setState({ tile: "S" })),
+        this.seg(s.tile, "M", "Grid", () => this.setState({ tile: "M" })),
+        this.seg(s.tile, "L", "Large", () => this.setState({ tile: "L" }))],
+      tileMin: s.tile === "S" ? "200px" : s.tile === "M" ? "280px" : "400px",
+      tiles, loading: s.loading, notice: s.notice,
+      isEmpty: !s.loading && !tiles.length,
+      emptyTitle: s.view === "favorites" ? "No favorites yet" : "Search for wallpapers",
+      emptyBody: s.view === "favorites" ? "Tap the dot on any tile to save it here." : "Try a tag, or open Filters and pick a resolution.",
+      scrollRef: el => { this.scroller = el; },
+      onScroll: e => {
+        const el = e.target;
+        if (!s.loading && grid[s.view] && el.scrollTop + el.clientHeight > el.scrollHeight - 700) this.load(s.page + 1, false);
+      },
+      collections, newCollection: s.newCollection,
+      onNewCollection: e => this.setState({ newCollection: e.target.value }),
+      createCollection: () => s.newCollection.trim() && this.setState({ collections: s.collections.concat([{ name: s.newCollection.trim(), items: s.favorites.slice() }]), newCollection: "" }),
+      downloads: s.downloads.map(dl => {
+        const [bg, fg] = chip(dl.status);
+        return {
+          name: dl.name, status: dl.status, size: dl.size, pct: dl.pct + "%",
+          thumb: dl.item.src ? "url(" + dl.item.src + ")" : PH,
+          chipBg: bg, chipFg: fg,
+          barColor: dl.status === "Done" ? "#30D158" : dl.status === "Failed" ? "#FF453A" : "#0A84FF",
+          setBg: dl.status === "Done" ? "rgba(10,132,255,.2)" : "rgba(255,255,255,.06)",
+          setFg: dl.status === "Done" ? "#6AB8FF" : "rgba(242,242,247,.35)",
+          set: () => dl.status === "Done" && this.setWall(dl.item)
+        };
+      }),
+      noDownloads: !s.downloads.length,
+      clearFinished: () => this.setState({ downloads: s.downloads.filter(x => x.status !== "Done") }),
+      retryFailed: () => this.setState({ downloads: s.downloads.map(x => x.status === "Failed" ? { ...x, status: "Active", pct: 4 } : x) }),
+      displays: s.displays.map(dd => ({
+        name: dd.name, res: dd.res, ratio: dd.ratio,
+        wall: dd.wall && dd.wall.src ? "url(" + dd.wall.src + ")" : PH,
+        assign: () => s.current && this.setState({ displays: s.displays.map(x => x.id === dd.id ? { ...x, wall: s.current } : x) }),
+        fits: ["Fill", "Fit", "Stretch"].map(f => ({
+          label: f, bg: dd.fit === f ? "rgba(10,132,255,.22)" : "rgba(255,255,255,.06)",
+          fg: dd.fit === f ? "#6AB8FF" : "rgba(242,242,247,.6)",
+          pick: () => this.setState({ displays: s.displays.map(x => x.id === dd.id ? { ...x, fit: f } : x) })
+        }))
+      })),
+      prefSections, savedOpacity: s.saved ? 1 : 0,
+      savePrefs: () => { this.setState({ saved: 1 }); setTimeout(() => this.setState({ saved: 0 }), 1800); },
+      detail, closeDetail: () => this.setState({ detail: null }), stop: e => e.stopPropagation(),
+      setDetail: () => { this.setWall(d); this.setState({ detail: null }); },
+      downloadDetail: () => this.download(d),
+      favDetail: () => this.fav(d),
+      menuBarOpen: !!s.menuBarOpen,
+      toggleMenuBar: () => this.setState({ menuBarOpen: !s.menuBarOpen }),
+      currentLabel: s.current ? "wallhaven-" + s.current.id : "no wallpaper set",
+      nextChange: s.rotate ? "next in " + s.interval : "paused",
+      rotate: s.rotate, rotateLabel: s.rotate ? "Rotating" : "Paused",
+      rotateBg: s.rotate ? "rgba(48,209,88,.18)" : "rgba(255,255,255,.09)",
+      rotateFg: s.rotate ? "#6EE787" : "rgba(242,242,247,.7)",
+      toggleRotate: () => this.setState({ rotate: !s.rotate }),
+      shuffleNow: () => { const pool = s.favorites.length ? s.favorites : s.items; const p = pool[Math.floor(Math.random() * pool.length)]; if (p) this.setWall(p); },
+      recents: (s.recents.length ? s.recents : s.items.slice(0, 3)).slice(0, 3).map(r => ({
+        thumb: r.src ? "url(" + r.src + ")" : PH, set: () => this.setWall(r)
+      }))
+    };
+  }
+}
+</script>
+</body>
+</html>

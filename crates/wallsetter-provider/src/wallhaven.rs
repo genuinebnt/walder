@@ -6,6 +6,10 @@ use wallsetter_core::*;
 const BASE_URL: &str = "https://wallhaven.cc/api/v1";
 
 /// Wallhaven API client implementing the `Provider` trait.
+///
+/// Cloning shares the underlying connection pool, so a clone can be taken out
+/// of a lock guard before awaiting.
+#[derive(Clone)]
 pub struct WallhavenClient {
     client: Client,
     api_key: Option<String>,
