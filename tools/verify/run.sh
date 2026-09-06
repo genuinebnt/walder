@@ -21,6 +21,7 @@ swiftc -Onone \
     "$ROOT/apps/Lumen/Sources/Model/LumenCore.swift" \
     "$ROOT/apps/Lumen/Sources/Model/Store.swift" \
     "$ROOT/apps/Lumen/Sources/Model/WallpaperSetter.swift" \
+    "$ROOT/apps/Lumen/Sources/Model/MenuBarLegibility.swift" \
     "$ROOT/apps/Lumen/Sources/Model/ImageCache.swift" \
     "$ROOT/apps/Lumen/Sources/Views/PreviewPane.swift" \
     "$ROOT/apps/Lumen/Sources/Views/FiltersPopover.swift" \

@@ -663,6 +663,89 @@ func run() async -> Int32 {
         return store.downloads.count == before
     }
 
+    v.section("Menu bar legibility")
+
+    /// A flat image of one luminance, for the assessments below.
+    func flat(_ level: Double) -> NSImage {
+        let size = NSSize(width: 256, height: 160)
+        let image = NSImage(size: size)
+        image.lockFocus()
+        NSColor(calibratedWhite: level, alpha: 1).setFill()
+        NSRect(origin: .zero, size: size).fill()
+        image.unlockFocus()
+        return image
+    }
+
+    /// Dark everywhere except a bright band across the top.
+    func brightTopped() -> NSImage {
+        let size = NSSize(width: 256, height: 160)
+        let image = NSImage(size: size)
+        image.lockFocus()
+        NSColor(calibratedWhite: 0.05, alpha: 1).setFill()
+        NSRect(origin: .zero, size: size).fill()
+        NSColor(calibratedWhite: 0.5, alpha: 1).setFill()
+        // Top of the image is the high-y end in AppKit's flipped-up space.
+        NSRect(x: 0, y: size.height - 14, width: size.width, height: 14).fill()
+        image.unlockFocus()
+        return image
+    }
+
+    let screen = CGSize(width: 3024, height: 1964)
+    v.check("A dark strip reads as safe") {
+        guard let verdict = MenuBarLegibility.assess(flat(0.05), displaySize: screen)
+        else { return false }
+        return !verdict.isRisky && verdict.luminance < 0.2
+    }
+    v.check("A near-white strip reads as safe") {
+        guard let verdict = MenuBarLegibility.assess(flat(0.97), displaySize: screen)
+        else { return false }
+        return !verdict.isRisky
+    }
+    v.check("A mid-tone strip is flagged") {
+        guard let verdict = MenuBarLegibility.assess(flat(0.5), displaySize: screen)
+        else { return false }
+        return verdict.isRisky && verdict.summary.localizedCaseInsensitiveContains("mid-tone")
+    }
+    v.check("A dark image with a bright top is judged on the top, not the average") {
+        // The whole point: macOS picks the text colour from the whole image,
+        // so a dark wallpaper with a light band still fails.
+        guard let verdict = MenuBarLegibility.assess(brightTopped(), displaySize: screen)
+        else { return false }
+        return verdict.isRisky
+    }
+    v.check("A degenerate image is declined rather than guessed at") {
+        MenuBarLegibility.assess(NSImage(size: .zero), displaySize: screen) == nil
+            && MenuBarLegibility.assess(flat(0.5), displaySize: .zero) == nil
+    }
+
+    v.section("Appearance pairing")
+    v.check("Binding a wallpaper to light and dark persists") {
+        guard store.wallpapers.count >= 2 else { return true }
+        store.setPaired(store.wallpapers[0], dark: false)
+        store.setPaired(store.wallpapers[1], dark: true)
+        let reopened = Store(defaults: defaults)
+        return reopened.lightWallpaper?.id == store.wallpapers[0].id
+            && reopened.darkWallpaper?.id == store.wallpapers[1].id
+    }
+    v.check("The pane knows which half a wallpaper is") {
+        guard store.wallpapers.count >= 2 else { return true }
+        return store.pairedRole(store.wallpapers[0]) == "Light"
+            && store.pairedRole(store.wallpapers[1]) == "Dark"
+    }
+    v.check("Unbinding clears just that half") {
+        guard store.wallpapers.count >= 2 else { return true }
+        store.setPaired(nil, dark: false)
+        return store.lightWallpaper == nil
+            && store.darkWallpaper?.id == store.wallpapers[1].id
+    }
+    v.check("Following is off until asked for, and does nothing unset") {
+        let store = Store(defaults: UserDefaults(suiteName: "cc.lumen.verify.pair")!)
+        defer { UserDefaults.standard.removePersistentDomain(forName: "cc.lumen.verify.pair") }
+        let wasFollowing = store.followsAppearance
+        store.applyPairedWallpaper()          // must not crash with no pair set
+        return wasFollowing == false && store.current == nil
+    }
+
     v.section("Scroll position")
     v.check("An anchor is remembered per pane and kept apart") {
         store.rememberScroll("abc123", for: "browse")

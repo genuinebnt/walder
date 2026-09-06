@@ -105,6 +105,9 @@ final class Store {
         showPurityBorders = bool("showPurityBorders", default: true)
         pauseOnBattery = bool("pauseOnBattery", default: false)
         presets = Self.loadJSON([FilterPreset].self, "filterPresets", from: defaults) ?? []
+        followsAppearance = bool("followsAppearance", default: false)
+        lightWallpaper = Self.loadJSON(Wallpaper?.self, "lightWallpaper", from: defaults) ?? nil
+        darkWallpaper = Self.loadJSON(Wallpaper?.self, "darkWallpaper", from: defaults) ?? nil
 
         // The filter set from last launch, so a tuned search survives a restart.
         filters = Self.loadJSON(SearchFilters.self, "lastFilters", from: defaults) ?? SearchFilters()
@@ -501,6 +504,48 @@ final class Store {
             try? await Task.sleep(for: .seconds(2.5))
             withAnimation(Tokens.normal) { savedConfirmation = false }
         }
+    }
+
+    // MARK: Appearance pairing
+    //
+    // Two wallpapers bound to the system appearance, so the desktop follows
+    // light and dark the way the rest of the system does.
+
+    /// Wallpaper shown while the system is light.
+    var lightWallpaper: Wallpaper? { didSet { savePair() } }
+    /// Wallpaper shown while the system is dark.
+    var darkWallpaper: Wallpaper? { didSet { savePair() } }
+    /// Off by default: it writes the desktop on every appearance change.
+    var followsAppearance: Bool { didSet { save(followsAppearance, "followsAppearance") } }
+
+    private func savePair() {
+        saveJSON(lightWallpaper, "lightWallpaper")
+        saveJSON(darkWallpaper, "darkWallpaper")
+    }
+
+    /// Applies whichever of the pair matches the system right now.
+    @MainActor
+    func applyPairedWallpaper() {
+        guard followsAppearance else { return }
+        let isDark = NSApp.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+        guard let wanted = isDark ? darkWallpaper : lightWallpaper else { return }
+        guard current?.id != wanted.id else { return }
+        setWallpaper(wanted)
+    }
+
+    /// True when this wallpaper is one half of the pair.
+    func pairedRole(_ wallpaper: Wallpaper) -> String? {
+        if lightWallpaper?.id == wallpaper.id { return "Light" }
+        if darkWallpaper?.id == wallpaper.id { return "Dark" }
+        return nil
+    }
+
+    @MainActor
+    func setPaired(_ wallpaper: Wallpaper?, dark: Bool) {
+        withAnimation(Tokens.quick) {
+            if dark { darkWallpaper = wallpaper } else { lightWallpaper = wallpaper }
+        }
+        applyPairedWallpaper()
     }
 
     // MARK: Scroll position

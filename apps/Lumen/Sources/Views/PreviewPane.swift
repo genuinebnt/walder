@@ -23,6 +23,9 @@ struct PreviewPane: View {
     /// Briefly true after a set, so the button can confirm without the pane
     /// closing out from under you.
     @State private var justSet = false
+    /// Whether the menu bar will read over this wallpaper. Computed from the
+    /// decoded image, so it arrives once the preview has loaded.
+    @State private var menuBar: MenuBarLegibility.Verdict?
 
     init(items: [Wallpaper], selected: Wallpaper, close: @escaping () -> Void) {
         self.items = items
@@ -82,6 +85,10 @@ struct PreviewPane: View {
             _ = await ImageCache.shared.image(for: currentSource,
                                               maxPixels: ImageDetail.preview)
             await details
+            // The strip under the menu bar can only be judged once there is a
+            // decoded image to judge.
+            menuBar = ImageCache.shared.cached(currentSource, maxPixels: ImageDetail.preview)
+                .flatMap { MenuBarLegibility.assess($0, displaySize: WallpaperFitter.mainPixelSize) }
             // The visible image is decoded; now warm what ← and → will need.
             prefetchNeighbours()
             await store.loadNextPageIfNeeded(after: wallpaper)
@@ -218,6 +225,7 @@ struct PreviewPane: View {
 
                 actions
                 fitReport
+                appearancePair
                 collections
                 uploader
                 metadata
@@ -330,6 +338,21 @@ struct PreviewPane: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(.quaternary.opacity(0.4), in: .rect(cornerRadius: Tokens.control))
 
+            if let menuBar {
+                HStack(spacing: Tokens.s2) {
+                    Image(systemName: menuBar.isRisky
+                          ? "menubar.rectangle" : "checkmark.circle")
+                        .foregroundStyle(menuBar.isRisky ? Tokens.warning : Tokens.success)
+                    Text(menuBar.summary).font(.system(size: 12))
+                    Spacer()
+                }
+                .padding(.horizontal, 11).padding(.vertical, 8)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(.quaternary.opacity(0.4), in: .rect(cornerRadius: Tokens.control))
+                .help("macOS picks the menu bar's text colour from the whole "
+                      + "image, so a bright or busy strip at the top can leave it unreadable")
+            }
+
             if !fit.isPerfect {
                 HStack(spacing: Tokens.s2) {
                     Button {
@@ -352,6 +375,42 @@ struct PreviewPane: View {
                 }
                 .controlSize(.small)
             }
+        }
+    }
+
+    /// Bind this wallpaper to light or dark, so the desktop follows the system.
+    private var appearancePair: some View {
+        VStack(alignment: .leading, spacing: Tokens.s2) {
+            Text("APPEARANCE PAIR").font(.sectionLabel).foregroundStyle(.secondary)
+            HStack(spacing: Tokens.s2) {
+                ForEach([false, true], id: \.self) { dark in
+                    let isThis = dark
+                        ? store.darkWallpaper?.id == wallpaper.id
+                        : store.lightWallpaper?.id == wallpaper.id
+                    Button {
+                        // Tapping the current one unbinds it.
+                        store.setPaired(isThis ? nil : wallpaper, dark: dark)
+                    } label: {
+                        Label(dark ? "Dark" : "Light",
+                              systemImage: dark ? "moon" : "sun.max")
+                            .font(.system(size: 12))
+                            .padding(.vertical, 6)
+                            .frame(maxWidth: .infinity)
+                            .background(isThis ? Tokens.accent.opacity(0.2)
+                                        : Color.secondary.opacity(0.12),
+                                        in: .rect(cornerRadius: Tokens.control))
+                            .foregroundStyle(isThis ? Tokens.accent : .secondary)
+                            .contentShape(.rect)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            Toggle("Follow system appearance", isOn: Binding(
+                get: { store.followsAppearance },
+                set: { store.followsAppearance = $0 }))
+                .font(.system(size: 11.5))
+                .controlSize(.small)
+                .disabled(store.lightWallpaper == nil && store.darkWallpaper == nil)
         }
     }
 

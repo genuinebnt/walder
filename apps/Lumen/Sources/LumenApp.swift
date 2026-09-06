@@ -3,6 +3,7 @@ import AppKit
 
 @main
 struct LumenApp: App {
+    @Environment(\.colorScheme) private var colorScheme
     @State private var store = Store()
 
     var body: some Scene {
@@ -15,6 +16,13 @@ struct LumenApp: App {
                     store.boot()
                     await store.search()
                 }
+                // The desktop follows light and dark like the rest of the
+                // system, when a pair has been set.
+                .onReceive(NotificationCenter.default.publisher(
+                    for: NSApplication.didChangeOcclusionStateNotification)) { _ in
+                    store.applyPairedWallpaper()
+                }
+                .onChange(of: colorScheme) { _, _ in store.applyPairedWallpaper() }
         }
         .windowStyle(.hiddenTitleBar)          // sidebar owns the traffic-light area
         .windowToolbarStyle(.unified(showsTitle: false))
