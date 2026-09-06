@@ -4,6 +4,7 @@ struct FiltersPopover: View {
     @Environment(Store.self) private var store
     var dismiss: () -> Void
     @State private var presetName = ""
+    @State private var excludedTag = ""
 
     private var filters: Binding<SearchFilters> {
         Binding(get: { store.filters }, set: { store.filters = $0 })
@@ -12,6 +13,20 @@ struct FiltersPopover: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: Tokens.s4) {
+                content
+                advanced
+                actions
+            }
+            .padding(Tokens.s4)
+        }
+        .frame(width: 310)
+        .frame(maxHeight: 640)
+    }
+
+    /// What the wallpaper is: category, purity, and how results are ordered.
+    @ViewBuilder
+    private var content: some View {
+
                 group("Category") {
                     ForEach(Category.allCases) { category in
                         Toggle(category.label, isOn: binding(for: category))
@@ -40,6 +55,12 @@ struct FiltersPopover: View {
                         }
                     }
                 }
+    }
+
+    /// How it has to look: size, shape, file type, colour, and what to leave out.
+    @ViewBuilder
+    private var advanced: some View {
+
                 group("Resolution") {
                     Picker("", selection: filters.mode) {
                         ForEach(ResolutionMode.allCases) { Text($0.label).tag($0) }
@@ -80,6 +101,34 @@ struct FiltersPopover: View {
                         }
                     }
                 }
+                group("File Type") {
+                    Picker("", selection: filters.fileType) {
+                        ForEach(FileTypeFilter.allCases) { Text($0.label).tag($0) }
+                    }
+                    .pickerStyle(.segmented).labelsHidden()
+                }
+                group("Exclude Tags") {
+                    HStack(spacing: Tokens.s2) {
+                        TextField("Tag to exclude", text: $excludedTag)
+                            .textFieldStyle(.roundedBorder)
+                            .controlSize(.small)
+                            .onSubmit(excludeTag)
+                        Button("Exclude", action: excludeTag)
+                            .controlSize(.small)
+                            .disabled(excludedTag.trimmingCharacters(in: .whitespaces).isEmpty)
+                    }
+                    if !store.filters.excludedTags.isEmpty {
+                        ChipRow(options: store.filters.excludedTags.sorted(),
+                                isSelected: { _ in true },
+                                select: { tag in
+                                    // remove returns the element, which would
+                                    // make this closure non-Void.
+                                    withAnimation(Tokens.quick) {
+                                        _ = store.filters.excludedTags.remove(tag)
+                                    }
+                                })
+                    }
+                }
                 group("AI Art") {
                     Picker("", selection: Binding(
                         get: { store.filters.aiArt },
@@ -104,6 +153,10 @@ struct FiltersPopover: View {
 
                 group("Saved Filters") { presets }
 
+    }
+
+    /// Run the search, or start over.
+    private var actions: some View {
                 HStack(spacing: Tokens.s2) {
                     Button("Search") {
                         dismiss()
@@ -113,11 +166,6 @@ struct FiltersPopover: View {
                     .keyboardShortcut(.defaultAction)
                     Button("Clear") { withAnimation(Tokens.normal) { store.filters = SearchFilters() } }
                 }
-            }
-            .padding(Tokens.s4)
-        }
-        .frame(width: 310)
-        .frame(maxHeight: 520)
     }
 
     private func group<Content: View>(_ label: String, @ViewBuilder content: () -> Content) -> some View {
@@ -170,6 +218,16 @@ struct FiltersPopover: View {
                     .disabled(presetName.trimmingCharacters(in: .whitespaces).isEmpty)
             }
         }
+    }
+
+    /// Wallhaven excludes a tag with a leading "-"; the app composes that, so
+    /// the field takes a bare tag name.
+    private func excludeTag() {
+        let tag = excludedTag.trimmingCharacters(in: .whitespaces)
+            .trimmingPrefix("-")
+        guard !tag.isEmpty else { return }
+        withAnimation(Tokens.quick) { _ = store.filters.excludedTags.insert(String(tag)) }
+        excludedTag = ""
     }
 
     private func savePreset() {

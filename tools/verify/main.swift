@@ -576,23 +576,57 @@ func run() async -> Int32 {
         guard !detailed.tags.isEmpty else { return true }
         return !detailed.tagRefs.isEmpty && detailed.tagRefs.allSatisfy { $0.id > 0 }
     }
-    v.check("Find Similar builds an AND of tags plus the palette") {
-        guard var seeded = store.wallpapers.first else { return true }
-        seeded.tags = ["forest", "mist", "trees"]
-        seeded.colors = ["336600"]
-        store.findSimilar(to: seeded)
-        let query = store.filters.query
-        return query.contains("+forest") && query.contains("+mist")
-            && store.filters.color == "336600"
+    v.check("Find Similar uses Wallhaven's own like: operator") {
+        // Approximating similarity from tags was worse than the operator the
+        // API actually provides.
+        guard let sample = store.wallpapers.first else { return true }
+        store.findSimilar(to: sample)
+        return store.filters.query == "like:\(sample.id)"
             && store.filters.sorting == .relevance
     }
-    v.check("Find Similar with no tags still narrows by colour") {
-        guard var bare = store.wallpapers.first else { return true }
-        bare.tags = []
-        bare.tagRefs = []
-        bare.colors = ["0066cc"]
-        store.findSimilar(to: bare)
-        return store.filters.query.isEmpty && store.filters.color == "0066cc"
+    await v.checkAPIAsync("A like: search returns wallpapers") { () -> (Bool, String?) in
+        guard let sample = store.wallpapers.first else { return (true, nil) }
+        var probe = SearchFilters()
+        probe.query = "like:\(sample.id)"
+        probe.sorting = .relevance
+        guard let page = try? await LumenCore.shared.search(probe, page: 1) else {
+            return (false, store.errorMessage)
+        }
+        return (!page.wallpapers.isEmpty, nil)
+    }
+    v.check("File type reaches the query as type:") {
+        var filters = SearchFilters()
+        filters.fileType = .png
+        return filters.composedQuery.contains("type:png")
+            && SearchFilters().composedQuery.isEmpty
+    }
+    v.check("Excluded tags reach the query as -tag") {
+        var filters = SearchFilters()
+        filters.query = "forest"
+        filters.excludedTags = ["anime", "people"]
+        let composed = filters.composedQuery
+        return composed.hasPrefix("forest")
+            && composed.contains("-anime") && composed.contains("-people")
+    }
+    v.check("Operators count towards the active filter badge") {
+        var filters = SearchFilters()
+        let base = filters.activeCount
+        filters.fileType = .jpg
+        filters.excludedTags = ["nsfw"]
+        return filters.activeCount == base + 2
+    }
+    v.check("Any resolution means no resolution filter") {
+        var filters = SearchFilters()
+        filters.resolution = SearchFilters.anyResolution
+        return filters.activeCount == 0
+            && (filters.wirePayload(page: 1)["resolution"] as? String) == ""
+    }
+    v.check("The resolution list covers the site's own groups") {
+        // Six options was the complaint; the site groups many more by shape.
+        SearchFilters.resolutionGroups.count >= 6
+            && SearchFilters.resolutionOptions.count >= 25
+            && SearchFilters.resolutionOptions.contains("3440x1440")
+            && SearchFilters.ratioOptions.contains("32x9")
     }
     await v.checkAsync("Uploader collections decode") {
         guard let sample = store.wallpapers.first,

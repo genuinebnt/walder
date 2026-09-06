@@ -77,6 +77,8 @@ function strings(source) {
     /prompt:\s*"((?:[^"\\]|\\.)*)"/g,
     /placeholder:\s*"((?:[^"\\]|\\.)*)"/g,
     /\bChip\(text:\s*"((?:[^"\\]|\\.)*)"/g,
+    // The popover's own section-label helper; it renders the string as a Text.
+    /\bgroup\(\s*"((?:[^"\\]|\\.)*)"/g,
   ];
   for (const pattern of patterns) {
     for (const match of source.matchAll(pattern)) {

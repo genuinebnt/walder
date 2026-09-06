@@ -705,23 +705,19 @@ final class Store {
         return known.min { abs($0.1 - target) < abs($1.1 - target) }?.0 ?? "16x9"
     }
 
-    /// Searches for wallpapers like this one, from its own tags and palette.
+    /// Searches for wallpapers like this one.
     ///
-    /// Wallhaven has no similarity endpoint, so this is the closest thing it
-    /// supports: an AND of the strongest tags, narrowed to the dominant colour.
-    /// Category and purity carry over so results stay inside what the user
-    /// already said they want to see.
+    /// Wallhaven has a `like:<id>` operator that is its own notion of
+    /// similarity — better than approximating it from tags, which is what this
+    /// used to do. Category and purity carry over so results stay inside what
+    /// the user already said they want to see.
     @MainActor
     func findSimilar(to wallpaper: Wallpaper) {
-        let names = wallpaper.tagRefs.isEmpty ? wallpaper.tags : wallpaper.tagRefs.map(\.name)
         var next = SearchFilters()
         next.categories = filters.categories
         next.purity = filters.purity
-        next.resolution = filters.resolution
-        next.sorting = names.isEmpty ? .toplist : .relevance
-        // Three tags is enough to be specific without returning nothing.
-        next.query = names.prefix(3).map { "+\($0)" }.joined(separator: " ")
-        next.color = wallpaper.colors.first
+        next.sorting = .relevance
+        next.query = "like:\(wallpaper.id)"
         filters = next
         Task { await search() }
     }
@@ -818,7 +814,10 @@ final class Store {
             case .uploader(let name):
                 page = try await LumenCore.shared.search(query(prefix: "@", name), page: focusPage)
             case .tag(let ref):
-                page = try await LumenCore.shared.search(query(prefix: "#", ref.name), page: focusPage)
+                // By id, not "#name": a tag like "LEO (Artist)" does not
+                // survive being pasted into a fuzzy query.
+                page = try await LumenCore.shared.search(
+                    query(prefix: "id:", String(ref.id)), page: focusPage)
             case .uploaderCollection(let username, let collection):
                 page = try await LumenCore.shared.uploaderCollection(
                     username: username, id: collection.id, page: focusPage)
