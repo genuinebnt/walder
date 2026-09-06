@@ -40,7 +40,7 @@ struct DownloadsView: View {
         return HStack(spacing: Tokens.s3) {
             Group {
                 if let wallpaper {
-                    AsyncImage(url: wallpaper.thumb) { $0.resizable().scaledToFill() }
+                    CachedImage(url: wallpaper.thumb) { $0.resizable().scaledToFill() }
                         placeholder: { Rectangle().fill(.quaternary) }
                 } else {
                     Rectangle().fill(.quaternary)
@@ -162,7 +162,7 @@ struct CollectionsView: View {
     private func thumb(_ wallpaper: Wallpaper?) -> some View {
         Group {
             if let wallpaper {
-                AsyncImage(url: wallpaper.thumb) { $0.resizable().scaledToFill() }
+                CachedImage(url: wallpaper.thumb) { $0.resizable().scaledToFill() }
                     placeholder: { Rectangle().fill(.quaternary) }
             } else {
                 Rectangle().fill(.quaternary.opacity(0.5))
@@ -186,7 +186,7 @@ struct DisplaysView: View {
                         ZStack(alignment: .top) {
                             Group {
                                 if let wallpaper = display.wallpaper {
-                                    AsyncImage(url: wallpaper.thumb) { $0.resizable().scaledToFill() }
+                                    CachedImage(url: wallpaper.thumb) { $0.resizable().scaledToFill() }
                                         placeholder: { Rectangle().fill(.quaternary) }
                                 } else {
                                     Rectangle().fill(.quaternary.opacity(0.6))

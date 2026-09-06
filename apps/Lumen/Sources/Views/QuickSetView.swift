@@ -15,7 +15,7 @@ struct QuickSetView: View {
 
             Group {
                 if let current = store.current {
-                    AsyncImage(url: current.thumb) { $0.resizable().scaledToFill() }
+                    CachedImage(url: current.thumb) { $0.resizable().scaledToFill() }
                         placeholder: { Rectangle().fill(.quaternary).shimmer() }
                 } else {
                     Rectangle().fill(.quaternary)
@@ -45,7 +45,7 @@ struct QuickSetView: View {
                 Text("RECENT").font(.sectionLabel).foregroundStyle(.secondary)
                 HStack(spacing: 6) {
                     ForEach(store.recents.prefix(3)) { wallpaper in
-                        AsyncImage(url: wallpaper.thumb) { $0.resizable().scaledToFill() }
+                        CachedImage(url: wallpaper.thumb) { $0.resizable().scaledToFill() }
                             placeholder: { Rectangle().fill(.quaternary) }
                             .frame(height: 46)
                             .frame(maxWidth: .infinity)

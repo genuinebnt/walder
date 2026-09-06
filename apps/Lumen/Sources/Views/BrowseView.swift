@@ -5,7 +5,6 @@ struct BrowseView: View {
     let section: Section
     @Binding var selection: Wallpaper?
     @State private var hovered: String?
-    @Namespace private var zoom
 
     private var items: [Wallpaper] { section == .favorites ? store.favorites : store.wallpapers }
     private var theme: GridTheme { store.gridTheme }
@@ -15,23 +14,31 @@ struct BrowseView: View {
             VStack(alignment: .leading, spacing: Tokens.s4) {
                 if let message = store.errorMessage { notice(message) }
 
-                if theme == .masonry {
-                    MasonryLayout(columnWidth: theme.minTileWidth, spacing: theme.spacing) {
-                        ForEach(items) { tile($0) }
-                    }
-                } else {
-                    LazyVGrid(columns: [GridItem(.adaptive(minimum: theme.minTileWidth), spacing: theme.spacing)],
-                              spacing: theme.spacing) {
-                        ForEach(items) { tile($0) }
+                // Re-laying out hundreds of tiles is not something to
+                // interpolate; the tiles themselves cross-fade instead.
+                Group {
+                    if theme == .masonry {
+                        MasonryLayout(columnWidth: theme.minTileWidth, spacing: theme.spacing) {
+                            ForEach(items) { tile($0) }
+                        }
+                    } else {
+                        LazyVGrid(columns: [GridItem(.adaptive(minimum: theme.minTileWidth),
+                                                     spacing: theme.spacing)],
+                                  spacing: theme.spacing) {
+                            ForEach(items) { tile($0) }
+                        }
                     }
                 }
+                .transaction { $0.animation = nil }
 
                 if store.isLoading { loadingRow }
                 if items.isEmpty && !store.isLoading { emptyState }
             }
             .padding(Tokens.s4)
-            .animation(theme == .masonry ? nil : Tokens.normal, value: theme)
-            .animation(Tokens.normal, value: items.map(\.id))
+            // Animating on `items.map(\.id)` rebuilt an array of every id on
+            // each render and animated the whole grid; count is enough to
+            // catch an append, and layout changes animate on `theme` alone.
+            .animation(Tokens.normal, value: items.count)
         }
         .scrollContentBackground(.hidden)
         .searchable(text: Binding(get: { store.filters.query }, set: { store.filters.query = $0 }),
@@ -43,14 +50,10 @@ struct BrowseView: View {
         WallpaperTile(wallpaper: wallpaper,
                       theme: theme,
                       isHovered: hovered == wallpaper.id,
-                      isFavorite: store.isFavorite(wallpaper))
-            .matchedGeometryEffect(id: wallpaper.id, in: zoom, isSource: selection?.id != wallpaper.id)
+                      isFavorite: store.isFavorite(wallpaper),
+                      open: { open(wallpaper) })
             .onHover { inside in
                 withAnimation(Tokens.quick) { hovered = inside ? wallpaper.id : (hovered == wallpaper.id ? nil : hovered) }
-            }
-            .onTapGesture {
-                withAnimation(Tokens.sheetIn) { selection = wallpaper }
-                Task { await store.loadTags(for: wallpaper) }
             }
             .contextMenu {
                 Button("Set as Wallpaper") { store.setWallpaper(wallpaper) }
@@ -67,7 +70,22 @@ struct BrowseView: View {
                     Link("Open on Wallhaven", destination: url)
                 }
             }
-            .task { await store.loadNextPageIfNeeded(after: wallpaper) }
+            .task {
+                prefetchAhead(of: wallpaper)
+                await store.loadNextPageIfNeeded(after: wallpaper)
+            }
+    }
+
+    private func open(_ wallpaper: Wallpaper) {
+        withAnimation(Tokens.sheetIn) { selection = wallpaper }
+        Task { await store.loadTags(for: wallpaper) }
+    }
+
+    /// Decodes the next screenful while the user is still looking at this one.
+    private func prefetchAhead(of wallpaper: Wallpaper) {
+        guard let index = items.firstIndex(where: { $0.id == wallpaper.id }) else { return }
+        let upcoming = items[index..<min(index + 12, items.count)].map(\.thumb)
+        ImageCache.shared.prefetch(upcoming)
     }
 
     private func notice(_ message: String) -> some View {
@@ -111,29 +129,41 @@ struct WallpaperTile: View {
     let theme: GridTheme
     let isHovered: Bool
     let isFavorite: Bool
+    let open: () -> Void
 
     private var aspect: Double { theme == .masonry ? wallpaper.ratio : (theme == .cinema ? 16.0/9 : 16.0/10) }
 
     var body: some View {
-        AsyncImage(url: wallpaper.thumb, transaction: .init(animation: .easeOut(duration: 0.35))) { phase in
-            switch phase {
-            case .success(let image):
-                image.resizable().scaledToFill().scaleEffect(isHovered ? 1.05 : 1)
-            case .failure:
-                Rectangle().fill(.quaternary)
-                    .overlay { Image(systemName: "photo").foregroundStyle(.tertiary) }
-            default:
-                Rectangle().fill(.quaternary).shimmer()
-            }
+        CachedImage(url: wallpaper.thumb) { image in
+            image
+                .resizable()
+                .scaledToFill()
+                .scaleEffect(isHovered ? 1.05 : 1)
+                .transition(.opacity)
+        } placeholder: {
+            Rectangle().fill(.quaternary).shimmer()
+        } failure: {
+            Rectangle().fill(.quaternary)
+                .overlay { Image(systemName: "photo").foregroundStyle(.tertiary) }
         }
         .aspectRatio(aspect, contentMode: .fill)
         .frame(maxWidth: .infinity)
         .clipped()
+        // Opening sits under the hover controls, so Set, Download and the
+        // favourite button take the click before this does.
+        .overlay {
+            Color.clear
+                .contentShape(.rect)
+                .onTapGesture(perform: open)
+        }
         .overlay { hoverLayer }
         .overlay { purityBorder }
         .clipShape(.rect(cornerRadius: theme.cornerRadius))
-        .shadow(color: .black.opacity(isHovered ? 0.45 : 0.18),
-                radius: isHovered ? 20 : 6, y: isHovered ? 10 : 2)
+        // Flatten to one layer before the shadow: without this every hover
+        // re-rasterises the image, its overlays and the border separately.
+        .compositingGroup()
+        .shadow(color: .black.opacity(isHovered ? 0.4 : 0.16),
+                radius: isHovered ? 14 : 5, y: isHovered ? 7 : 2)
         .scaleEffect(isHovered ? 1.014 : 1)
         .zIndex(isHovered ? 1 : 0)
         .animation(Tokens.normal, value: isHovered)
@@ -204,6 +234,7 @@ struct TileButton: ButtonStyle {
                     Capsule().fill(.white.opacity(0.24)).background(.ultraThinMaterial, in: .capsule)
                 }
             }
+            .contentShape(.capsule)
             .scaleEffect(configuration.isPressed ? 0.96 : 1)
             .animation(Tokens.bouncy, value: configuration.isPressed)
     }
@@ -252,6 +283,9 @@ struct Shimmer: ViewModifier {
                 .offset(x: phase * 400)
                 .blendMode(.plusLighter)
         }
+        // One offscreen layer for the gradient sweep, so the repeating
+        // animation stays on the GPU instead of re-compositing each frame.
+        .drawingGroup()
         .task {
             withAnimation(.linear(duration: 1.2).repeatForever(autoreverses: false)) { phase = 1 }
         }

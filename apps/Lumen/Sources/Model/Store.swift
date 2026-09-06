@@ -7,7 +7,7 @@ import IOKit.ps
 @Observable
 final class Store {
     // Browsing
-    var filters = SearchFilters()
+    var filters: SearchFilters
     var wallpapers: [Wallpaper] = []
     var page = 1
     var lastPage = 1
@@ -32,28 +32,103 @@ final class Store {
     /// thumbnail without the core having to carry the whole record.
     private var known: [String: Wallpaper] = [:]
 
-    // Preferences (persisted by AppKit, mirrored into the core)
-    @ObservationIgnored @AppStorage("apiKey") var apiKey = "" { didSet { pushPreferences() } }
-    @ObservationIgnored @AppStorage("downloadDirectory") var downloadDirectory = "" { didSet { pushPreferences() } }
-    @ObservationIgnored @AppStorage("maxParallel") var maxParallel = 4 { didSet { pushPreferences() } }
-    @ObservationIgnored @AppStorage("gridTheme") var gridThemeRaw = GridTheme.comfortable.rawValue
-    @ObservationIgnored @AppStorage("appearance") var appearanceRaw = Appearance.system.rawValue
-    @ObservationIgnored @AppStorage("rotationEnabled") var rotationEnabled = true { didSet { rearmRotation() } }
-    @ObservationIgnored @AppStorage("rotationMinutes") var rotationMinutes = 60 { didSet { rearmRotation() } }
-    @ObservationIgnored @AppStorage("rotationSource") var rotationSource = "Favorites"
-    @ObservationIgnored @AppStorage("shuffle") var shuffle = true
-    @ObservationIgnored @AppStorage("preferLocalPreview") var preferLocalPreview = true
-    @ObservationIgnored @AppStorage("menuBarEnabled") var menuBarEnabled = true
-    @ObservationIgnored @AppStorage("showPurityBorders") var showPurityBorders = true
-    @ObservationIgnored @AppStorage("pauseOnBattery") var pauseOnBattery = false { didSet { rearmRotation() } }
+    // MARK: Preferences
+    //
+    // Plain stored properties, not @AppStorage. @AppStorage is a view-level
+    // DynamicProperty and does not notify @Observable, so changing one of these
+    // used to re-render nothing — the appearance picker needed a relaunch to
+    // take effect. They persist through didSet instead.
 
-    var gridTheme: GridTheme {
-        get { GridTheme(rawValue: gridThemeRaw) ?? .comfortable }
-        set { gridThemeRaw = newValue.rawValue }
+    @ObservationIgnored private let defaults: UserDefaults
+
+    var apiKey: String { didSet { save(apiKey, "apiKey"); pushPreferences() } }
+    var downloadDirectory: String { didSet { save(downloadDirectory, "downloadDirectory"); pushPreferences() } }
+    var maxParallel: Int { didSet { save(maxParallel, "maxParallel"); pushPreferences() } }
+    var gridTheme: GridTheme { didSet { save(gridTheme.rawValue, "gridTheme") } }
+    var appearance: Appearance { didSet { save(appearance.rawValue, "appearance") } }
+    var rotationEnabled: Bool { didSet { save(rotationEnabled, "rotationEnabled"); rearmRotation() } }
+    var rotationMinutes: Int { didSet { save(rotationMinutes, "rotationMinutes"); rearmRotation() } }
+    var rotationSource: String { didSet { save(rotationSource, "rotationSource") } }
+    var shuffle: Bool { didSet { save(shuffle, "shuffle") } }
+    var preferLocalPreview: Bool { didSet { save(preferLocalPreview, "preferLocalPreview") } }
+    var menuBarEnabled: Bool { didSet { save(menuBarEnabled, "menuBarEnabled") } }
+    var showPurityBorders: Bool { didSet { save(showPurityBorders, "showPurityBorders") } }
+    var pauseOnBattery: Bool { didSet { save(pauseOnBattery, "pauseOnBattery"); rearmRotation() } }
+
+    /// Saved filter sets, most recently created last.
+    var presets: [FilterPreset] { didSet { saveJSON(presets, "filterPresets") } }
+
+    private func save(_ value: Any?, _ key: String) { defaults.set(value, forKey: key) }
+
+    private func saveJSON<T: Encodable>(_ value: T, _ key: String) {
+        guard let data = try? JSONEncoder().encode(value) else { return }
+        defaults.set(data, forKey: key)
     }
-    var appearance: Appearance {
-        get { Appearance(rawValue: appearanceRaw) ?? .system }
-        set { appearanceRaw = newValue.rawValue }
+
+    private static func loadJSON<T: Decodable>(_ type: T.Type, _ key: String,
+                                               from defaults: UserDefaults) -> T? {
+        guard let data = defaults.data(forKey: key) else { return nil }
+        return try? JSONDecoder().decode(type, from: data)
+    }
+
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+
+        // `object(forKey:)` distinguishes "never set" from "set to false", which
+        // bool(forKey:) cannot — the defaults below are not all false.
+        func bool(_ key: String, default fallback: Bool) -> Bool {
+            defaults.object(forKey: key) as? Bool ?? fallback
+        }
+        func int(_ key: String, default fallback: Int) -> Int {
+            defaults.object(forKey: key) as? Int ?? fallback
+        }
+
+        apiKey = defaults.string(forKey: "apiKey") ?? ""
+        downloadDirectory = defaults.string(forKey: "downloadDirectory") ?? ""
+        maxParallel = int("maxParallel", default: 4)
+        gridTheme = GridTheme(rawValue: defaults.string(forKey: "gridTheme") ?? "") ?? .comfortable
+        appearance = Appearance(rawValue: defaults.string(forKey: "appearance") ?? "") ?? .system
+        rotationEnabled = bool("rotationEnabled", default: true)
+        rotationMinutes = int("rotationMinutes", default: 60)
+        rotationSource = defaults.string(forKey: "rotationSource") ?? "Favorites"
+        shuffle = bool("shuffle", default: true)
+        preferLocalPreview = bool("preferLocalPreview", default: true)
+        menuBarEnabled = bool("menuBarEnabled", default: true)
+        showPurityBorders = bool("showPurityBorders", default: true)
+        pauseOnBattery = bool("pauseOnBattery", default: false)
+        presets = Self.loadJSON([FilterPreset].self, "filterPresets", from: defaults) ?? []
+
+        // The filter set from last launch, so a tuned search survives a restart.
+        filters = Self.loadJSON(SearchFilters.self, "lastFilters", from: defaults) ?? SearchFilters()
+    }
+
+    /// Records the current filters as the ones to restore next launch.
+    func rememberFilters() { saveJSON(filters, "lastFilters") }
+
+    // MARK: Filter presets
+
+    @MainActor
+    func savePreset(named name: String) {
+        let trimmed = name.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty else { return }
+        withAnimation(Tokens.normal) {
+            if let index = presets.firstIndex(where: { $0.name == trimmed }) {
+                presets[index].filters = filters      // overwrite by name
+            } else {
+                presets.append(FilterPreset(name: trimmed, filters: filters))
+            }
+        }
+    }
+
+    @MainActor
+    func applyPreset(_ preset: FilterPreset) {
+        withAnimation(Tokens.normal) { filters = preset.filters }
+        rememberFilters()
+    }
+
+    @MainActor
+    func deletePreset(_ preset: FilterPreset) {
+        withAnimation(Tokens.normal) { presets.removeAll { $0.id == preset.id } }
     }
 
     /// True once the Rust core has booted; the UI shows the reason if not.
@@ -120,6 +195,7 @@ final class Store {
         if reset {
             page = 1
             searchSeed = nil
+            rememberFilters()
         }
         isLoading = true
         defer { isLoading = false }

@@ -3,6 +3,7 @@ import SwiftUI
 struct FiltersPopover: View {
     @Environment(Store.self) private var store
     var dismiss: () -> Void
+    @State private var presetName = ""
 
     private var filters: Binding<SearchFilters> {
         Binding(get: { store.filters }, set: { store.filters = $0 })
@@ -60,6 +61,8 @@ struct FiltersPopover: View {
                 }
                 group("Color") { colorGrid }
 
+                group("Saved Filters") { presets }
+
                 HStack(spacing: Tokens.s2) {
                     Button("Search") {
                         dismiss()
@@ -81,6 +84,56 @@ struct FiltersPopover: View {
             Text(label.uppercased()).font(.sectionLabel).foregroundStyle(.secondary)
             content()
         }
+    }
+
+    /// Named filter sets. Saving under an existing name overwrites it, so
+    /// re-tuning a preset does not leave a near-duplicate behind.
+    private var presets: some View {
+        VStack(alignment: .leading, spacing: Tokens.s2) {
+            ForEach(store.presets) { preset in
+                HStack(spacing: Tokens.s2) {
+                    Button {
+                        store.applyPreset(preset)
+                    } label: {
+                        HStack {
+                            Text(preset.name).font(.system(size: 12)).lineLimit(1)
+                            Spacer()
+                            Text("\(preset.filters.activeCount)")
+                                .font(.caption2Mono).foregroundStyle(.secondary)
+                        }
+                        .padding(.horizontal, 9).padding(.vertical, 5)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(.quaternary.opacity(0.4), in: .rect(cornerRadius: 6))
+                        .contentShape(.rect)
+                    }
+                    .buttonStyle(.plain)
+
+                    Button {
+                        store.deletePreset(preset)
+                    } label: {
+                        Image(systemName: "trash").font(.system(size: 11))
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                    .help("Delete this preset")
+                }
+            }
+
+            HStack(spacing: Tokens.s2) {
+                TextField("Name these filters", text: $presetName)
+                    .textFieldStyle(.roundedBorder)
+                    .controlSize(.small)
+                    .onSubmit(savePreset)
+                Button("Save", action: savePreset)
+                    .controlSize(.small)
+                    .disabled(presetName.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+        }
+    }
+
+    private func savePreset() {
+        store.savePreset(named: presetName)
+        presetName = ""
     }
 
     private var colorGrid: some View {

@@ -17,6 +17,10 @@ struct Wallpaper: Identifiable, Hashable, Codable {
     let fileSize: Int
     let fileType: String
     let createdAt: String
+    /// Wallhaven username of the uploader. Search `@name` for their uploads.
+    var uploader: String?
+    /// Dominant palette, hex without a leading `#`.
+    var colors: [String] = []
     var tags: [String] = []
     var localFile: URL?     // set once downloaded; preview prefers it
 
@@ -39,7 +43,7 @@ enum Category: String, Codable, CaseIterable, Identifiable {
     var label: String { rawValue.capitalized }
 }
 
-enum Sorting: String, CaseIterable, Identifiable {
+enum Sorting: String, Codable, CaseIterable, Identifiable {
     case toplist, dateAdded = "date_added", views, favorites, random, relevance
     var id: String { rawValue }
     var label: String {
@@ -54,7 +58,7 @@ enum Sorting: String, CaseIterable, Identifiable {
     }
 }
 
-enum ResolutionMode: String, CaseIterable, Identifiable {
+enum ResolutionMode: String, Codable, CaseIterable, Identifiable {
     case atLeast, exactly
     var id: String { rawValue }
     var label: String { self == .atLeast ? "At Least" : "Exactly" }
@@ -64,7 +68,7 @@ enum ResolutionMode: String, CaseIterable, Identifiable {
 
 /// Everything the Wallhaven `/search` endpoint accepts, in one value type.
 /// Serialised to the core's `FiltersDto`.
-struct SearchFilters: Equatable {
+struct SearchFilters: Equatable, Codable {
     var query = ""
     var categories: Set<Category> = [.general, .anime]
     var purity: Set<Purity> = [.sfw]
@@ -87,6 +91,10 @@ struct SearchFilters: Equatable {
                                "669900", "336600", "666600", "999900", "cccc33", "ffff00",
                                "ffcc33", "ff9900", "ff6600", "cc6633", "996633", "663300",
                                "000000", "999999", "cccccc", "ffffff", "424153"]
+
+    private enum CodingKeys: String, CodingKey {
+        case query, categories, purity, sorting, ascending, topRange, mode, resolution, ratios, color
+    }
 
     var activeCount: Int {
         var n = 0
@@ -157,6 +165,14 @@ struct DownloadTask: Identifiable, Decodable, Equatable {
 
 // MARK: - Collections & displays
 
+/// A named set of filters the user saved, so a search they tuned once can be
+/// recalled instead of rebuilt.
+struct FilterPreset: Identifiable, Codable, Equatable {
+    var id = UUID()
+    var name: String
+    var filters: SearchFilters
+}
+
 struct Collection: Identifiable, Hashable {
     let id = UUID()
     var name: String
@@ -178,7 +194,7 @@ struct DisplayTarget: Identifiable, Hashable {
 
 // MARK: - Appearance
 
-enum GridTheme: String, CaseIterable, Identifiable {
+enum GridTheme: String, Codable, CaseIterable, Identifiable {
     case compact, comfortable, cinema, masonry
     var id: String { rawValue }
     var label: String {
@@ -201,7 +217,7 @@ enum GridTheme: String, CaseIterable, Identifiable {
     var cornerRadius: CGFloat { self == .cinema ? 14 : Tokens.tile }
 }
 
-enum Appearance: String, CaseIterable, Identifiable {
+enum Appearance: String, Codable, CaseIterable, Identifiable {
     case system, light, dark
     var id: String { rawValue }
     var label: String { rawValue.capitalized }

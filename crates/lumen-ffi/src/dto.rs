@@ -166,6 +166,11 @@ pub struct WallpaperDto {
     pub file_type: String,
     #[serde(rename = "createdAt")]
     pub created_at: String,
+    /// Wallhaven username of whoever uploaded it, when the endpoint returns
+    /// one. Search `@username` to see the rest of their uploads.
+    pub uploader: Option<String>,
+    /// Dominant palette, as hex without a leading `#`.
+    pub colors: Vec<String>,
     pub tags: Vec<String>,
     #[serde(rename = "localFile")]
     pub local_file: Option<String>,
@@ -190,6 +195,8 @@ impl From<&Wallpaper> for WallpaperDto {
                 .created_at
                 .map(|d| d.format("%Y-%m-%d").to_string())
                 .unwrap_or_default(),
+            uploader: w.uploader.clone().filter(|u| !u.is_empty()),
+            colors: w.colors.clone(),
             tags: w.tags.iter().map(|t| t.name.clone()).collect(),
             local_file: None,
         }

@@ -37,11 +37,14 @@ struct RootView: View {
                 .background(.background.opacity(0.35))
                 .background(.ultraThinMaterial)     // vibrancy behind the content pane
                 .safeAreaInset(edge: .bottom, spacing: 0) { statusBar }
+                .overlay(alignment: .top) { errorBanner }
         }
         .background(WindowBackdrop(wallpaper: store.current))
         .animation(Tokens.normal, value: section)
         .sheet(item: $selection) { wallpaper in
-            DetailSheet(wallpaper: wallpaper) { selection = nil }
+            // The viewer pages with the arrow keys, so it needs the list the
+            // wallpaper was picked from, not just the wallpaper.
+            DetailSheet(items: viewerItems, selected: wallpaper) { selection = nil }
                 .environment(store)
         }
         .onReceive(NotificationCenter.default.publisher(for: .lumenShuffle)) { _ in store.shuffleNow() }
@@ -54,6 +57,11 @@ struct RootView: View {
             store.filters.sorting = .toplist
             Task { await store.search() }
         }
+    }
+
+    /// What ← and → step through, which depends on the pane in view.
+    private var viewerItems: [Wallpaper] {
+        section == .favorites ? store.favorites : store.wallpapers
     }
 
     // MARK: Sidebar
@@ -151,6 +159,39 @@ struct RootView: View {
         }
     }
 
+    /// Failures used to be a single word in the status bar, so a Set or
+    /// Download that did not work looked like nothing happening.
+    @ViewBuilder
+    private var errorBanner: some View {
+        if let message = store.errorMessage {
+            HStack(alignment: .top, spacing: Tokens.s2) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                Text(message)
+                    .font(.system(size: 12))
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: Tokens.s2)
+                Button {
+                    withAnimation(Tokens.quick) { store.errorMessage = nil }
+                } label: {
+                    Image(systemName: "xmark")
+                }
+                .buttonStyle(.plain)
+            }
+            .foregroundStyle(Tokens.warning)
+            .padding(.horizontal, Tokens.s3)
+            .padding(.vertical, Tokens.s2)
+            .frame(maxWidth: 640)
+            .background(.regularMaterial, in: .rect(cornerRadius: Tokens.control))
+            .overlay {
+                RoundedRectangle(cornerRadius: Tokens.control)
+                    .strokeBorder(Tokens.warning.opacity(0.35), lineWidth: 0.5)
+            }
+            .shadow(color: .black.opacity(0.25), radius: 12, y: 4)
+            .padding(Tokens.s3)
+            .transition(.move(edge: .top).combined(with: .opacity))
+        }
+    }
+
     private var statusBar: some View {
         HStack(spacing: Tokens.s4) {
             Text(section == .favorites
@@ -198,7 +239,7 @@ struct WindowBackdrop: View {
     var body: some View {
         ZStack {
             if let wallpaper {
-                AsyncImage(url: wallpaper.thumb) { image in
+                CachedImage(url: wallpaper.thumb) { image in
                     image.resizable().scaledToFill()
                 } placeholder: { Color.clear }
                 .blur(radius: 60)

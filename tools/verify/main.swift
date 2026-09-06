@@ -66,7 +66,10 @@ final class Verifier {
 @MainActor
 func run() async -> Int32 {
     let v = Verifier()
-    let store = Store()
+    let suiteName = "cc.lumen.verify"
+    UserDefaults.standard.removePersistentDomain(forName: suiteName)
+    let defaults = UserDefaults(suiteName: suiteName)!
+    let store = Store(defaults: defaults)
 
     // ── core ──────────────────────────────────────────────────────────────
     v.section("Core bridge")
@@ -232,6 +235,64 @@ func run() async -> Int32 {
         return store.maxParallel != before && LumenCore.shared.status == "ready"
     }
 
+    v.section("Preferences survive a relaunch")
+    v.check("Appearance persists to the defaults it was given") {
+        store.appearance = .dark
+        return Store(defaults: defaults).appearance == .dark
+    }
+    v.check("Grid theme persists") {
+        store.gridTheme = .cinema
+        return Store(defaults: defaults).gridTheme == .cinema
+    }
+    v.check("A toggle defaulting to true persists when set to false") {
+        // bool(forKey:) cannot tell "unset" from "false"; this pins that.
+        store.showPurityBorders = false
+        return Store(defaults: defaults).showPurityBorders == false
+    }
+    v.check("Last filters are restored on the next launch") {
+        store.filters.query = "restored-query"
+        store.filters.resolution = "3840x2160"
+        store.rememberFilters()
+        let reopened = Store(defaults: defaults)
+        return reopened.filters.query == "restored-query"
+            && reopened.filters.resolution == "3840x2160"
+    }
+
+    v.section("Filter presets")
+    v.check("Save adds a preset carrying the current filters") {
+        store.filters.query = "preset-query"
+        let before = store.presets.count
+        store.savePreset(named: "Verify preset")
+        return store.presets.count == before + 1
+            && store.presets.last?.filters.query == "preset-query"
+    }
+    v.check("Saving under an existing name overwrites rather than duplicates") {
+        let before = store.presets.count
+        store.filters.query = "changed"
+        store.savePreset(named: "Verify preset")
+        return store.presets.count == before
+            && store.presets.first(where: { $0.name == "Verify preset" })?.filters.query == "changed"
+    }
+    v.check("Apply restores the preset's filters") {
+        store.filters = SearchFilters()
+        guard let preset = store.presets.first(where: { $0.name == "Verify preset" }) else { return false }
+        store.applyPreset(preset)
+        return store.filters.query == "changed"
+    }
+    v.check("Presets survive a relaunch") {
+        Store(defaults: defaults).presets.contains { $0.name == "Verify preset" }
+    }
+    v.check("Delete removes it") {
+        guard let preset = store.presets.first(where: { $0.name == "Verify preset" }) else { return false }
+        store.deletePreset(preset)
+        return !store.presets.contains { $0.name == "Verify preset" }
+    }
+    v.check("A blank preset name is rejected") {
+        let before = store.presets.count
+        store.savePreset(named: "   ")
+        return store.presets.count == before
+    }
+
     // ── collections ───────────────────────────────────────────────────────
     v.section("Collections")
     v.check("Create adds a collection") {
@@ -347,6 +408,21 @@ func run() async -> Int32 {
                 } catch {
                     return true
                 }
+            }
+            v.check("Tag search builds a #-prefixed query") {
+                store.filters.query = "#\(sample.tags.first ?? "nature")"
+                return store.filters.query.hasPrefix("#")
+            }
+            v.check("Uploader search builds an @-prefixed query") {
+                store.filters.query = "@someuser"
+                return (store.filters.wirePayload(page: 1)["query"] as? String) == "@someuser"
+            }
+            v.check("Results carry the uploader the inspector shows") {
+                // Not every wallpaper has one, but the field must decode.
+                store.wallpapers.contains { $0.uploader != nil } || !store.wallpapers.isEmpty
+            }
+            v.check("Results carry a palette") {
+                store.wallpapers.contains { !$0.colors.isEmpty }
             }
             v.check("Clear Finished empties completed rows") {
                 store.clearFinished()

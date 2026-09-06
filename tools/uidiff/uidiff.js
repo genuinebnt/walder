@@ -95,6 +95,7 @@ function chrome(source) {
     /\.navigationTitle\(\s*"((?:[^"\\]|\\.)*)"/g,
     /case\s+\.\w+:\s*"((?:[^"\\]|\\.)*)"/g,
     /systemImage:\s*"((?:[^"\\]|\\.)*)"/g,
+    /\bImage\(systemName:\s*"((?:[^"\\]|\\.)*)"/g,
     /case\s+\w+\s*=\s*"((?:[^"\\]|\\.)*)"/g,
   ];
   for (const pattern of patterns) {
