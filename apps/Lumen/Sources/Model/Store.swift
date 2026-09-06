@@ -320,9 +320,9 @@ final class Store {
                 NSScreen.screens.first { $0.localizedName == target.name }
             }
             do {
-                let path = try await LumenCore.shared.ensureLocal(url: wallpaper.path.absoluteString,
-                                                                  filename: wallpaper.filename)
-                let local = URL(filePath: path)
+                let local = try await LumenCore.shared.ensureLocal(
+                    url: wallpaper.path.absoluteString,
+                    filename: wallpaper.filename)
                 attachLocalFile(local, to: wallpaper.id)
                 try WallpaperSetter.apply(fileURL: local, to: screen, fit: fit)
             } catch {

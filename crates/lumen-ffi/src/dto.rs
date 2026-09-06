@@ -274,6 +274,13 @@ impl DownloadDto {
     }
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct CollectionDto {
+    pub id: String,
+    pub name: String,
+    pub wallpapers: Vec<WallpaperDto>,
+}
+
 /// Every callback payload is this envelope, so Swift decodes one shape.
 #[derive(Debug, Clone, Serialize)]
 pub struct Envelope<T: Serialize> {

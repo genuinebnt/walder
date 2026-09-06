@@ -68,12 +68,29 @@ final class LumenCore: @unchecked Sendable {
         }
     }
 
-    /// Downloads the file if it is not already on disk and returns its path.
+    /// Downloads the file if it is not already on disk and returns its location.
     /// `NSWorkspace` only accepts local files, so this runs before every set.
-    func ensureLocal(url: String, filename: String) async throws -> String {
-        try await call(String.self) {
+    ///
+    /// Returns a `URL`, not a string: the core sends a `file://` URL, and
+    /// `URL(filePath:)` would read that as a relative path and point at
+    /// nothing — which is exactly the bug this signature prevents.
+    func ensureLocal(url: String, filename: String) async throws -> URL {
+        let raw = try await call(String.self) {
             lumen_ensure_local(Self.json(["url": url, "filename": filename]))
         }
+        guard let local = Self.fileURL(from: raw) else {
+            throw CoreError.backend("The core returned an unusable path: \(raw)")
+        }
+        return local
+    }
+
+    /// Parses what the core sends for a local file. Accepts a bare path too, so
+    /// an older payload still resolves.
+    static func fileURL(from raw: String) -> URL? {
+        guard !raw.isEmpty else { return nil }
+        if let url = URL(string: raw), url.isFileURL { return url }
+        guard raw.hasPrefix("/") else { return nil }
+        return URL(filePath: raw)
     }
 
     // MARK: Synchronous calls

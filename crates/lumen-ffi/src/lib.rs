@@ -525,6 +525,133 @@ pub unsafe extern "C" fn lumen_favorite_toggle(wallpaper_json: *const c_char) ->
     }
 }
 
+// ── collections ───────────────────────────────────────────────────────────
+
+/// Every collection with its wallpapers, newest first. Collections are
+/// user-curated and small, so the whole set comes back in one read.
+/// Caller frees with [`lumen_string_free`].
+#[unsafe(no_mangle)]
+pub extern "C" fn lumen_collections_list() -> *mut c_char {
+    let Some(core) = core() else {
+        return to_c(err_json("collections", "core not initialised"));
+    };
+    let listed = core.db.get_folders().and_then(|folders| {
+        let mut out = Vec::with_capacity(folders.len());
+        for folder in &folders {
+            let wallpapers = core
+                .db
+                .get_collection_wallpapers(folder.id)?
+                .iter()
+                .map(WallpaperDto::from)
+                .collect();
+            out.push(CollectionDto {
+                id: folder.id.to_string(),
+                name: folder.name.clone(),
+                wallpapers,
+            });
+        }
+        Ok(out)
+    });
+    match listed {
+        Ok(list) => {
+            to_c(serde_json::to_string(&Envelope::ok("collections", list)).unwrap_or_default())
+        }
+        Err(e) => to_c(err_json("collections", e)),
+    }
+}
+
+/// Creates a collection and returns it. Caller frees with [`lumen_string_free`].
+///
+/// # Safety
+/// `name` must be NUL-terminated UTF-8, or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn lumen_collection_create(name: *const c_char) -> *mut c_char {
+    let name = unsafe { str_from(name) };
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return to_c(err_json("collection", "name is required"));
+    }
+    let Some(core) = core() else {
+        return to_c(err_json("collection", "core not initialised"));
+    };
+
+    let folder = BookmarkFolder::new(trimmed);
+    match core.db.add_folder(&folder) {
+        Ok(()) => {
+            let dto = CollectionDto {
+                id: folder.id.to_string(),
+                name: folder.name.clone(),
+                wallpapers: Vec::new(),
+            };
+            to_c(serde_json::to_string(&Envelope::ok("collection", dto)).unwrap_or_default())
+        }
+        Err(e) => to_c(err_json("collection", e)),
+    }
+}
+
+/// Deletes a collection. Its membership rows go with it; the wallpapers do not.
+///
+/// # Safety
+/// `id` must be NUL-terminated UTF-8, or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn lumen_collection_delete(id: *const c_char) -> *mut c_char {
+    let raw = unsafe { str_from(id) };
+    let Some(core) = core() else {
+        return to_c(err_json("collection", "core not initialised"));
+    };
+    let Ok(uuid) = uuid::Uuid::parse_str(raw.trim()) else {
+        return to_c(err_json("collection", "not a collection id"));
+    };
+    match core.db.delete_bookmark_folder(uuid) {
+        Ok(()) => to_c(serde_json::json!({ "ok": true, "kind": "collection" }).to_string()),
+        Err(e) => to_c(err_json("collection", e)),
+    }
+}
+
+/// Adds or removes a wallpaper from a collection.
+///
+/// `json`: `{ "collectionId": String, "wallpaperId": String, "member": Bool }`
+///
+/// # Safety
+/// `json` must be NUL-terminated UTF-8, or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn lumen_collection_set_member(json: *const c_char) -> *mut c_char {
+    let raw = unsafe { str_from(json) };
+    let Some(core) = core() else {
+        return to_c(err_json("collection", "core not initialised"));
+    };
+    let value: serde_json::Value = serde_json::from_str(&raw).unwrap_or(serde_json::Value::Null);
+    let wallpaper_id = value["wallpaperId"].as_str().unwrap_or_default().to_string();
+    let member = value["member"].as_bool().unwrap_or(true);
+    let Ok(collection_id) = uuid::Uuid::parse_str(value["collectionId"].as_str().unwrap_or_default())
+    else {
+        return to_c(err_json("collection", "not a collection id"));
+    };
+    if wallpaper_id.is_empty() {
+        return to_c(err_json("collection", "wallpaperId is required"));
+    }
+
+    // Membership joins against the wallpaper cache, so an uncached wallpaper
+    // would file a row that never renders.
+    let result = if member {
+        match core.db.get_cached_wallpaper(&wallpaper_id) {
+            Ok(Some(_)) => core.db.add_to_collection(collection_id, &wallpaper_id),
+            Ok(None) => Err(WallsetterError::NotFound(wallpaper_id.clone())),
+            Err(e) => Err(e),
+        }
+    } else {
+        core.db.remove_from_collection(collection_id, &wallpaper_id)
+    };
+
+    match result {
+        Ok(()) => to_c(
+            serde_json::json!({ "ok": true, "kind": "collection", "data": { "member": member } })
+                .to_string(),
+        ),
+        Err(e) => to_c(err_json("collection", e)),
+    }
+}
+
 // ── preferences ───────────────────────────────────────────────────────────
 
 /// Applies live preference changes (API key, download directory).

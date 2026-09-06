@@ -143,6 +143,21 @@ impl Database {
         )
         .map_err(|e| WallsetterError::Database(e.to_string()))?;
 
+        // Collection membership. A wallpaper can sit in several collections,
+        // and being in one is independent of being a favourite, so this is a
+        // join table rather than a column on bookmarks.
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS collection_items (
+                collection_id TEXT NOT NULL
+                    REFERENCES bookmark_folders(id) ON DELETE CASCADE,
+                wallpaper_id TEXT NOT NULL,
+                added_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (collection_id, wallpaper_id)
+            )",
+            [],
+        )
+        .map_err(|e| WallsetterError::Database(e.to_string()))?;
+
         // Indices for the columns the app actually filters and joins on.
         // Without them every favourite check is a full scan of bookmarks.
         conn.execute_batch(
@@ -161,7 +176,11 @@ impl Database {
              CREATE INDEX IF NOT EXISTS idx_local_path
                  ON local_wallpapers(local_path);
              CREATE INDEX IF NOT EXISTS idx_wallpapers_updated
-                 ON wallpapers(last_updated);",
+                 ON wallpapers(last_updated);
+             CREATE INDEX IF NOT EXISTS idx_collection_items_wallpaper
+                 ON collection_items(wallpaper_id);
+             CREATE INDEX IF NOT EXISTS idx_collection_items_added
+                 ON collection_items(collection_id, added_at DESC);",
         )
         .map_err(|e| WallsetterError::Database(e.to_string()))?;
 
@@ -321,6 +340,111 @@ impl Database {
             }
         }
         Ok(wallpapers)
+    }
+
+    // ──────────────────────────────────────────────
+    // Collection membership
+    // ──────────────────────────────────────────────
+
+    /// Files a wallpaper into a collection. Adding it twice is a no-op.
+    pub fn add_to_collection(
+        &self,
+        collection_id: Uuid,
+        wallpaper_id: &str,
+    ) -> wallsetter_core::Result<()> {
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| WallsetterError::Database(e.to_string()))?;
+        conn.execute(
+            "INSERT OR IGNORE INTO collection_items (collection_id, wallpaper_id)
+             VALUES (?1, ?2)",
+            (collection_id.to_string(), wallpaper_id),
+        )
+        .map_err(|e| WallsetterError::Database(e.to_string()))?;
+        Ok(())
+    }
+
+    pub fn remove_from_collection(
+        &self,
+        collection_id: Uuid,
+        wallpaper_id: &str,
+    ) -> wallsetter_core::Result<()> {
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| WallsetterError::Database(e.to_string()))?;
+        conn.execute(
+            "DELETE FROM collection_items WHERE collection_id = ?1 AND wallpaper_id = ?2",
+            (collection_id.to_string(), wallpaper_id),
+        )
+        .map_err(|e| WallsetterError::Database(e.to_string()))?;
+        Ok(())
+    }
+
+    /// The wallpapers in one collection, newest first.
+    pub fn get_collection_wallpapers(
+        &self,
+        collection_id: Uuid,
+    ) -> wallsetter_core::Result<Vec<Wallpaper>> {
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| WallsetterError::Database(e.to_string()))?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT w.data FROM collection_items c
+                     JOIN wallpapers w ON w.id = c.wallpaper_id
+                     WHERE c.collection_id = ?1
+                     ORDER BY c.added_at DESC",
+            )
+            .map_err(|e| WallsetterError::Database(e.to_string()))?;
+
+        let rows = stmt
+            .query_map([collection_id.to_string()], |row| row.get::<_, String>(0))
+            .map_err(|e| WallsetterError::Database(e.to_string()))?;
+
+        let mut wallpapers = Vec::new();
+        for row in rows {
+            let json = row.map_err(|e| WallsetterError::Database(e.to_string()))?;
+            match serde_json::from_str::<Wallpaper>(&json) {
+                Ok(w) => wallpapers.push(w),
+                Err(e) => tracing::warn!("skipping unreadable cached wallpaper: {e}"),
+            }
+        }
+        Ok(wallpapers)
+    }
+
+    /// How many wallpapers each collection holds, in one query rather than one
+    /// per collection.
+    pub fn collection_counts(
+        &self,
+    ) -> wallsetter_core::Result<std::collections::HashMap<Uuid, u32>> {
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| WallsetterError::Database(e.to_string()))?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT collection_id, COUNT(1) FROM collection_items
+                     GROUP BY collection_id",
+            )
+            .map_err(|e| WallsetterError::Database(e.to_string()))?;
+
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, u32>(1)?))
+            })
+            .map_err(|e| WallsetterError::Database(e.to_string()))?;
+
+        let mut counts = std::collections::HashMap::new();
+        for row in rows {
+            let (id, count) = row.map_err(|e| WallsetterError::Database(e.to_string()))?;
+            if let Ok(uuid) = Uuid::parse_str(&id) {
+                counts.insert(uuid, count);
+            }
+        }
+        Ok(counts)
     }
 
     pub fn is_bookmarked(&self, wallpaper_id: &str) -> wallsetter_core::Result<bool> {

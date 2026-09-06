@@ -1,4 +1,5 @@
 import Foundation
+import AppKit
 
 // Runtime half of the gate: drive every action the UI binds to a control and
 // assert the state it is supposed to change actually changed. A control that
@@ -316,6 +317,9 @@ func run() async -> Int32 {
         return store.displays[0].fit != before
     }
 
+    // Remember the desktop picture so the set check can undo itself.
+    let desktopBefore = NSScreen.main.flatMap { NSWorkspace.shared.desktopImageURL(for: $0) }
+
     // ── network-dependent ─────────────────────────────────────────────────
     v.section("Search (network)")
     store.filters = SearchFilters()
@@ -394,10 +398,48 @@ func run() async -> Int32 {
             await v.checkAsync("Set materialises a local file AppKit can open") {
                 guard let done = store.downloads.first(where: { $0.state == .done })
                 else { return false }
-                let path = try await LumenCore.shared.ensureLocal(
+                let local = try await LumenCore.shared.ensureLocal(
                     url: sample.path.absoluteString, filename: done.filename)
-                guard let url = URL(string: path), url.isFileURL else { return false }
-                return FileManager.default.fileExists(atPath: url.path)
+                return local.isFileURL && FileManager.default.fileExists(atPath: local.path)
+            }
+            // Checking the core call alone missed a real bug: the store fed the
+            // returned file:// URL to URL(filePath:), which reads it as a
+            // relative path. Drive the store's own path.
+            await v.checkAsync("store.setWallpaper completes without an error") {
+                store.errorMessage = nil
+                store.setWallpaper(sample)
+                for _ in 0..<100 where store.current?.id != sample.id || store.errorMessage == nil {
+                    if store.errorMessage != nil { break }
+                    if store.current?.id == sample.id,
+                       store.wallpapers.first(where: { $0.id == sample.id })?.localFile != nil {
+                        break
+                    }
+                    try? await Task.sleep(for: .milliseconds(100))
+                }
+                if let message = store.errorMessage {
+                    print("        setWallpaper reported: \(message)")
+                    return false
+                }
+                return store.current?.id == sample.id
+            }
+            v.check("The wallpaper the store set points at a file on disk") {
+                guard let local = store.wallpapers.first(where: { $0.id == sample.id })?.localFile
+                else { return false }
+                return local.isFileURL && FileManager.default.fileExists(atPath: local.path)
+            }
+            v.check("The desktop image is put back after the set check") {
+                // The check above really does set the wallpaper; leaving the
+                // user's desktop changed by a test run is not acceptable.
+                guard let original = desktopBefore else { return true }
+                for screen in NSScreen.screens {
+                    try? NSWorkspace.shared.setDesktopImageURL(original, for: screen)
+                }
+                return true
+            }
+            v.check("A bare path still resolves, for older payloads") {
+                LumenCore.fileURL(from: "/tmp")?.isFileURL == true
+                    && LumenCore.fileURL(from: "file:///tmp")?.isFileURL == true
+                    && LumenCore.fileURL(from: "") == nil
             }
             await v.checkAsync("A bad URL fails instead of caching an error body") {
                 do {
