@@ -158,6 +158,35 @@ impl Database {
         )
         .map_err(|e| WallsetterError::Database(e.to_string()))?;
 
+        // Imported folders: wallpapers the user already has on disk, whether
+        // Lumen downloaded them or not. Distinct from download_folders, which
+        // organises downloads and has no filesystem path of its own.
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS imported_folders (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                path TEXT NOT NULL UNIQUE,
+                added_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )",
+            [],
+        )
+        .map_err(|e| WallsetterError::Database(e.to_string()))?;
+
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS imported_wallpapers (
+                id TEXT PRIMARY KEY,
+                folder_id TEXT NOT NULL
+                    REFERENCES imported_folders(id) ON DELETE CASCADE,
+                path TEXT NOT NULL UNIQUE,
+                filename TEXT NOT NULL,
+                file_size INTEGER NOT NULL DEFAULT 0,
+                favorite INTEGER NOT NULL DEFAULT 0,
+                added_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )",
+            [],
+        )
+        .map_err(|e| WallsetterError::Database(e.to_string()))?;
+
         // Indices for the columns the app actually filters and joins on.
         // Without them every favourite check is a full scan of bookmarks.
         conn.execute_batch(
@@ -180,7 +209,11 @@ impl Database {
              CREATE INDEX IF NOT EXISTS idx_collection_items_wallpaper
                  ON collection_items(wallpaper_id);
              CREATE INDEX IF NOT EXISTS idx_collection_items_added
-                 ON collection_items(collection_id, added_at DESC);",
+                 ON collection_items(collection_id, added_at DESC);
+             CREATE INDEX IF NOT EXISTS idx_imported_folder
+                 ON imported_wallpapers(folder_id, added_at DESC);
+             CREATE INDEX IF NOT EXISTS idx_imported_favorite
+                 ON imported_wallpapers(favorite);",
         )
         .map_err(|e| WallsetterError::Database(e.to_string()))?;
 
@@ -1134,6 +1167,222 @@ impl Database {
     }
 }
 
+impl Database {
+    // ──────────────────────────────────────────────
+    // Imported folders
+    // ──────────────────────────────────────────────
+
+    /// Registers a folder, or returns the existing row for a path already
+    /// imported. Re-importing the same folder is a refresh, not a duplicate.
+    pub fn import_folder(&self, path: &str, name: &str) -> wallsetter_core::Result<Uuid> {
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| WallsetterError::Database(e.to_string()))?;
+
+        let existing: Option<String> = conn
+            .query_row("SELECT id FROM imported_folders WHERE path = ?1", [path], |row| {
+                row.get(0)
+            })
+            .optional()
+            .map_err(|e| WallsetterError::Database(e.to_string()))?;
+        if let Some(id) = existing {
+            return Uuid::parse_str(&id)
+                .map_err(|e| WallsetterError::Database(e.to_string()));
+        }
+
+        let id = Uuid::new_v4();
+        conn.execute(
+            "INSERT INTO imported_folders (id, name, path) VALUES (?1, ?2, ?3)",
+            (id.to_string(), name, path),
+        )
+        .map_err(|e| WallsetterError::Database(e.to_string()))?;
+        Ok(id)
+    }
+
+    /// Every imported folder, with how many wallpapers it currently holds.
+    pub fn imported_folders(&self) -> wallsetter_core::Result<Vec<(Uuid, String, String, u32)>> {
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| WallsetterError::Database(e.to_string()))?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT f.id, f.name, f.path, COUNT(w.id)
+                 FROM imported_folders f
+                 LEFT JOIN imported_wallpapers w ON w.folder_id = f.id
+                 GROUP BY f.id ORDER BY f.added_at",
+            )
+            .map_err(|e| WallsetterError::Database(e.to_string()))?;
+
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, u32>(3)?,
+                ))
+            })
+            .map_err(|e| WallsetterError::Database(e.to_string()))?;
+
+        let mut folders = Vec::new();
+        for row in rows {
+            let (id, name, path, count) =
+                row.map_err(|e| WallsetterError::Database(e.to_string()))?;
+            if let Ok(uuid) = Uuid::parse_str(&id) {
+                folders.push((uuid, name, path, count));
+            }
+        }
+        Ok(folders)
+    }
+
+    pub fn remove_imported_folder(&self, id: Uuid) -> wallsetter_core::Result<()> {
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| WallsetterError::Database(e.to_string()))?;
+        conn.execute("DELETE FROM imported_folders WHERE id = ?1", [id.to_string()])
+            .map_err(|e| WallsetterError::Database(e.to_string()))?;
+        Ok(())
+    }
+
+    /// Replaces a folder's contents with `files`, in one transaction.
+    ///
+    /// Favourites survive a rescan: the flag is keyed by path, and a file that
+    /// is still there keeps its row.
+    pub fn sync_imported_wallpapers(
+        &self,
+        folder_id: Uuid,
+        files: &[(String, String, u64)],
+    ) -> wallsetter_core::Result<usize> {
+        let mut conn = self
+            .pool
+            .get()
+            .map_err(|e| WallsetterError::Database(e.to_string()))?;
+        let transaction = conn
+            .transaction()
+            .map_err(|e| WallsetterError::Database(e.to_string()))?;
+        {
+            // Anything no longer on disk goes; the rest is upserted so the
+            // favourite flag is not reset by a rescan.
+            let mut clear = transaction
+                .prepare_cached("DELETE FROM imported_wallpapers WHERE folder_id = ?1 AND path = ?2")
+                .map_err(|e| WallsetterError::Database(e.to_string()))?;
+            let mut existing = transaction
+                .prepare_cached("SELECT path FROM imported_wallpapers WHERE folder_id = ?1")
+                .map_err(|e| WallsetterError::Database(e.to_string()))?;
+            let on_disk: std::collections::HashSet<&str> =
+                files.iter().map(|(path, _, _)| path.as_str()).collect();
+            let stored: Vec<String> = existing
+                .query_map([folder_id.to_string()], |row| row.get::<_, String>(0))
+                .map_err(|e| WallsetterError::Database(e.to_string()))?
+                .filter_map(|row| row.ok())
+                .collect();
+            for path in stored.iter().filter(|p| !on_disk.contains(p.as_str())) {
+                clear
+                    .execute((folder_id.to_string(), path))
+                    .map_err(|e| WallsetterError::Database(e.to_string()))?;
+            }
+
+            let mut insert = transaction
+                .prepare_cached(
+                    "INSERT INTO imported_wallpapers (id, folder_id, path, filename, file_size)
+                     VALUES (?1, ?2, ?3, ?4, ?5)
+                     ON CONFLICT(path) DO UPDATE SET
+                        folder_id = excluded.folder_id,
+                        filename = excluded.filename,
+                        file_size = excluded.file_size",
+                )
+                .map_err(|e| WallsetterError::Database(e.to_string()))?;
+            for (path, filename, size) in files {
+                insert
+                    .execute((
+                        Uuid::new_v4().to_string(),
+                        folder_id.to_string(),
+                        path,
+                        filename,
+                        *size as i64,
+                    ))
+                    .map_err(|e| WallsetterError::Database(e.to_string()))?;
+            }
+        }
+        transaction
+            .commit()
+            .map_err(|e| WallsetterError::Database(e.to_string()))?;
+        Ok(files.len())
+    }
+
+    /// Imported wallpapers, for one folder or all of them.
+    /// Returns `(id, folder_id, path, filename, file_size, favorite)`.
+    pub fn imported_wallpapers(
+        &self,
+        folder_id: Option<Uuid>,
+        favorites_only: bool,
+    ) -> wallsetter_core::Result<Vec<(Uuid, Uuid, String, String, u64, bool)>> {
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| WallsetterError::Database(e.to_string()))?;
+
+        let sql = match (folder_id.is_some(), favorites_only) {
+            (true, true) => "SELECT id, folder_id, path, filename, file_size, favorite
+                             FROM imported_wallpapers
+                             WHERE folder_id = ?1 AND favorite = 1 ORDER BY filename",
+            (true, false) => "SELECT id, folder_id, path, filename, file_size, favorite
+                              FROM imported_wallpapers
+                              WHERE folder_id = ?1 ORDER BY filename",
+            (false, true) => "SELECT id, folder_id, path, filename, file_size, favorite
+                              FROM imported_wallpapers WHERE favorite = 1 ORDER BY filename",
+            (false, false) => "SELECT id, folder_id, path, filename, file_size, favorite
+                               FROM imported_wallpapers ORDER BY filename",
+        };
+        let mut stmt = conn
+            .prepare(sql)
+            .map_err(|e| WallsetterError::Database(e.to_string()))?;
+        let params: Vec<rusqlite::types::Value> = match folder_id {
+            Some(id) => vec![id.to_string().into()],
+            None => vec![],
+        };
+
+        let rows = stmt
+            .query_map(rusqlite::params_from_iter(params), |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, i64>(4)?,
+                    row.get::<_, i64>(5)? != 0,
+                ))
+            })
+            .map_err(|e| WallsetterError::Database(e.to_string()))?;
+
+        let mut found = Vec::new();
+        for row in rows {
+            let (id, folder, path, filename, size, favorite) =
+                row.map_err(|e| WallsetterError::Database(e.to_string()))?;
+            if let (Ok(id), Ok(folder)) = (Uuid::parse_str(&id), Uuid::parse_str(&folder)) {
+                found.push((id, folder, path, filename, size.max(0) as u64, favorite));
+            }
+        }
+        Ok(found)
+    }
+
+    pub fn set_imported_favorite(&self, id: Uuid, favorite: bool) -> wallsetter_core::Result<()> {
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| WallsetterError::Database(e.to_string()))?;
+        conn.execute(
+            "UPDATE imported_wallpapers SET favorite = ?2 WHERE id = ?1",
+            (id.to_string(), i64::from(favorite)),
+        )
+        .map_err(|e| WallsetterError::Database(e.to_string()))?;
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1319,4 +1568,74 @@ mod tests {
         assert!(db.get_cached_wallpaper("keep").expect("lookup").is_some(),
                 "the wallpaper itself must outlive the collection");
     }
+
+    #[test]
+    fn importing_the_same_folder_twice_returns_the_same_row() {
+        let (db, _dir) = temp_db();
+        let first = db.import_folder("/tmp/walls", "walls").expect("import");
+        let second = db.import_folder("/tmp/walls", "walls").expect("re-import");
+        assert_eq!(first, second, "re-importing is a refresh, not a duplicate");
+        assert_eq!(db.imported_folders().expect("list").len(), 1);
+    }
+
+    #[test]
+    fn syncing_adds_new_files_and_drops_missing_ones() {
+        let (db, _dir) = temp_db();
+        let folder = db.import_folder("/tmp/walls", "walls").expect("import");
+
+        let first = vec![
+            ("/tmp/walls/a.jpg".to_string(), "a.jpg".to_string(), 10),
+            ("/tmp/walls/b.jpg".to_string(), "b.jpg".to_string(), 20),
+        ];
+        db.sync_imported_wallpapers(folder, &first).expect("sync");
+        assert_eq!(db.imported_wallpapers(Some(folder), false).expect("read").len(), 2);
+
+        // b is gone, c has appeared.
+        let second = vec![
+            ("/tmp/walls/a.jpg".to_string(), "a.jpg".to_string(), 10),
+            ("/tmp/walls/c.jpg".to_string(), "c.jpg".to_string(), 30),
+        ];
+        db.sync_imported_wallpapers(folder, &second).expect("resync");
+        let names: Vec<String> = db
+            .imported_wallpapers(Some(folder), false)
+            .expect("read")
+            .into_iter()
+            .map(|(_, _, _, filename, _, _)| filename)
+            .collect();
+        assert_eq!(names, vec!["a.jpg".to_string(), "c.jpg".to_string()]);
+    }
+
+    #[test]
+    fn a_favourite_survives_a_rescan() {
+        let (db, _dir) = temp_db();
+        let folder = db.import_folder("/tmp/walls", "walls").expect("import");
+        let files = vec![("/tmp/walls/a.jpg".to_string(), "a.jpg".to_string(), 10)];
+        db.sync_imported_wallpapers(folder, &files).expect("sync");
+
+        let id = db.imported_wallpapers(Some(folder), false).expect("read")[0].0;
+        db.set_imported_favorite(id, true).expect("favourite");
+
+        // Rescanning must not reset what the user marked.
+        db.sync_imported_wallpapers(folder, &files).expect("resync");
+        let favourites = db.imported_wallpapers(Some(folder), true).expect("read");
+        assert_eq!(favourites.len(), 1);
+        assert!(favourites[0].5);
+    }
+
+    #[test]
+    fn forgetting_a_folder_takes_its_wallpapers_with_it() {
+        let (db, _dir) = temp_db();
+        let folder = db.import_folder("/tmp/walls", "walls").expect("import");
+        db.sync_imported_wallpapers(
+            folder,
+            &[("/tmp/walls/a.jpg".to_string(), "a.jpg".to_string(), 10)],
+        )
+        .expect("sync");
+
+        db.remove_imported_folder(folder).expect("forget");
+        assert!(db.imported_folders().expect("list").is_empty());
+        // The cascade only works because foreign keys are enforced.
+        assert!(db.imported_wallpapers(None, false).expect("read").is_empty());
+    }
 }
+

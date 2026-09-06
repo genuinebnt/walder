@@ -365,6 +365,31 @@ pub struct CollectionDto {
     pub wallpapers: Vec<WallpaperDto>,
 }
 
+/// A folder of wallpapers the user already has on disk.
+#[derive(Debug, Clone, Serialize)]
+pub struct ImportedFolderDto {
+    pub id: String,
+    pub name: String,
+    pub path: String,
+    pub count: u32,
+}
+
+/// One file inside an imported folder.
+#[derive(Debug, Clone, Serialize)]
+pub struct LocalWallpaperDto {
+    pub id: String,
+    #[serde(rename = "folderId")]
+    pub folder_id: String,
+    /// `file://` URL, so Swift can load and set it directly.
+    pub url: String,
+    pub path: String,
+    pub filename: String,
+    #[serde(rename = "fileSize")]
+    pub file_size: i64,
+    #[serde(rename = "isFavorite")]
+    pub is_favorite: bool,
+}
+
 /// Every callback payload is this envelope, so Swift decodes one shape.
 #[derive(Debug, Clone, Serialize)]
 pub struct Envelope<T: Serialize> {

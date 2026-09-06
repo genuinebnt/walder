@@ -129,6 +129,48 @@ final class LumenCore: @unchecked Sendable {
         Set(decodeSync([String].self, Self.takeString(lumen_downloaded_ids())) ?? [])
     }
 
+    // MARK: Imported folders
+
+    /// Scanning can take a moment on a large folder, so this is async.
+    @discardableResult
+    func importFolder(at path: String) async throws -> ImportedFolder {
+        try await call(ImportedFolder.self) { path.withCString { lumen_library_import($0) } }
+    }
+
+    @discardableResult
+    func rescanLibrary() async throws -> Int {
+        struct Counted: Decodable { let count: Int }
+        return try await call(Counted.self) { lumen_library_rescan() }.count
+    }
+
+    func libraryFolders() -> [ImportedFolder] {
+        decodeSync([ImportedFolder].self, Self.takeString(lumen_library_folders())) ?? []
+    }
+
+    func libraryWallpapers(folder: String? = nil, favoritesOnly: Bool = false) -> [LocalWallpaper] {
+        let reply = (folder ?? "").withCString {
+            Self.takeString(lumen_library_wallpapers($0, favoritesOnly))
+        }
+        return decodeSync([LocalWallpaper].self, reply) ?? []
+    }
+
+    @discardableResult
+    func forgetFolder(id: String) -> Bool {
+        id.withCString { pointer in
+            let reply = Self.takeString(lumen_library_forget(pointer))
+            return (try? JSONDecoder().decode(Envelope<String?>.self, from: Data(reply.utf8)))?.ok
+                ?? false
+        }
+    }
+
+    @discardableResult
+    func setLibraryFavorite(id: String, favorite: Bool) -> Bool {
+        let reply = Self.takeString(
+            lumen_library_favorite(Self.json(["id": id, "favorite": favorite])))
+        struct Flag: Decodable { let favorite: Bool }
+        return decodeSync(Flag.self, reply)?.favorite == favorite
+    }
+
     // MARK: Bulk actions
 
     /// Returns how many rows actually changed.

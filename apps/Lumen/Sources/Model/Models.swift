@@ -1,4 +1,6 @@
 import Foundation
+import ImageIO
+import CoreGraphics
 
 // MARK: - Wallpaper
 
@@ -357,6 +359,47 @@ struct DisplayFit {
 
     private func percent(_ value: Double) -> String {
         "\(Int((value * 100).rounded()))%"
+    }
+}
+
+/// A folder of wallpapers already on disk — Lumen's downloads, or anything
+/// else the user points it at.
+struct ImportedFolder: Identifiable, Hashable, Decodable {
+    let id: String
+    let name: String
+    let path: String
+    let count: Int
+
+    var url: URL { URL(filePath: path) }
+}
+
+/// One image inside an imported folder. Has no Wallhaven identity, so it
+/// carries only what the filesystem knows.
+struct LocalWallpaper: Identifiable, Hashable, Decodable {
+    let id: String
+    let folderId: String
+    let url: URL
+    let path: String
+    let filename: String
+    let fileSize: Int
+    var isFavorite: Bool
+
+    var sizeMB: String { String(format: "%.1f MB", Double(fileSize) / 1_048_576) }
+
+    /// Pixel size, read from the file's header rather than by decoding it.
+    var pixelSize: CGSize? {
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+              let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil)
+                as? [CFString: Any],
+              let width = properties[kCGImagePropertyPixelWidth] as? Double,
+              let height = properties[kCGImagePropertyPixelHeight] as? Double
+        else { return nil }
+        return CGSize(width: width, height: height)
+    }
+
+    var displayResolution: String {
+        guard let size = pixelSize else { return "—" }
+        return "\(Int(size.width)) × \(Int(size.height))"
     }
 }
 

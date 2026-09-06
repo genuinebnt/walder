@@ -775,6 +775,241 @@ pub unsafe extern "C" fn lumen_collection_set_member(json: *const c_char) -> *mu
     }
 }
 
+// ── imported folders ──────────────────────────────────────────────────────
+
+/// Extensions worth treating as a wallpaper. Deliberately narrow: the point is
+/// pictures you would put on a desktop, not every file macOS can decode.
+const IMAGE_EXTENSIONS: [&str; 7] = ["jpg", "jpeg", "png", "heic", "webp", "tif", "tiff"];
+
+/// Walks a folder for images. Recurses, because wallpaper folders are usually
+/// organised into subfolders, but skips hidden entries and Lumen's own `.part`
+/// files.
+fn scan_images(root: &std::path::Path) -> Vec<(String, String, u64)> {
+    fn walk(dir: &std::path::Path, depth: u32, out: &mut Vec<(String, String, u64)>) {
+        // A guard against a symlink loop, and against indexing a whole home
+        // directory by accident.
+        if depth > 6 {
+            return;
+        }
+        let Ok(entries) = std::fs::read_dir(dir) else { return };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if name.starts_with('.') {
+                continue;
+            }
+            if path.is_dir() {
+                walk(&path, depth + 1, out);
+                continue;
+            }
+            let extension = path
+                .extension()
+                .map(|e| e.to_string_lossy().to_ascii_lowercase())
+                .unwrap_or_default();
+            if !IMAGE_EXTENSIONS.contains(&extension.as_str()) {
+                continue;
+            }
+            let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
+            out.push((path.to_string_lossy().into_owned(), name, size));
+        }
+    }
+
+    let mut found = Vec::new();
+    walk(root, 0, &mut found);
+    found.sort_by(|a, b| a.1.cmp(&b.1));
+    found
+}
+
+/// Imports a folder and indexes the images in it. Importing the same folder
+/// again rescans rather than duplicating. Callback `kind: "library"`.
+///
+/// # Safety
+/// `path` must be NUL-terminated UTF-8, or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn lumen_library_import(path: *const c_char) -> u64 {
+    let raw = unsafe { str_from(path) };
+    let id = next_id();
+    let Some(core) = core() else {
+        emit(id, err_json("library", "core not initialised"));
+        return id;
+    };
+    let root = PathBuf::from(raw.trim());
+    if !root.is_dir() {
+        emit(id, err_json("library", "that is not a folder"));
+        return id;
+    }
+
+    core.runtime.spawn(async move {
+        let name = root
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| root.to_string_lossy().into_owned());
+
+        let imported = core
+            .db
+            .import_folder(&root.to_string_lossy(), &name)
+            .and_then(|folder_id| {
+                // Scanning can take a moment on a large folder, which is why
+                // this is async rather than a synchronous call.
+                let files = scan_images(&root);
+                core.db.sync_imported_wallpapers(folder_id, &files)?;
+                Ok((folder_id, files.len()))
+            });
+
+        match imported {
+            Ok((folder_id, count)) => {
+                let dto = ImportedFolderDto {
+                    id: folder_id.to_string(),
+                    name,
+                    path: root.to_string_lossy().into_owned(),
+                    count: count as u32,
+                };
+                emit(
+                    id,
+                    serde_json::to_string(&Envelope::ok("library", dto)).unwrap_or_default(),
+                );
+            }
+            Err(e) => emit(id, err_json("library", e)),
+        }
+    });
+    id
+}
+
+/// Rescans every imported folder, picking up additions and dropping files that
+/// are gone. Callback `kind: "library"`.
+#[unsafe(no_mangle)]
+pub extern "C" fn lumen_library_rescan() -> u64 {
+    let id = next_id();
+    let Some(core) = core() else {
+        emit(id, err_json("library", "core not initialised"));
+        return id;
+    };
+
+    core.runtime.spawn(async move {
+        let result = core.db.imported_folders().and_then(|folders| {
+            let mut total = 0;
+            for (folder_id, _, path, _) in &folders {
+                let files = scan_images(std::path::Path::new(path));
+                total += core.db.sync_imported_wallpapers(*folder_id, &files)?;
+            }
+            Ok(total)
+        });
+        match result {
+            Ok(total) => emit(
+                id,
+                serde_json::json!({ "ok": true, "kind": "library", "data": { "count": total } })
+                    .to_string(),
+            ),
+            Err(e) => emit(id, err_json("library", e)),
+        }
+    });
+    id
+}
+
+/// Every imported folder. Caller frees with [`lumen_string_free`].
+#[unsafe(no_mangle)]
+pub extern "C" fn lumen_library_folders() -> *mut c_char {
+    let Some(core) = core() else {
+        return to_c(err_json("library", "core not initialised"));
+    };
+    match core.db.imported_folders() {
+        Ok(folders) => {
+            let list: Vec<ImportedFolderDto> = folders
+                .into_iter()
+                .map(|(id, name, path, count)| ImportedFolderDto {
+                    id: id.to_string(),
+                    name,
+                    path,
+                    count,
+                })
+                .collect();
+            to_c(serde_json::to_string(&Envelope::ok("library", list)).unwrap_or_default())
+        }
+        Err(e) => to_c(err_json("library", e)),
+    }
+}
+
+/// Wallpapers in one imported folder, or all of them when `folder_id` is empty.
+/// Caller frees with [`lumen_string_free`].
+///
+/// # Safety
+/// `folder_id` must be NUL-terminated UTF-8, or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn lumen_library_wallpapers(
+    folder_id: *const c_char,
+    favorites_only: bool,
+) -> *mut c_char {
+    let raw = unsafe { str_from(folder_id) };
+    let Some(core) = core() else {
+        return to_c(err_json("library", "core not initialised"));
+    };
+    let scoped = uuid::Uuid::parse_str(raw.trim()).ok();
+
+    match core.db.imported_wallpapers(scoped, favorites_only) {
+        Ok(found) => {
+            let list: Vec<LocalWallpaperDto> = found
+                .into_iter()
+                .map(|(id, folder, path, filename, size, favorite)| LocalWallpaperDto {
+                    id: id.to_string(),
+                    folder_id: folder.to_string(),
+                    url: file_url(std::path::Path::new(&path)),
+                    path,
+                    filename,
+                    file_size: size as i64,
+                    is_favorite: favorite,
+                })
+                .collect();
+            to_c(serde_json::to_string(&Envelope::ok("library", list)).unwrap_or_default())
+        }
+        Err(e) => to_c(err_json("library", e)),
+    }
+}
+
+/// Forgets a folder. The files on disk are untouched.
+///
+/// # Safety
+/// `folder_id` must be NUL-terminated UTF-8, or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn lumen_library_forget(folder_id: *const c_char) -> *mut c_char {
+    let raw = unsafe { str_from(folder_id) };
+    let Some(core) = core() else {
+        return to_c(err_json("library", "core not initialised"));
+    };
+    let Ok(id) = uuid::Uuid::parse_str(raw.trim()) else {
+        return to_c(err_json("library", "not a folder id"));
+    };
+    match core.db.remove_imported_folder(id) {
+        Ok(()) => to_c(serde_json::json!({ "ok": true, "kind": "library" }).to_string()),
+        Err(e) => to_c(err_json("library", e)),
+    }
+}
+
+/// Favourites or un-favourites one imported wallpaper.
+///
+/// `json`: `{ "id": String, "favorite": Bool }`
+///
+/// # Safety
+/// `json` must be NUL-terminated UTF-8, or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn lumen_library_favorite(json: *const c_char) -> *mut c_char {
+    let raw = unsafe { str_from(json) };
+    let Some(core) = core() else {
+        return to_c(err_json("library", "core not initialised"));
+    };
+    let value: serde_json::Value = serde_json::from_str(&raw).unwrap_or(serde_json::Value::Null);
+    let favorite = value["favorite"].as_bool().unwrap_or(true);
+    let Ok(id) = uuid::Uuid::parse_str(value["id"].as_str().unwrap_or_default()) else {
+        return to_c(err_json("library", "not a wallpaper id"));
+    };
+    match core.db.set_imported_favorite(id, favorite) {
+        Ok(()) => to_c(
+            serde_json::json!({ "ok": true, "kind": "library", "data": { "favorite": favorite } })
+                .to_string(),
+        ),
+        Err(e) => to_c(err_json("library", e)),
+    }
+}
+
 // ── library awareness ─────────────────────────────────────────────────────
 
 /// Ids of wallpapers already sitting in the download directory.

@@ -2,7 +2,7 @@ import SwiftUI
 import Combine
 
 enum Section: String, Hashable, CaseIterable, Identifiable {
-    case browse, toplist, favorites, downloads, collections, displays, schedule, settings
+    case browse, toplist, favorites, downloads, collections, folders, displays, schedule, settings
     var id: String { rawValue }
     var label: String { rawValue.capitalized }
     var symbol: String {
@@ -12,6 +12,7 @@ enum Section: String, Hashable, CaseIterable, Identifiable {
         case .favorites: "heart"
         case .downloads: "arrow.down.circle"
         case .collections: "rectangle.stack"
+        case .folders: "folder"
         case .displays: "display.2"
         case .schedule: "clock.arrow.2.circlepath"
         case .settings: "gearshape"
@@ -115,6 +116,7 @@ struct RootView: View {
             SwiftUI.Section("Local") {
                 row(.downloads, badge: store.downloads.count)
                 row(.collections, badge: store.collections.count)
+                row(.folders, badge: store.libraryFolders.count)
             }
             SwiftUI.Section("System") {
                 row(.displays, badge: store.displays.count)
@@ -180,6 +182,7 @@ struct RootView: View {
             BrowseView(section: section, selection: $selection)
                 .transition(.opacity.combined(with: .offset(y: 10)))
         case .collections: CollectionsView()
+        case .folders: LibraryFolderView()
         case .downloads: DownloadsView()
         case .displays: DisplaysView()
         case .schedule: ScheduleView()
@@ -350,6 +353,7 @@ struct RootView: View {
         switch section {
         case .browse: "Browse"
         case .toplist: "Toplist"
+        case .folders: "Folders"
         default: section.label
         }
     }
@@ -362,6 +366,9 @@ struct RootView: View {
         case .favorites: "\(store.favorites.count) saved"
         case .downloads: "\(store.downloads.filter { $0.state == .active }.count) active"
         case .collections: "\(store.collections.count) local collections"
+        case .folders: store.libraryFolders.isEmpty
+            ? "Wallpapers already on disk"
+            : "\(store.libraryWallpapers.count) in \(store.libraryFolders.count) folders"
         case .displays: "\(store.displays.count) connected"
         case .schedule: store.rotationEnabled ? "Rotating automatically" : "Paused"
         case .settings: "Local preferences and API access"

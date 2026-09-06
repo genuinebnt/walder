@@ -663,6 +663,84 @@ func run() async -> Int32 {
         return store.downloads.count == before
     }
 
+    v.section("Imported folders")
+    await v.checkAsync("Importing a folder indexes the images in it") {
+        // A real folder on disk, including a subfolder and a non-image, so the
+        // scan's filtering is actually exercised.
+        let root = FileManager.default.temporaryDirectory
+            .appending(path: "lumen-verify-library-\(UUID().uuidString)")
+        let nested = root.appending(path: "nested")
+        try? FileManager.default.createDirectory(at: nested, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        func writeImage(_ url: URL) {
+            let image = NSImage(size: NSSize(width: 32, height: 20))
+            image.lockFocus()
+            NSColor.systemTeal.setFill()
+            NSRect(x: 0, y: 0, width: 32, height: 20).fill()
+            image.unlockFocus()
+            if let tiff = image.tiffRepresentation,
+               let rep = NSBitmapImageRep(data: tiff),
+               let png = rep.representation(using: .png, properties: [:]) {
+                try? png.write(to: url)
+            }
+        }
+        writeImage(root.appending(path: "one.png"))
+        writeImage(nested.appending(path: "two.png"))
+        try? Data("not an image".utf8).write(to: root.appending(path: "notes.txt"))
+
+        await store.importFolder(at: root.path(percentEncoded: false))
+        guard let folder = store.libraryFolders.first(where: { $0.path == root.path(percentEncoded: false) })
+        else {
+            print("        folder was not indexed: \(store.errorMessage ?? "no error")")
+            return false
+        }
+        store.selectFolder(folder.id)
+        let names = Set(store.libraryWallpapers.map(\.filename))
+        let found = names == ["one.png", "two.png"]
+        if !found { print("        indexed: \(names.sorted())") }
+
+        // Favourite, set, and forget: the three things this pane is for.
+        var favourited = false
+        if let first = store.libraryWallpapers.first {
+            store.toggleLibraryFavorite(first)
+            favourited = store.libraryWallpapers.first(where: { $0.id == first.id })?.isFavorite == true
+        }
+
+        store.selectFolder(nil)
+        store.forgetFolder(folder)
+        let forgotten = !store.libraryFolders.contains { $0.id == folder.id }
+        return found && favourited && forgotten
+    }
+    v.check("A local wallpaper reports the size of the file on disk") {
+        // Read from the header, not by decoding, so a large folder stays cheap.
+        let url = FileManager.default.temporaryDirectory
+            .appending(path: "lumen-verify-size-\(UUID().uuidString).png")
+        defer { try? FileManager.default.removeItem(at: url) }
+        // Built pixel-exact rather than through lockFocus, which renders at
+        // the display's backing scale and would write a 96x48 file.
+        guard let rep = NSBitmapImageRep(
+            bitmapDataPlanes: nil, pixelsWide: 48, pixelsHigh: 24,
+            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+            colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0),
+              let png = rep.representation(using: .png, properties: [:]),
+              (try? png.write(to: url)) != nil else { return false }
+
+        let local = LocalWallpaper(id: "x", folderId: "y", url: url,
+                                   path: url.path, filename: url.lastPathComponent,
+                                   fileSize: png.count, isFavorite: false)
+        return local.pixelSize == CGSize(width: 48, height: 24)
+    }
+    v.check("Setting a file that has gone reports it rather than failing quietly") {
+        let missing = LocalWallpaper(
+            id: "gone", folderId: "f",
+            url: URL(filePath: "/tmp/definitely-not-here-\(UUID().uuidString).png"),
+            path: "/tmp/gone.png", filename: "gone.png", fileSize: 0, isFavorite: false)
+        store.errorMessage = nil
+        store.setLocalWallpaper(missing)
+        return store.errorMessage?.contains("no longer on disk") == true
+    }
+
     v.section("Menu bar legibility")
 
     /// A flat image of one luminance, for the assessments below.
@@ -1118,9 +1196,16 @@ func run() async -> Int32 {
             }
             await v.checkAsync("The detail endpoint fills in the uploader") {
                 // /search omits uploader entirely, so the preview has to ask.
-                guard let first = store.wallpapers.first else { return false }
-                let detailed = try? await LumenCore.shared.details(id: first.id)
-                return detailed?.uploader != nil
+                // Some uploads are anonymous, so try a few before concluding
+                // the field never arrives.
+                for candidate in store.wallpapers.prefix(4) {
+                    if let detailed = try? await LumenCore.shared.details(id: candidate.id),
+                       detailed.uploader != nil {
+                        return true
+                    }
+                }
+                print("        no uploader on the first four wallpapers")
+                return false
             }
             v.check("Clear Finished empties completed rows") {
                 store.clearFinished()

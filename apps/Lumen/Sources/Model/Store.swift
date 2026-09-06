@@ -172,6 +172,7 @@ final class Store {
         reloadFavorites()
         reloadCollections()
         refreshDownloadedIDs()
+        reloadLibrary()
         rearmRotation()
     }
 
@@ -503,6 +504,115 @@ final class Store {
         Task {
             try? await Task.sleep(for: .seconds(2.5))
             withAnimation(Tokens.normal) { savedConfirmation = false }
+        }
+    }
+
+    // MARK: Imported library
+    //
+    // Wallpapers already on disk — Lumen's own downloads, or anything else the
+    // user points it at. These have no Wallhaven identity, so they get their
+    // own model and their own favourite flag.
+
+    var libraryFolders: [ImportedFolder] = []
+    var libraryWallpapers: [LocalWallpaper] = []
+    /// nil means every folder.
+    var selectedFolder: String?
+    var libraryFavoritesOnly = false
+    var isScanningLibrary = false
+
+    @MainActor
+    func reloadLibrary() {
+        guard coreReady else { return }
+        libraryFolders = LumenCore.shared.libraryFolders()
+        // A folder that has been forgotten should not stay selected.
+        if let selected = selectedFolder,
+           !libraryFolders.contains(where: { $0.id == selected }) {
+            selectedFolder = nil
+        }
+        libraryWallpapers = LumenCore.shared.libraryWallpapers(
+            folder: selectedFolder, favoritesOnly: libraryFavoritesOnly)
+    }
+
+    @MainActor
+    func importFolder(at path: String) async {
+        isScanningLibrary = true
+        defer { isScanningLibrary = false }
+        do {
+            _ = try await LumenCore.shared.importFolder(at: path)
+            reloadLibrary()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    @MainActor
+    func rescanLibrary() async {
+        guard !libraryFolders.isEmpty else { return }
+        isScanningLibrary = true
+        defer { isScanningLibrary = false }
+        do {
+            _ = try await LumenCore.shared.rescanLibrary()
+            reloadLibrary()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    @MainActor
+    func forgetFolder(_ folder: ImportedFolder) {
+        // Only the index is dropped; the files stay where they are.
+        LumenCore.shared.forgetFolder(id: folder.id)
+        reloadLibrary()
+    }
+
+    @MainActor
+    func selectFolder(_ id: String?) {
+        selectedFolder = id
+        reloadLibrary()
+    }
+
+    @MainActor
+    func setLibraryFavoritesOnly(_ on: Bool) {
+        libraryFavoritesOnly = on
+        reloadLibrary()
+    }
+
+    @MainActor
+    func toggleLibraryFavorite(_ wallpaper: LocalWallpaper) {
+        guard LumenCore.shared.setLibraryFavorite(id: wallpaper.id,
+                                                  favorite: !wallpaper.isFavorite) else {
+            errorMessage = "Could not save that wallpaper."
+            return
+        }
+        if let index = libraryWallpapers.firstIndex(where: { $0.id == wallpaper.id }) {
+            withAnimation(Tokens.bouncy) {
+                libraryWallpapers[index].isFavorite.toggle()
+            }
+        }
+        // Under "favourites only" an unfavourited wallpaper should leave.
+        if libraryFavoritesOnly { reloadLibrary() }
+    }
+
+    /// Sets a file already on disk. No download step, so this is direct.
+    @MainActor
+    func setLocalWallpaper(_ wallpaper: LocalWallpaper, on display: DisplayTarget? = nil) {
+        guard FileManager.default.fileExists(atPath: wallpaper.url.path) else {
+            errorMessage = "\(wallpaper.filename) is no longer on disk."
+            reloadLibrary()
+            return
+        }
+        let screen = display.flatMap { target in
+            NSScreen.screens.first { $0.localizedName == target.name }
+        }
+        do {
+            try WallpaperSetter.apply(fileURL: wallpaper.url, to: screen,
+                                      fit: display?.fit ?? .fill)
+            if wallpaperScope == .allSpaces, display == nil {
+                try? SpacesWallpaper.applyEverywhere(fileURL: wallpaper.url)
+            }
+            errorMessage = nil
+        } catch {
+            errorMessage = error.localizedDescription
         }
     }
 

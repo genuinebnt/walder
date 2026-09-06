@@ -39,6 +39,23 @@ The SwiftUI rewrite closed most of the original list.
 - **Image cache** — decoded images held in memory, requests coalesced, ImageIO
   downsampling to the drawn size, and a 512 MB disk cache. Switching layout is a
   cache read rather than a re-download.
+- **Collections** persisted, with a join table so a wallpaper can sit in several
+  and membership is independent of favouriting.
+- **Multi-select** with bulk download, favourite and collection filing, each one
+  operation in the core rather than a call per wallpaper.
+- **Author pages, tag pages and uploader collections**, sharing one pane.
+- **Wallhaven's own operators**: `like:` for similar, `id:` for tags, `type:`
+  for file type, `-tag` for exclusion.
+- **Fit to display** — whether a wallpaper suits the screen, with a local resize
+  or a search at that size and shape when it does not.
+- **Per-Space wallpapers** — "All Spaces" rewrites the system wallpaper store.
+- **Resumable downloads** via Range, writing to a `.part` file so an interrupted
+  run no longer leaves a truncated image that reads as complete.
+- **Download at a size** — the original, or a copy resized here.
+- **Scroll position** kept per pane.
+- **Menu bar legibility** check, and **light/dark wallpaper pairing**.
+- **Imported folders** — point Lumen at folders you already keep wallpapers in,
+  browse, favourite and set them. Favourites survive a rescan.
 
 Backend hardening in the same pass: WAL and enforced foreign keys, indices on
 every filtered column, a joined favourites read instead of a query per row, a
@@ -49,28 +66,12 @@ lookups.
 
 ## Still open from the original list
 
-Carried forward, unchanged in priority.
-
-- **Collections are in memory.** Creating one works; nothing persists across a
-  relaunch. They need to move into `wallsetter-db` alongside bookmark folders,
-  which already has the schema for it. Everything below under Collections
-  depends on this landing first.
-  - Download directly into a collection
-  - Add existing downloads to a collection
-  - Multi-select downloads and file them at once
-  - Shuffle and set from one collection
 - **Downloaded wallpapers searchable by tag** — needs tags written to disk
   alongside the file, which the Spotlight item below also wants.
-- **Download at a custom resolution.**
-- **Resume an interrupted download** — the manager retries but restarts the file.
-- **Scroll position** preserved when opening a wallpaper or switching tabs, and
-  restored on return. Back / forward.
-- **Author profile as a pane.** Clicking an uploader searches `@name` today,
-  which is Wallhaven's own behaviour; a dedicated profile pane with their stats
-  would go further.
-- **The rest of wallhaven.cc's surface** — user collections (the provider crate
-  has `get_collections` already, unused), similar-wallpaper suggestions, and
-  browsing by tag page rather than by search.
+- **Back / forward** through panes. Scroll position is kept per pane now, but
+  there is no history to step through.
+- **Author stats on the author pane** — uploads, favourites received. The API
+  does not expose them, so this needs scraping or doing without.
 
 ---
 

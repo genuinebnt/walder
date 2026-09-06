@@ -9,6 +9,7 @@
 #ifndef LUMEN_H
 #define LUMEN_H
 
+#include <stdbool.h>
 #include <stdint.h>
 
 typedef void (*LumenCallback)(uint64_t request_id, const char *json, void *ctx);
@@ -43,6 +44,14 @@ char *lumen_collections_list(void);
 char *lumen_collection_create(const char *name);
 char *lumen_collection_delete(const char *id);
 char *lumen_collection_set_member(const char *json);
+
+// Imported folders
+uint64_t lumen_library_import(const char *path);
+uint64_t lumen_library_rescan(void);
+char    *lumen_library_folders(void);
+char    *lumen_library_wallpapers(const char *folder_id, bool favorites_only);
+char    *lumen_library_forget(const char *folder_id);
+char    *lumen_library_favorite(const char *json);
 
 // Library awareness
 char *lumen_downloaded_ids(void);
