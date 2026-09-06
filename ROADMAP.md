@@ -64,6 +64,8 @@ The SwiftUI rewrite closed most of the original list.
   tag page you were on, not just the pane.
 - **Tag radar** — watch a tag or uploader, checked on a timer, with an in-app
   badge and a Notification Center alert when permission allows.
+- **Palette match** — sets the system accent to the nearest of the seven macOS
+  offers, with the previous value remembered so it can be put back.
 
 Backend hardening in the same pass: WAL and enforced foreign keys, indices on
 every filtered column, a joined favourites read instead of a query per row, a
@@ -93,7 +95,6 @@ These are what would separate Lumen from every other Wallhaven downloader.
 
 | Feature | Why it stands out | Cost |
 | --- | --- | --- |
-| **Palette match** | Extract dominant colours and offer to set the system accent and highlight to match. Wallhaven returns each image's palette, so this is nearly free. | Low — the colours are already in `Wallpaper.colors`. Writing the accent needs a `defaults` write plus a distributed notification; unsupported API, so it needs a fallback. |
 | **Per-Space wallpapers, individually** | "All Spaces" ships, but assigning a *different* wallpaper to each Space does not. The store models it; the missing piece is knowing which Space is which. | Medium now the store's shape is understood. |
 | **Crop to fit my display** | A pan/zoom pass before setting, so a 21:9 image is not centre-cropped badly on a 16:10 screen. Save the crop with the wallpaper. | Medium — a real editor surface, plus storing the crop rect per wallpaper per display. |
 | **Shortcuts actions** | "Set random wallpaper from Favorites", and a Focus-mode trigger. | Medium — App Intents, which needs the app to expose an intent extension. |

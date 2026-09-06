@@ -666,6 +666,38 @@ func run() async -> Int32 {
         return store.downloads.count == before
     }
 
+    v.section("System accent matching")
+    v.check("A strong colour maps to the accent a person would name") {
+        SystemAccent.nearest(toHex: "0066cc") == .blue
+            && SystemAccent.nearest(toHex: "cc0000") == .red
+            && SystemAccent.nearest(toHex: "336600") == .green
+            && SystemAccent.nearest(toHex: "993399") == .purple
+    }
+    v.check("A leading # is tolerated, and nonsense is declined") {
+        SystemAccent.nearest(toHex: "#0066cc") == .blue
+            && SystemAccent.nearest(toHex: "zzz") == nil
+            && SystemAccent.nearest(toHex: "12345") == nil
+    }
+    v.check("A palette skips the black and white every wallpaper has") {
+        // Wallhaven lists strongest first, and almost every palette starts
+        // with #000000 — matching on that would make everything Graphite.
+        let palette = ["000000", "ffffff", "cc0000", "999999"]
+        return SystemAccent.nearest(toPalette: palette) == .red
+    }
+    v.check("A palette with nothing usable still answers rather than failing") {
+        SystemAccent.nearest(toPalette: ["000000"]) != nil
+            && SystemAccent.nearest(toPalette: []) == nil
+    }
+    v.check("Restore is only offered once something has been changed") {
+        // Uses an isolated suite: this must not read or write the real setting.
+        let suite = "cc.lumen.verify.accent"
+        UserDefaults.standard.removePersistentDomain(forName: suite)
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { UserDefaults.standard.removePersistentDomain(forName: suite) }
+        return SystemAccent.canRestore(defaults) == false
+            && SystemAccent.restore(defaults) == false
+    }
+
     v.section("Navigation history")
     v.check("Back and forward walk the panes") {
         let browse = Store.Destination(pane: "browse", focus: nil)

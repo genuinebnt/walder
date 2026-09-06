@@ -226,6 +226,7 @@ struct PreviewPane: View {
                 actions
                 fitReport
                 appearancePair
+                accentMatch
                 collections
                 uploader
                 metadata
@@ -372,6 +373,34 @@ struct PreviewPane: View {
                             .frame(maxWidth: .infinity)
                     }
                     .help("Search similar wallpapers at your display's resolution and shape")
+                }
+                .controlSize(.small)
+            }
+        }
+    }
+
+    /// Offer to set the system accent to the nearest match. Deliberately
+    /// explicit that it is a system setting and that it snaps to one of seven.
+    @ViewBuilder
+    private var accentMatch: some View {
+        if let accent = store.suggestedAccent(for: wallpaper) {
+            VStack(alignment: .leading, spacing: Tokens.s2) {
+                Text("SYSTEM ACCENT").font(.sectionLabel).foregroundStyle(.secondary)
+                HStack(spacing: Tokens.s2) {
+                    Circle().fill(accent.color).frame(width: 18, height: 18)
+                        .overlay { Circle().strokeBorder(.separator, lineWidth: 0.5) }
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text("Closest match: \(accent.label)").font(.system(size: 12))
+                        Text("macOS offers seven accents, so this is nearest, not exact")
+                            .font(.system(size: 10.5)).foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                }
+                HStack(spacing: Tokens.s2) {
+                    Button("Match Accent") { store.matchSystemAccent(to: wallpaper) }
+                    if store.canRestoreAccent {
+                        Button("Restore") { store.restoreSystemAccent() }
+                    }
                 }
                 .controlSize(.small)
             }

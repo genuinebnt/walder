@@ -534,6 +534,27 @@ final class Store {
         }
     }
 
+    // MARK: System accent
+
+    /// The accent macOS would be set to for the wallpaper in view, if asked.
+    func suggestedAccent(for wallpaper: Wallpaper) -> SystemAccent? {
+        SystemAccent.nearest(toPalette: wallpaper.colors)
+    }
+
+    var canRestoreAccent: Bool { SystemAccent.canRestore() }
+
+    @MainActor
+    func matchSystemAccent(to wallpaper: Wallpaper) {
+        guard let accent = suggestedAccent(for: wallpaper) else {
+            errorMessage = "That wallpaper has no palette to match."
+            return
+        }
+        SystemAccent.apply(accent)
+    }
+
+    @MainActor
+    func restoreSystemAccent() { SystemAccent.restore() }
+
     // MARK: Tag radar
     //
     // Saved searches re-run on a timer. Notification Center is the nice
