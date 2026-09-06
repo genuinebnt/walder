@@ -5,6 +5,18 @@ use wallsetter_core::*;
 
 const BASE_URL: &str = "https://wallhaven.cc/api/v1";
 
+/// Wallhaven sends `Retry-After` on a 429; falling back to a flat minute makes
+/// the client wait longer than it has to, or retry too early.
+fn retry_after_secs(response: &reqwest::Response) -> u64 {
+    response
+        .headers()
+        .get(reqwest::header::RETRY_AFTER)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .unwrap_or(60)
+        .clamp(1, 3600)
+}
+
 /// Wallhaven API client implementing the `Provider` trait.
 ///
 /// Cloning shares the underlying connection pool, so a clone can be taken out
@@ -338,7 +350,7 @@ impl Provider for WallhavenClient {
         let status = resp.status().as_u16();
         if status == 429 {
             return Err(WallsetterError::RateLimited {
-                retry_after_secs: 60,
+                retry_after_secs: retry_after_secs(&resp),
             });
         }
         if status == 401 {
@@ -405,11 +417,15 @@ impl Provider for WallhavenClient {
     }
 
     async fn get_tag(&self, id: u64) -> wallsetter_core::Result<Tag> {
-        let url = format!("{BASE_URL}/tag/{id}");
+        // Tags on sketchy or NSFW wallpapers are only visible to an
+        // authenticated caller, so this needs the key like every other route.
+        let mut url = url::Url::parse(&format!("{BASE_URL}/tag/{id}"))
+            .map_err(|e| WallsetterError::Http(e.to_string()))?;
+        self.add_auth(&mut url);
 
         let resp = self
             .client
-            .get(&url)
+            .get(url.as_str())
             .send()
             .await
             .map_err(|e| WallsetterError::Http(e.to_string()))?;

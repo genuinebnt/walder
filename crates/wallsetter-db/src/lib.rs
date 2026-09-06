@@ -18,9 +18,22 @@ impl Database {
             std::fs::create_dir_all(parent).map_err(WallsetterError::Io)?;
         }
 
-        let manager = SqliteConnectionManager::file(db_path);
-        let pool =
-            r2d2::Pool::new(manager).map_err(|e| WallsetterError::Database(e.to_string()))?;
+        // Every pooled connection needs these: SQLite applies pragmas per
+        // connection, and the defaults leave foreign keys unenforced and no
+        // busy timeout, so a concurrent writer surfaces as SQLITE_BUSY.
+        let manager = SqliteConnectionManager::file(db_path).with_init(|conn| {
+            conn.execute_batch(
+                "PRAGMA journal_mode = WAL;
+                 PRAGMA synchronous = NORMAL;
+                 PRAGMA foreign_keys = ON;
+                 PRAGMA busy_timeout = 5000;
+                 PRAGMA temp_store = MEMORY;",
+            )
+        });
+        let pool = r2d2::Pool::builder()
+            .max_size(8)
+            .build(manager)
+            .map_err(|e| WallsetterError::Database(e.to_string()))?;
 
         let db = Self { pool };
         db.init_schema()?;
@@ -130,6 +143,28 @@ impl Database {
         )
         .map_err(|e| WallsetterError::Database(e.to_string()))?;
 
+        // Indices for the columns the app actually filters and joins on.
+        // Without them every favourite check is a full scan of bookmarks.
+        conn.execute_batch(
+            "CREATE INDEX IF NOT EXISTS idx_bookmarks_wallpaper
+                 ON bookmarks(wallpaper_id);
+             CREATE INDEX IF NOT EXISTS idx_bookmarks_folder_added
+                 ON bookmarks(folder_id, added_at DESC);
+             CREATE INDEX IF NOT EXISTS idx_bookmarks_added
+                 ON bookmarks(added_at DESC);
+             CREATE INDEX IF NOT EXISTS idx_history_wallpaper
+                 ON download_history(wallpaper_id);
+             CREATE INDEX IF NOT EXISTS idx_history_downloaded
+                 ON download_history(downloaded_at DESC);
+             CREATE INDEX IF NOT EXISTS idx_local_folder
+                 ON local_wallpapers(folder_id);
+             CREATE INDEX IF NOT EXISTS idx_local_path
+                 ON local_wallpapers(local_path);
+             CREATE INDEX IF NOT EXISTS idx_wallpapers_updated
+                 ON wallpapers(last_updated);",
+        )
+        .map_err(|e| WallsetterError::Database(e.to_string()))?;
+
         Ok(())
     }
 
@@ -234,6 +269,58 @@ impl Database {
         }
 
         Ok(bookmarks)
+    }
+
+    /// Bookmarked wallpapers, newest first, in one query.
+    ///
+    /// Reading the bookmarks and then fetching each cached wallpaper by id is
+    /// a round trip per favourite; this joins instead. Bookmarks whose cache
+    /// row was evicted are skipped rather than failing the whole read.
+    pub fn get_bookmarked_wallpapers(
+        &self,
+        folder_id: Option<Uuid>,
+    ) -> wallsetter_core::Result<Vec<Wallpaper>> {
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| WallsetterError::Database(e.to_string()))?;
+
+        let sql = if folder_id.is_some() {
+            "SELECT w.data FROM bookmarks b
+                 JOIN wallpapers w ON w.id = b.wallpaper_id
+                 WHERE b.folder_id = ?1
+                 ORDER BY b.added_at DESC"
+        } else {
+            "SELECT w.data FROM bookmarks b
+                 JOIN wallpapers w ON w.id = b.wallpaper_id
+                 ORDER BY b.added_at DESC"
+        };
+
+        let mut stmt = conn
+            .prepare(sql)
+            .map_err(|e| WallsetterError::Database(e.to_string()))?;
+
+        let params: Vec<rusqlite::types::Value> = match folder_id {
+            Some(fid) => vec![fid.to_string().into()],
+            None => vec![],
+        };
+
+        let rows = stmt
+            .query_map(rusqlite::params_from_iter(params), |row| {
+                row.get::<_, String>(0)
+            })
+            .map_err(|e| WallsetterError::Database(e.to_string()))?;
+
+        let mut wallpapers = Vec::new();
+        for row in rows {
+            let json = row.map_err(|e| WallsetterError::Database(e.to_string()))?;
+            match serde_json::from_str::<Wallpaper>(&json) {
+                Ok(w) => wallpapers.push(w),
+                // A row written by an older schema should not break the list.
+                Err(e) => tracing::warn!("skipping unreadable cached wallpaper: {e}"),
+            }
+        }
+        Ok(wallpapers)
     }
 
     pub fn is_bookmarked(&self, wallpaper_id: &str) -> wallsetter_core::Result<bool> {
@@ -388,6 +475,34 @@ impl Database {
         .map_err(|e| WallsetterError::Database(e.to_string()))?;
 
         Ok(())
+    }
+
+    /// Trims the wallpaper cache to `keep` most-recent rows, never evicting a
+    /// row a bookmark points at.
+    ///
+    /// Every search result is cached, so browsing for a while grows this table
+    /// without limit; bookmarks read through it, so eviction has to spare them.
+    pub fn prune_wallpaper_cache(&self, keep: u32) -> wallsetter_core::Result<usize> {
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| WallsetterError::Database(e.to_string()))?;
+        let removed = conn
+            .execute(
+                "DELETE FROM wallpapers
+                 WHERE id NOT IN (SELECT wallpaper_id FROM bookmarks)
+                   AND id NOT IN (
+                       SELECT id FROM wallpapers
+                       ORDER BY last_updated DESC
+                       LIMIT ?1
+                   )",
+                [keep],
+            )
+            .map_err(|e| WallsetterError::Database(e.to_string()))?;
+        if removed > 0 {
+            info!("Pruned {removed} cached wallpapers");
+        }
+        Ok(removed)
     }
 
     pub fn get_cached_wallpaper(&self, id: &str) -> wallsetter_core::Result<Option<Wallpaper>> {
@@ -714,3 +829,138 @@ impl Database {
         Ok(paths)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use wallsetter_core::{Category, Purity, Resolution, WallpaperProvider};
+
+    fn temp_db() -> (Database, tempfile::TempDir) {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let db = Database::new(&dir.path().join("test.db")).expect("open db");
+        (db, dir)
+    }
+
+    fn wallpaper(id: &str) -> Wallpaper {
+        Wallpaper {
+            id: id.into(),
+            provider: WallpaperProvider::Wallhaven,
+            url: format!("https://wallhaven.cc/w/{id}"),
+            short_url: None,
+            full_url: format!("https://w.wallhaven.cc/full/{id}.jpg"),
+            thumbnail_small: String::new(),
+            thumbnail_large: String::new(),
+            thumbnail_original: String::new(),
+            uploader: None,
+            resolution: Resolution::new(1920, 1080),
+            file_size: 1024,
+            file_type: "image/jpeg".into(),
+            category: Category::General,
+            purity: Purity::Sfw,
+            colors: Vec::new(),
+            tags: Vec::new(),
+            source: None,
+            views: 0,
+            favorites: 0,
+            ratio: 1.777,
+            created_at: None,
+        }
+    }
+
+    #[test]
+    fn pragmas_are_applied_to_pooled_connections() {
+        let (db, _dir) = temp_db();
+        let conn = db.pool.get().expect("connection");
+
+        let journal: String = conn
+            .query_row("PRAGMA journal_mode", [], |r| r.get(0))
+            .expect("journal_mode");
+        assert_eq!(journal.to_lowercase(), "wal");
+
+        // Declared foreign keys are inert unless this is on.
+        let foreign_keys: i64 = conn
+            .query_row("PRAGMA foreign_keys", [], |r| r.get(0))
+            .expect("foreign_keys");
+        assert_eq!(foreign_keys, 1);
+    }
+
+    #[test]
+    fn bookmarked_wallpapers_come_back_newest_first() {
+        let (db, _dir) = temp_db();
+        for id in ["aaa", "bbb", "ccc"] {
+            let w = wallpaper(id);
+            db.cache_wallpaper(&w).expect("cache");
+            db.add_bookmark(&Bookmark::new(&w, None)).expect("bookmark");
+            // added_at has one-second resolution, so order the inserts.
+            std::thread::sleep(std::time::Duration::from_millis(1100));
+        }
+
+        let saved = db.get_bookmarked_wallpapers(None).expect("join");
+        let ids: Vec<&str> = saved.iter().map(|w| w.id.as_str()).collect();
+        assert_eq!(ids, vec!["ccc", "bbb", "aaa"]);
+    }
+
+    #[test]
+    fn a_bookmark_without_a_cached_wallpaper_is_skipped_not_fatal() {
+        let (db, _dir) = temp_db();
+        let present = wallpaper("here");
+        db.cache_wallpaper(&present).expect("cache");
+        db.add_bookmark(&Bookmark::new(&present, None)).expect("bookmark");
+
+        // A bookmark whose cache row was evicted must not fail the whole read.
+        let orphan = wallpaper("gone");
+        db.cache_wallpaper(&orphan).expect("cache");
+        db.add_bookmark(&Bookmark::new(&orphan, None)).expect("bookmark");
+        db.pool
+            .get()
+            .unwrap()
+            .execute("DELETE FROM wallpapers WHERE id = 'gone'", [])
+            .expect("evict");
+
+        let saved = db.get_bookmarked_wallpapers(None).expect("join");
+        assert_eq!(saved.len(), 1);
+        assert_eq!(saved[0].id, "here");
+    }
+
+    #[test]
+    fn pruning_bounds_the_cache_but_spares_bookmarks() {
+        let (db, _dir) = temp_db();
+        for index in 0..20 {
+            db.cache_wallpaper(&wallpaper(&format!("w{index:02}")))
+                .expect("cache");
+        }
+        // The oldest row is bookmarked, so pruning must leave it alone.
+        let pinned = wallpaper("w00");
+        db.add_bookmark(&Bookmark::new(&pinned, None)).expect("bookmark");
+
+        db.prune_wallpaper_cache(5).expect("prune");
+
+        let remaining: i64 = db
+            .pool
+            .get()
+            .unwrap()
+            .query_row("SELECT COUNT(1) FROM wallpapers", [], |r| r.get(0))
+            .expect("count");
+        assert!(remaining <= 6, "expected at most 5 cached + 1 pinned, got {remaining}");
+        assert!(
+            db.get_cached_wallpaper("w00").expect("lookup").is_some(),
+            "a bookmarked wallpaper must survive pruning"
+        );
+    }
+
+    #[test]
+    fn is_bookmarked_tracks_add_and_remove() {
+        let (db, _dir) = temp_db();
+        let w = wallpaper("toggle");
+        db.cache_wallpaper(&w).expect("cache");
+        assert!(!db.is_bookmarked("toggle").expect("check"));
+
+        let bookmark = Bookmark::new(&w, None);
+        db.add_bookmark(&bookmark).expect("add");
+        assert!(db.is_bookmarked("toggle").expect("check"));
+
+        db.remove_bookmark(bookmark.id).expect("remove");
+        assert!(!db.is_bookmarked("toggle").expect("check"));
+    }
+}
+

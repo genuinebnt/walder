@@ -67,6 +67,10 @@ struct Core {
     cache_dir: PathBuf,
 }
 
+/// Cached search results kept on disk. Bookmarked wallpapers are never
+/// evicted, so this only bounds the browsing cache.
+const WALLPAPER_CACHE_LIMIT: u32 = 5_000;
+
 static CORE: OnceLock<Core> = OnceLock::new();
 static INIT_ERROR: Mutex<Option<String>> = Mutex::new(None);
 
@@ -249,6 +253,7 @@ pub unsafe extern "C" fn lumen_search(filters_json: *const c_char) -> u64 {
                 for w in &page.wallpapers {
                     let _ = core.db.cache_wallpaper(w);
                 }
+                let _ = core.db.prune_wallpaper_cache(WALLPAPER_CACHE_LIMIT);
                 let dto = SearchPageDto::from(&page);
                 emit(id, serde_json::to_string(&Envelope::ok("search", dto)).unwrap_or_default());
             }
@@ -467,17 +472,11 @@ pub extern "C" fn lumen_favorites_list() -> *mut c_char {
     let Some(core) = core() else {
         return to_c(err_json("favorites", "core not initialised"));
     };
-    let listed = core.db.get_bookmarks(None).and_then(|marks| {
-        let mut out = Vec::with_capacity(marks.len());
-        for mark in &marks {
-            if let Some(w) = core.db.get_cached_wallpaper(&mark.wallpaper_id)? {
-                out.push(WallpaperDto::from(&w));
-            }
+    match core.db.get_bookmarked_wallpapers(None) {
+        Ok(saved) => {
+            let list: Vec<WallpaperDto> = saved.iter().map(WallpaperDto::from).collect();
+            to_c(serde_json::to_string(&Envelope::ok("favorites", list)).unwrap_or_default())
         }
-        Ok(out)
-    });
-    match listed {
-        Ok(list) => to_c(serde_json::to_string(&Envelope::ok("favorites", list)).unwrap_or_default()),
         Err(e) => to_c(err_json("favorites", e)),
     }
 }
