@@ -1,16 +1,23 @@
 import SwiftUI
 
-/// Full preview. Steps through the list that was being browsed with the arrow
-/// keys, and carries every action that applies to one wallpaper.
+/// Full-window preview. Takes over the whole app rather than opening a sheet,
+/// so the image is as large as the window allows when deciding whether to keep
+/// it. Steps through the browsed list with the arrow keys, and carries every
+/// action that applies to one wallpaper.
 ///
-/// The inspector can be collapsed for a full-bleed look; the keyboard works the
-/// same either way.
-struct DetailSheet: View {
+/// The inspector collapses for a full-bleed look; the keyboard works either way.
+struct PreviewPane: View {
     @Environment(Store.self) private var store
 
     /// The list being browsed, so ← and → have somewhere to go.
     let items: [Wallpaper]
     var close: () -> Void
+
+    /// What the sheet was opened on. SwiftUI re-creates this view whenever the
+    /// browsed list changes, and searching from the inspector replaces that
+    /// list underneath — so `items` can be shorter than `index`, or empty. This
+    /// is what stays on screen when that happens.
+    let opened: Wallpaper
 
     @State private var index: Int
     @State private var showInspector = true
@@ -18,9 +25,12 @@ struct DetailSheet: View {
 
     init(items: [Wallpaper], selected: Wallpaper, close: @escaping () -> Void) {
         self.items = items
+        self.opened = selected
         self.close = close
         _index = State(initialValue: items.firstIndex(where: { $0.id == selected.id }) ?? 0)
     }
+
+    @FocusState private var focused: Bool
 
     /// Convenience for a single wallpaper with nothing to page through.
     init(wallpaper: Wallpaper, close: @escaping () -> Void) {
@@ -28,7 +38,14 @@ struct DetailSheet: View {
     }
 
     private var wallpaper: Wallpaper {
-        items.indices.contains(index) ? items[index] : items[0]
+        guard !items.isEmpty else { return opened }
+        return items[min(max(index, 0), items.count - 1)]
+    }
+
+    /// Position shown in the chrome, clamped to whatever the list holds now.
+    private var position: (current: Int, total: Int) {
+        guard !items.isEmpty else { return (1, 1) }
+        return (min(max(index, 0), items.count - 1) + 1, items.count)
     }
 
     var body: some View {
@@ -40,10 +57,14 @@ struct DetailSheet: View {
                     .transition(.move(edge: .trailing).combined(with: .opacity))
             }
         }
-        .frame(minWidth: 860, idealWidth: 1180, minHeight: 520, idealHeight: 720)
-        .background(.regularMaterial)
-        .clipShape(.rect(cornerRadius: Tokens.sheet))
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(.background)
         .animation(Tokens.normal, value: showInspector)
+        // As an overlay rather than a sheet, this has to ask for key focus.
+        .focusable()
+        .focusEffectDisabled()
+        .focused($focused)
+        .onAppear { focused = true }
         // Arrow keys page through the list; Escape closes; Space toggles zoom.
         .onKeyPress(.leftArrow) { step(-1); return .handled }
         .onKeyPress(.rightArrow) { step(1); return .handled }
@@ -110,12 +131,22 @@ struct DetailSheet: View {
     private var overlayChrome: some View {
         VStack {
             HStack(alignment: .top) {
+                Button(action: close) {
+                    Label("Back", systemImage: "chevron.left")
+                        .font(.system(size: 12, weight: .medium))
+                        .padding(.horizontal, 10).padding(.vertical, 5)
+                        .background(.black.opacity(0.5), in: .capsule)
+                }
+                .buttonStyle(.plain)
+                .keyboardShortcut(.cancelAction)
+                .help("Back to the grid (Escape)")
+
                 Text(wallpaper.displayResolution)
                     .font(.captionMono)
                     .padding(.horizontal, 9).padding(.vertical, 4)
                     .background(.black.opacity(0.5), in: .rect(cornerRadius: 7))
                 Spacer()
-                Text("\(index + 1) of \(items.count)")
+                Text("\(position.current) of \(position.total)")
                     .font(.captionMono)
                     .padding(.horizontal, 9).padding(.vertical, 4)
                     .background(.black.opacity(0.5), in: .rect(cornerRadius: 7))
@@ -135,7 +166,7 @@ struct DetailSheet: View {
             HStack {
                 stepButton("chevron.left", enabled: index > 0) { step(-1) }
                 Spacer()
-                stepButton("chevron.right", enabled: index < items.count - 1) { step(1) }
+                stepButton("chevron.right", enabled: index + 1 < items.count) { step(1) }
             }
         }
         .foregroundStyle(.white)
@@ -182,6 +213,17 @@ struct DetailSheet: View {
 
     private var actions: some View {
         VStack(spacing: Tokens.s2) {
+            if SpacesWallpaper.isAvailable {
+                Picker("", selection: Binding(get: { store.wallpaperScope },
+                                              set: { store.wallpaperScope = $0 })) {
+                    ForEach(WallpaperScope.allCases) { Text($0.label).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .controlSize(.small)
+                .help("macOS gives each Space its own desktop picture")
+            }
+
             Button {
                 store.setWallpaper(wallpaper)
                 close()

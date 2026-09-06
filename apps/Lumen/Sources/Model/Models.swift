@@ -181,6 +181,14 @@ struct Collection: Identifiable, Hashable, Decodable {
     var wallpapers: [Wallpaper] = []
 }
 
+/// Where a set applies. macOS gives each Space its own desktop picture, and
+/// `NSWorkspace` only ever writes the one you are looking at.
+enum WallpaperScope: String, Codable, CaseIterable, Identifiable {
+    case thisSpace, allSpaces
+    var id: String { rawValue }
+    var label: String { self == .thisSpace ? "This Space" : "All Spaces" }
+}
+
 struct DisplayTarget: Identifiable, Hashable {
     enum Fit: String, CaseIterable, Identifiable {
         case fill = "Fill", fit = "Fit", stretch = "Stretch"

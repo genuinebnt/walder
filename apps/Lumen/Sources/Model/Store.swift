@@ -52,6 +52,7 @@ final class Store {
     var shuffle: Bool { didSet { save(shuffle, "shuffle") } }
     var preferLocalPreview: Bool { didSet { save(preferLocalPreview, "preferLocalPreview") } }
     var menuBarEnabled: Bool { didSet { save(menuBarEnabled, "menuBarEnabled") } }
+    var wallpaperScope: WallpaperScope { didSet { save(wallpaperScope.rawValue, "wallpaperScope") } }
     var showPurityBorders: Bool { didSet { save(showPurityBorders, "showPurityBorders") } }
     var pauseOnBattery: Bool { didSet { save(pauseOnBattery, "pauseOnBattery"); rearmRotation() } }
 
@@ -94,6 +95,8 @@ final class Store {
         shuffle = bool("shuffle", default: true)
         preferLocalPreview = bool("preferLocalPreview", default: true)
         menuBarEnabled = bool("menuBarEnabled", default: true)
+        wallpaperScope = WallpaperScope(rawValue: defaults.string(forKey: "wallpaperScope") ?? "")
+            ?? .thisSpace
         showPurityBorders = bool("showPurityBorders", default: true)
         pauseOnBattery = bool("pauseOnBattery", default: false)
         presets = Self.loadJSON([FilterPreset].self, "filterPresets", from: defaults) ?? []
@@ -344,7 +347,9 @@ final class Store {
 
     /// The core materialises the file first — `NSWorkspace` only takes local URLs.
     @MainActor
-    func setWallpaper(_ wallpaper: Wallpaper, on display: DisplayTarget? = nil) {
+    func setWallpaper(_ wallpaper: Wallpaper,
+                      on display: DisplayTarget? = nil,
+                      scope: WallpaperScope? = nil) {
         withAnimation(Tokens.normal) {
             current = wallpaper
             recents = ([wallpaper] + recents.filter { $0.id != wallpaper.id }).prefix(6).map { $0 }
@@ -366,7 +371,22 @@ final class Store {
                     url: wallpaper.path.absoluteString,
                     filename: wallpaper.filename)
                 attachLocalFile(local, to: wallpaper.id)
+
+                // The visible Space is always set through the supported API;
+                // "All Spaces" additionally rewrites the system store, and
+                // falls back to the single-Space result if that is refused.
                 try WallpaperSetter.apply(fileURL: local, to: screen, fit: fit)
+
+                // Sending to one display is a per-display choice, so it stays
+                // on the current Space regardless of the default scope.
+                let effective = scope ?? (display == nil ? wallpaperScope : .thisSpace)
+                if effective == .allSpaces {
+                    do {
+                        try SpacesWallpaper.applyEverywhere(fileURL: local)
+                    } catch {
+                        errorMessage = "Set on this Space only — \(error.localizedDescription)"
+                    }
+                }
             } catch {
                 errorMessage = error.localizedDescription
             }

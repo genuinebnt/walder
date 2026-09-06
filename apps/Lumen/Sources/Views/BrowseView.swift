@@ -77,7 +77,7 @@ struct BrowseView: View {
     }
 
     private func open(_ wallpaper: Wallpaper) {
-        withAnimation(Tokens.sheetIn) { selection = wallpaper }
+        withAnimation(Tokens.normal) { selection = wallpaper }
         Task { await store.loadTags(for: wallpaper) }
     }
 

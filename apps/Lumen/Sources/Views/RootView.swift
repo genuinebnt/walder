@@ -27,6 +27,24 @@ struct RootView: View {
     @State private var selection: Wallpaper?
 
     var body: some View {
+        ZStack {
+            splitView
+
+            // The preview takes over the whole window rather than opening a
+            // sheet, so the image gets every pixel available when deciding
+            // whether to keep it.
+            if let wallpaper = selection {
+                PreviewPane(items: viewerItems, selected: wallpaper) {
+                    withAnimation(Tokens.normal) { selection = nil }
+                }
+                .environment(store)
+                .transition(.opacity.combined(with: .scale(scale: 0.98)))
+                .zIndex(1)
+            }
+        }
+    }
+
+    private var splitView: some View {
         NavigationSplitView {
             sidebar
         } detail: {
@@ -41,12 +59,6 @@ struct RootView: View {
         }
         .background(WindowBackdrop(wallpaper: store.current))
         .animation(Tokens.normal, value: section)
-        .sheet(item: $selection) { wallpaper in
-            // The viewer pages with the arrow keys, so it needs the list the
-            // wallpaper was picked from, not just the wallpaper.
-            DetailSheet(items: viewerItems, selected: wallpaper) { selection = nil }
-                .environment(store)
-        }
         .onReceive(NotificationCenter.default.publisher(for: .lumenShuffle)) { _ in store.shuffleNow() }
         .onReceive(NotificationCenter.default.publisher(for: .lumenReload)) { _ in
             Task { await store.search() }

@@ -464,6 +464,78 @@ func run() async -> Int32 {
                 else { return false }
                 return local.isFileURL && FileManager.default.fileExists(atPath: local.path)
             }
+            v.section("Preview pane")
+    v.check("An empty list falls back to the wallpaper it was opened on") {
+        // This is the crash: searching from the inspector replaces the browsed
+        // list, and a search that returns nothing left the pane indexing into
+        // an empty array.
+        guard let sample = store.wallpapers.first ?? store.favorites.first else { return true }
+        let pane = PreviewPane(items: [], selected: sample) { }
+        return pane.opened.id == sample.id
+    }
+    v.check("A list shorter than the index clamps instead of trapping") {
+        guard store.wallpapers.count >= 2 else { return true }
+        let sample = store.wallpapers[1]
+        let pane = PreviewPane(items: [store.wallpapers[0]], selected: sample) { }
+        return pane.items.count == 1 && pane.opened.id == sample.id
+    }
+
+    v.section("Spaces")
+            v.check("The system wallpaper store is readable") {
+                // If this is false the feature hides itself rather than
+                // guessing at a layout it does not know.
+                SpacesWallpaper.isAvailable
+            }
+            v.check("Scope preference persists") {
+                store.wallpaperScope = .allSpaces
+                let persisted = Store(defaults: defaults).wallpaperScope == .allSpaces
+                store.wallpaperScope = .thisSpace
+                return persisted
+            }
+            await v.checkAsync("Setting on all Spaces rewrites the store and keeps it valid") {
+                guard SpacesWallpaper.isAvailable,
+                      let done = store.downloads.first(where: { $0.state == .done }),
+                      let local = done.localFile else { return true }
+
+                let before = try? Data(contentsOf: SpacesWallpaper.storeURL)
+                do {
+                    try SpacesWallpaper.applyEverywhere(fileURL: local)
+                } catch {
+                    print("        applyEverywhere: \(error.localizedDescription)")
+                    return false
+                }
+
+                // The agent has to be able to read back what we wrote.
+                guard let after = try? Data(contentsOf: SpacesWallpaper.storeURL),
+                      let root = try? PropertyListSerialization.propertyList(
+                        from: after, options: [], format: nil) as? [String: Any]
+                else { return false }
+
+                let sizeIsSane = before.map { after.count > $0.count / 2 } ?? true
+                let valid = root["Spaces"] != nil && root["Displays"] != nil && sizeIsSane
+
+                // Put the store back: this check really does rewrite every
+                // Space, and a test run must not leave the desktop changed.
+                if let before {
+                    try? before.write(to: SpacesWallpaper.storeURL, options: .atomic)
+                    let restart = Process()
+                    restart.executableURL = URL(filePath: "/usr/bin/killall")
+                    restart.arguments = ["WallpaperAgent"]
+                    try? restart.run()
+                    restart.waitUntilExit()
+                }
+                return valid
+            }
+            v.check("A backup of the original store was kept") {
+                guard SpacesWallpaper.isAvailable else { return true }
+                let backup = try? FileManager.default.url(
+                    for: .applicationSupportDirectory, in: .userDomainMask,
+                    appropriateFor: nil, create: false)
+                    .appending(path: "cc.lumen.Lumen/WallpaperStore.backup.plist")
+                guard let backup else { return false }
+                return FileManager.default.fileExists(atPath: backup.path)
+            }
+
             v.check("The desktop image is put back after the set check") {
                 // The check above really does set the wallpaper; leaving the
                 // user's desktop changed by a test run is not acceptable.

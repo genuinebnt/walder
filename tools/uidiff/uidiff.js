@@ -29,7 +29,8 @@ const CANVAS = path.join(ROOT, 'Wallpaper downloader app design', 'Walder.dc.htm
 const SCREENS = [
   { name: 'Browse',      design: ['Views/BrowseView.swift'],      impl: ['Views/BrowseView.swift'] },
   { name: 'Filters',     design: ['Views/FiltersPopover.swift'],  impl: ['Views/FiltersPopover.swift'] },
-  { name: 'Detail',      design: ['Views/DetailSheet.swift'],     impl: ['Views/DetailSheet.swift'] },
+  // The design's detail sheet became a full-window pane; same content.
+  { name: 'Preview',     design: ['Views/DetailSheet.swift'],     impl: ['Views/PreviewPane.swift'] },
   { name: 'Library',     design: ['Views/LibraryViews.swift'],    impl: ['Views/LibraryViews.swift'] },
   { name: 'Preferences', design: ['Views/PreferenceViews.swift'], impl: ['Views/PreferenceViews.swift'] },
   { name: 'QuickSet',    design: ['Views/QuickSetView.swift'],    impl: ['Views/QuickSetView.swift'] },

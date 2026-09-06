@@ -78,6 +78,13 @@ struct SettingsView: View {
             SwiftUI.Section("Behaviour") {
                 Toggle("Prefer downloaded file in preview", isOn: Binding(
                     get: { store.preferLocalPreview }, set: { store.preferLocalPreview = $0 }))
+                if SpacesWallpaper.isAvailable {
+                    Picker("Apply wallpaper to", selection: Binding(
+                        get: { store.wallpaperScope }, set: { store.wallpaperScope = $0 })) {
+                        ForEach(WallpaperScope.allCases) { Text($0.label).tag($0) }
+                    }
+                    .help("Each Space keeps its own desktop picture. All Spaces writes them all.")
+                }
             }
 
             SwiftUI.Section {
