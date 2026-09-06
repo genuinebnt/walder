@@ -71,6 +71,8 @@ pub struct WallsetterApp {
     recorded_wallpaper_ids: HashSet<String>,
     download_view_tab: DownloadViewTab,
     downloads_page: usize,
+    download_start_page_input: String,
+    download_end_page_input: String,
 
     // Error state
     error_message: Option<String>,
@@ -161,6 +163,10 @@ pub enum Message {
     SelectAll,
     DeselectAll,
     DownloadSelected,
+    DownloadStartPageInputChanged(String),
+    DownloadEndPageInputChanged(String),
+    DownloadNPages,
+    DownloadNPagesCompleted(std::result::Result<Vec<Wallpaper>, String>),
     BookmarkSelected,
     QuickSet(Wallpaper),
     QuickSetCompleted(std::result::Result<(), String>),
@@ -342,6 +348,9 @@ impl WallsetterApp {
             recorded_wallpaper_ids: HashSet::new(),
             download_view_tab: DownloadViewTab::Queue,
             downloads_page: 1,
+            download_start_page_input: "1".to_string(),
+            download_end_page_input: "1".to_string(),
+
             error_message: None,
             previous_view: None,
             nav_forward_stack: Vec::new(),
@@ -511,7 +520,7 @@ impl WallsetterApp {
         let path = local_path.clone();
         let result = tokio::task::spawn_blocking(move || {
             let img = image::open(&path).map_err(|e| e.to_string())?;
-            let thumb = img.thumbnail(600, 600); 
+            let thumb = img.thumbnail(600, 600);
             let mut cursor = std::io::Cursor::new(Vec::new());
             thumb.write_to(&mut cursor, image::ImageFormat::Jpeg).map_err(|e| e.to_string())?;
             Ok(iced::widget::image::Handle::from_bytes(cursor.into_inner()))
@@ -525,8 +534,8 @@ impl WallsetterApp {
     pub fn queue_local_thumbnails(&mut self) -> Task<Message> {
         let items = self.local_wallpapers_for_display();
         let total_items = items.len();
-        if total_items == 0 { 
-            return Task::none(); 
+        if total_items == 0 {
+            return Task::none();
         }
         let page_size = 20;
         let total_pages = (total_items + page_size - 1) / page_size;
@@ -551,7 +560,7 @@ impl WallsetterApp {
                 |(id, url, res)| Message::ThumbnailLoaded(id, url, res)
             ));
         }
-        
+
         Task::batch(tasks)
     }
 
@@ -1522,7 +1531,7 @@ impl WallsetterApp {
                     .filter(|lw| self.selected_wallpapers.contains(&lw.wallpaper_id))
                     .map(|lw| (lw.id, lw.local_path.clone()))
                     .collect();
-                
+
                 // Clear the selection since they are being deleted
                 self.selected_wallpapers.clear();
 
@@ -1549,7 +1558,7 @@ impl WallsetterApp {
                     .collect();
 
                 self.selected_wallpapers.clear();
-                
+
                 Task::perform(
                     async move {
                         let mut deleted = 0;
@@ -1692,13 +1701,13 @@ impl WallsetterApp {
                     .into_iter()
                     .map(|wp| {
                         let filename = format!("{}.{}", wp.id, wp.file_type.replace("image/", ""));
-                        
+
                         // Record pending info
                         self.pending_download_info.insert(
                             wp.id.clone(),
                             (self.pending_download_folder, wp.resolution),
                         );
-                        
+
                         (wp.id, wp.full_url, filename)
                     })
                     .collect();
@@ -1737,6 +1746,97 @@ impl WallsetterApp {
                     },
                     |_| Message::Tick,
                 )
+            }
+            Message::DownloadStartPageInputChanged(val) => {
+                if val.is_empty() || val.chars().all(|c| c.is_ascii_digit()) {
+                    self.download_start_page_input = val;
+                }
+                Task::none()
+            }
+            Message::DownloadEndPageInputChanged(val) => {
+                if val.is_empty() || val.chars().all(|c| c.is_ascii_digit()) {
+                    self.download_end_page_input = val;
+                }
+                Task::none()
+            }
+            Message::DownloadNPages => {
+                let start: u32 = self.download_start_page_input.parse().unwrap_or(1).max(1);
+                let end: u32 = self.download_end_page_input.parse().unwrap_or(start).max(start);
+
+                let mut filters = self.active_filters.clone();
+                Self::sanitize_filters(&mut filters);
+                let provider = self.provider.clone();
+
+                self.error_message = Some(format!("Fetching pages {start} to {end} for bulk download..."));
+
+                Task::perform(
+                    async move {
+                        let mut all_wallpapers = Vec::new();
+                        for p in start..=end {
+                            let mut page_filters = filters.clone();
+                            page_filters.page = p;
+                            match provider.search(&page_filters).await {
+                                Ok(res) => {
+                                    all_wallpapers.extend(res.wallpapers);
+                                }
+                                Err(e) => {
+                                    return Err(format!("Failed to fetch page {p}: {e}"));
+                                }
+                            }
+                        }
+                        Ok(all_wallpapers)
+                    },
+                    Message::DownloadNPagesCompleted,
+                )
+            }
+            Message::DownloadNPagesCompleted(result) => {
+                match result {
+                    Ok(wallpapers) => {
+                        let dl_manager = self.downloader.clone();
+                        let base_dest = resolve_download_dir(&self.preferences.download_dir);
+                        let folder_name = self.pending_download_folder.and_then(|fid| {
+                            self.download_folders
+                                .iter()
+                                .find(|f| f.id == fid)
+                                .map(|f| f.name.clone())
+                        });
+
+                        let items: Vec<(String, String, String)> = wallpapers
+                            .into_iter()
+                            .map(|wp| {
+                                let filename = format!("{}.{}", wp.id, wp.file_type.replace("image/", ""));
+                                self.pending_download_info.insert(
+                                    wp.id.clone(),
+                                    (self.pending_download_folder, wp.resolution),
+                                );
+                                (wp.id, wp.full_url, filename)
+                            })
+                            .collect();
+
+                        self.current_view = View::Downloads;
+                        self.download_view_tab = DownloadViewTab::Queue;
+                        self.error_message = Some(format!("Queued {} wallpapers for download.", items.len()));
+
+                        return Task::perform(
+                            async move {
+                                let dest = match folder_name {
+                                    Some(name) => {
+                                        let d = base_dest.join(&name);
+                                        let _ = std::fs::create_dir_all(&d);
+                                        d
+                                    }
+                                    None => base_dest,
+                                };
+                                let _ = dl_manager.enqueue_bulk(items, &dest).await;
+                            },
+                            |_| Message::Tick,
+                        );
+                    }
+                    Err(e) => {
+                        self.error_message = Some(e);
+                    }
+                }
+                Task::none()
             }
             Message::BookmarkSelected => {
                 if self.selected_wallpapers.is_empty() {
@@ -1798,7 +1898,7 @@ impl WallsetterApp {
                         .map(|wp| {
                             let filename =
                                 format!("{}.{}", wp.id, wp.file_type.replace("image/", ""));
-                            
+
                             // Record pending info
                             self.pending_download_info.insert(
                                 wp.id.clone(),
@@ -1856,7 +1956,7 @@ impl WallsetterApp {
                     // Tracking in `pending_download_info` for bulk all is tricky without IDs.
                     // We might not record full pending_download_info for "All Author Works" or just
                     // rely on existing folder resolution logic where available. For now it just downloads to dest.
-                    
+
                     self.current_view = View::Downloads;
                     self.download_view_tab = DownloadViewTab::Queue;
 
@@ -2609,7 +2709,7 @@ impl WallsetterApp {
                 }
 
                 // Detect newly completed downloads and record them in local_wallpapers
-                let mut record_tasks: Vec<Task<Message>> = Vec::new();
+                let mut record_tasks: Vec<Message> = Vec::new();
                 for task in &tasks {
                     if task.status == DownloadStatus::Completed
                         && !self.recorded_wallpaper_ids.contains(&task.wallpaper_id)
@@ -2645,13 +2745,10 @@ impl WallsetterApp {
 
                             let db = self.db.clone();
                             let lw_clone = lw.clone();
-                            record_tasks.push(Task::perform(
-                                async move {
-                                    db.add_local_wallpaper(&lw_clone)
-                                        .map_err(|e| e.to_string())?;
-                                    Ok(lw_clone)
-                                },
-                                Message::LocalWallpaperRecorded,
+                            record_tasks.push(Message::LocalWallpaperRecorded(
+                                db.add_local_wallpaper(&lw_clone)
+                                    .map_err(|e| e.to_string())
+                                    .map(|_| lw_clone),
                             ));
                         }
                     }
@@ -2659,7 +2756,7 @@ impl WallsetterApp {
                 if record_tasks.is_empty() {
                     Task::none()
                 } else {
-                    Task::batch(record_tasks)
+                    Task::batch(record_tasks.into_iter().map(Task::done))
                 }
             }
             Message::PrevWallpaper => {
@@ -2812,15 +2909,21 @@ impl WallsetterApp {
                     }
                 }
                 View::Downloads => {
-                     let items = self.local_wallpapers_for_display();
-                     if let Some(i) = items.iter().position(|w| w.wallpaper_id == wp.id) {
-                         return (i > 0, i + 1 < items.len());
-                     }
+                    let items = self.local_wallpapers_for_display();
+                    if let Some(i) = items.iter().position(|w| w.wallpaper_id == wp.id) {
+                        return (i > 0, i + 1 < items.len());
+                    }
+                }
+                View::Bookmarks => {
+                    let items = self.bookmarks_for_display();
+                    if let Some(i) = items.iter().position(|w| w.wallpaper_id == wp.id) {
+                        return (i > 0, i + 1 < items.len());
+                    }
                 }
                 _ => {}
             }
         }
-        
+
         let items = self.local_wallpapers_for_display();
         if let Some(i) = items.iter().position(|w| w.wallpaper_id == wp.id) {
             return (i > 0, i + 1 < items.len());
@@ -2859,19 +2962,29 @@ impl WallsetterApp {
                     }
                 }
                 View::Downloads => {
-                     let items = self.local_wallpapers_for_display();
-                     if let Some(pos) = items.iter().position(|w| w.wallpaper_id == current_id) {
-                          if next {
-                              return items.get(pos + 1).map(|w| w.wallpaper_id.clone());
-                          } else if pos > 0 {
-                              return items.get(pos - 1).map(|w| w.wallpaper_id.clone());
-                          }
-                     }
+                    let items = self.local_wallpapers_for_display();
+                    if let Some(pos) = items.iter().position(|w| w.wallpaper_id == current_id) {
+                        if next {
+                            return items.get(pos + 1).map(|w| w.wallpaper_id.clone());
+                        } else if pos > 0 {
+                            return items.get(pos - 1).map(|w| w.wallpaper_id.clone());
+                        }
+                    }
+                }
+                View::Bookmarks => {
+                    let items = self.bookmarks_for_display();
+                    if let Some(pos) = items.iter().position(|w| w.wallpaper_id == current_id) {
+                        if next {
+                            return items.get(pos + 1).map(|w| w.wallpaper_id.clone());
+                        } else if pos > 0 {
+                            return items.get(pos - 1).map(|w| w.wallpaper_id.clone());
+                        }
+                    }
                 }
                 _ => {}
             }
         }
-        
+
         let items = self.local_wallpapers_for_display();
         if let Some(pos) = items.iter().position(|w| w.wallpaper_id == current_id) {
             if next {
@@ -2933,7 +3046,6 @@ impl WallsetterApp {
         container(content)
             .width(Length::Fill)
             .height(Length::Fill)
-            .clip(true)
             .into()
     }
 
@@ -3192,6 +3304,14 @@ impl WallsetterApp {
 
     pub fn downloads_page(&self) -> usize {
         self.downloads_page
+    }
+
+    pub fn download_start_page_input(&self) -> &str {
+        &self.download_start_page_input
+    }
+
+    pub fn download_end_page_input(&self) -> &str {
+        &self.download_end_page_input
     }
 
     pub fn local_wallpapers_for_display(&self) -> Vec<&LocalWallpaper> {
