@@ -39,17 +39,19 @@ struct RootView: View {
                     withAnimation(Tokens.normal) { selection = nil }
                 }
                 .environment(store)
-                // The sidebar is a vibrancy region the split view draws itself,
-                // so an overlay alone does not cover it — hence the collapse
-                // below. This covers the title bar area the same way.
-                .ignoresSafeArea()
+                // No ignoresSafeArea here: it let the pane lay out against the
+                // screen rather than the window, so the inspector ran off the
+                // right edge and the chrome off the left. The title bar area is
+                // handled by hiding the toolbar instead.
+                .clipped()
                 .transition(.opacity)
                 .zIndex(1)
             }
         }
         // The toolbar is an NSToolbar living in the window's title bar, so it
         // renders above any SwiftUI overlay whatever its zIndex — it has to be
-        // hidden, not covered.
+        // hidden, not covered. The content is dropped as well as the bar: a
+        // hidden bar that still holds items left it half-drawn.
         .toolbar(selection == nil ? .automatic : .hidden, for: .windowToolbar)
         // Previewing collapses the sidebar so a zoomed image gets the whole
         // window instead of running into it.
@@ -187,7 +189,23 @@ struct RootView: View {
 
     @ToolbarContentBuilder
     private var toolbar: some ToolbarContent {
-        if section.isGrid {
+        // The title bar is reserved on every pane, and `showsTitle: false`
+        // left it blank on the ones with no controls. The canvas draws the
+        // title and subtitle there, so put them back.
+        if selection == nil {
+            ToolbarItem(placement: .navigation) {
+                VStack(alignment: .leading, spacing: 0) {
+                    Text(title).font(.barTitle)
+                    Text(subtitle)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+                .padding(.leading, Tokens.s1)
+            }
+        }
+
+        if section.isGrid && selection == nil {
             ToolbarItem(placement: .principal) {
                 Picker("Layout", selection: Binding(get: { store.gridTheme }, set: { store.gridTheme = $0 })) {
                     ForEach(GridTheme.allCases) { theme in Text(theme.label).tag(theme) }

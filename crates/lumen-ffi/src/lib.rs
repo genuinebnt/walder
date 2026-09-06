@@ -775,6 +775,40 @@ pub unsafe extern "C" fn lumen_collection_set_member(json: *const c_char) -> *mu
     }
 }
 
+// ── library awareness ─────────────────────────────────────────────────────
+
+/// Ids of wallpapers already sitting in the download directory.
+///
+/// Files are named `wallhaven-<id>.<ext>`, so the directory itself is the
+/// source of truth — it stays right when the user moves or deletes files
+/// behind the app's back, which a database table would not.
+/// Caller frees with [`lumen_string_free`].
+#[unsafe(no_mangle)]
+pub extern "C" fn lumen_downloaded_ids() -> *mut c_char {
+    let Some(core) = core() else {
+        return to_c(err_json("downloaded", "core not initialised"));
+    };
+    let dir = core.download_dir.read().unwrap().clone();
+
+    let mut ids: Vec<String> = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(&dir) {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            let Some(rest) = name.strip_prefix("wallhaven-") else {
+                continue;
+            };
+            let id = rest.split('.').next().unwrap_or_default();
+            if !id.is_empty() {
+                ids.push(id.to_string());
+            }
+        }
+    }
+    ids.sort();
+    ids.dedup();
+    to_c(serde_json::to_string(&Envelope::ok("downloaded", ids)).unwrap_or_default())
+}
+
 // ── bulk actions ──────────────────────────────────────────────────────────
 
 /// Reads a JSON array of wallpaper ids from `value["ids"]`.

@@ -313,7 +313,7 @@ func run() async -> Int32 {
         let reopened = Store(defaults: defaults)
         return reopened.filters.query == "legacy"
             && reopened.filters.sorting == .views
-            && reopened.filters.resolution == "1920x1080"   // defaulted, not lost
+            && reopened.filters.resolution == SearchFilters.anyResolution  // defaulted, not lost
     }
     v.check("Last filters are restored on the next launch") {
         store.filters.query = "restored-query"
@@ -603,6 +603,32 @@ func run() async -> Int32 {
         return true
     }
 
+    v.section("Already downloaded")
+    v.check("The download directory is read for what is already held") {
+        store.refreshDownloadedIDs()
+        // An empty library is a valid answer; the call must not fail.
+        return LumenCore.shared.status == "ready"
+    }
+    await v.checkAsync("A finished download is marked as held") {
+        guard let done = store.downloads.first(where: { $0.state == .done }) else {
+            // Nothing downloaded this run; fall back to the directory listing.
+            store.refreshDownloadedIDs()
+            return true
+        }
+        return store.downloadedIDs.contains(done.wallpaperId)
+    }
+    v.check("Bulk download skips what is already on disk") {
+        guard let held = store.downloadedIDs.first,
+              let wallpaper = store.wallpapers.first(where: { $0.id == held })
+        else { return true }
+        store.setSelecting(true)
+        store.selectAll([wallpaper])
+        let before = store.downloads.count
+        store.downloadSelected(from: store.wallpapers)
+        store.setSelecting(false)
+        return store.downloads.count == before
+    }
+
     v.section("Preview mode")
     v.check("Zoom survives stepping to the next image") {
         // The pane used to reset zoom on every step, dropping you out of
@@ -694,8 +720,14 @@ func run() async -> Int32 {
         return filed == wanted.count
     }
     await v.checkAsync("Bulk download enqueues every selection in one call") {
-        guard store.wallpapers.count >= 2 else { return true }
-        let wanted = Array(store.wallpapers.suffix(2))
+        // Pick ones not already held, or the skip-what-you-have rule below
+        // correctly drops them and this looks like a failure.
+        let fresh = store.wallpapers.filter { wallpaper in
+            !store.isDownloaded(wallpaper)
+                && !store.downloads.contains { $0.wallpaperId == wallpaper.id }
+        }
+        guard fresh.count >= 2 else { return true }
+        let wanted = Array(fresh.prefix(2))
         store.selectAll(wanted)
         let before = store.downloads.count
         store.downloadSelected(from: store.wallpapers)

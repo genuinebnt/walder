@@ -124,6 +124,11 @@ final class LumenCore: @unchecked Sendable {
         try await call(TagInfo.self) { lumen_tag_info(UInt64(id)) }
     }
 
+    /// Wallpaper ids already on disk in the download directory.
+    func downloadedIDs() -> Set<String> {
+        Set(decodeSync([String].self, Self.takeString(lumen_downloaded_ids())) ?? [])
+    }
+
     // MARK: Bulk actions
 
     /// Returns how many rows actually changed.

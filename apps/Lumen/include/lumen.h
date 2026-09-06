@@ -44,6 +44,9 @@ char *lumen_collection_create(const char *name);
 char *lumen_collection_delete(const char *id);
 char *lumen_collection_set_member(const char *json);
 
+// Library awareness
+char *lumen_downloaded_ids(void);
+
 // Bulk actions
 char    *lumen_favorites_set_many(const char *json);
 char    *lumen_collection_add_many(const char *json);

@@ -32,6 +32,11 @@ final class Store {
     /// thumbnail without the core having to carry the whole record.
     private var known: [String: Wallpaper] = [:]
 
+    /// Wallpapers already on disk, so results can say so before you re-download
+    /// something you have. Refreshed from the download directory rather than a
+    /// table, so it stays right when files are moved or deleted outside the app.
+    private(set) var downloadedIDs: Set<String> = []
+
     // MARK: Preferences
     //
     // Plain stored properties, not @AppStorage. @AppStorage is a view-level
@@ -163,6 +168,7 @@ final class Store {
         downloads = LumenCore.shared.downloadsSnapshot()
         reloadFavorites()
         reloadCollections()
+        refreshDownloadedIDs()
         rearmRotation()
     }
 
@@ -176,10 +182,12 @@ final class Store {
     @MainActor
     private func applyDownloads(_ tasks: [DownloadTask]) {
         withAnimation(Tokens.quick) { downloads = tasks }
-        // A finished download becomes the preferred preview source.
+        // A finished download becomes the preferred preview source, and adds
+        // to what the grid marks as already held.
         for task in tasks where task.state == .done {
             guard let local = task.localFile else { continue }
             attachLocalFile(local, to: task.wallpaperId)
+            downloadedIDs.insert(task.wallpaperId)
         }
     }
 
@@ -192,6 +200,16 @@ final class Store {
         }
         known[wallpaperId]?.localFile = local
     }
+
+    /// Re-reads what is on disk. Cheap: one directory listing.
+    @MainActor
+    func refreshDownloadedIDs() {
+        guard coreReady else { return }
+        downloadedIDs = LumenCore.shared.downloadedIDs()
+    }
+
+    /// True when this wallpaper is already in the download directory.
+    func isDownloaded(_ wallpaper: Wallpaper) -> Bool { downloadedIDs.contains(wallpaper.id) }
 
     /// The wallpaper behind a download row, if the session has seen it.
     func wallpaper(for task: DownloadTask) -> Wallpaper? { known[task.wallpaperId] }
@@ -565,7 +583,10 @@ final class Store {
         guard !picked.isEmpty else { return }
         remember(picked)
         let items = picked
-            .filter { wallpaper in !downloads.contains { $0.wallpaperId == wallpaper.id } }
+            .filter { wallpaper in
+                !downloads.contains { $0.wallpaperId == wallpaper.id }
+                    && !isDownloaded(wallpaper)
+            }
             .map { (id: $0.id, url: $0.path.absoluteString, filename: $0.filename) }
         guard !items.isEmpty else { return }
         Task {

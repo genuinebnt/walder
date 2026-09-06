@@ -53,6 +53,7 @@ struct BrowseView: View {
                       isFavorite: store.isFavorite(wallpaper),
                       isSelecting: store.isSelecting,
                       isSelected: store.isSelected(wallpaper),
+                      isDownloaded: store.isDownloaded(wallpaper),
                       open: {
                           // In select mode the whole tile is a checkbox.
                           if store.isSelecting {
@@ -63,6 +64,14 @@ struct BrowseView: View {
                       })
             .onHover { inside in
                 withAnimation(Tokens.quick) { hovered = inside ? wallpaper.id : (hovered == wallpaper.id ? nil : hovered) }
+            }
+            .onDrag {
+                // Only a real file can be dropped into Finder; otherwise hand
+                // over the Wallhaven page, which is still useful in a browser.
+                if let local = wallpaper.localFile, FileManager.default.fileExists(atPath: local.path) {
+                    return NSItemProvider(contentsOf: local) ?? NSItemProvider()
+                }
+                return NSItemProvider(object: (wallpaper.url ?? wallpaper.path) as NSURL)
             }
             .contextMenu {
                 Button("Set as Wallpaper") { store.setWallpaper(wallpaper) }
@@ -140,6 +149,7 @@ struct WallpaperTile: View {
     let isFavorite: Bool
     var isSelecting = false
     var isSelected = false
+    var isDownloaded = false
     let open: () -> Void
 
     private var aspect: Double { theme == .masonry ? wallpaper.ratio : (theme == .cinema ? 16.0/9 : 16.0/10) }
@@ -163,6 +173,7 @@ struct WallpaperTile: View {
         .overlay { hoverLayer }
         .overlay { purityBorder }
         .overlay { selectionLayer }
+        .overlay { downloadedBadge }
         .clipShape(.rect(cornerRadius: theme.cornerRadius))
         .overlay {
             if isSelecting && isSelected {
@@ -226,6 +237,25 @@ struct WallpaperTile: View {
         .opacity(isHovered && !isSelecting ? 1 : 0)
         .allowsHitTesting(!isSelecting)
         .animation(Tokens.quick, value: isHovered)
+    }
+
+    /// Marks a wallpaper already sitting in the download directory, so you can
+    /// see what you have without opening it.
+    @ViewBuilder
+    private var downloadedBadge: some View {
+        if isDownloaded && !isSelecting {
+            VStack {
+                HStack {
+                    Spacer()
+                    Image(systemName: "arrow.down.circle.fill")
+                        .font(.system(size: 13))
+                        .foregroundStyle(.white, Tokens.success)
+                        .padding(Tokens.s2)
+                }
+                Spacer()
+            }
+            .allowsHitTesting(false)
+        }
     }
 
     /// A checkbox in the corner while selecting, so the state is visible

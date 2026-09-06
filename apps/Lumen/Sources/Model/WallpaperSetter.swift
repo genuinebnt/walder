@@ -1,4 +1,5 @@
 import AppKit
+import CoreGraphics
 
 /// Applies a local image file to one or all screens.
 ///
@@ -27,9 +28,9 @@ enum WallpaperSetter {
     /// Live screen list, mapped onto the app's display model.
     static func connectedDisplays() -> [DisplayTarget] {
         NSScreen.screens.enumerated().map { index, screen in
-            let size = screen.frame.size
-            let scale = screen.backingScaleFactor
-            let pixels = CGSize(width: size.width * scale, height: size.height * scale)
+            // Same measurement the fit report uses, or the two panes disagree
+            // about the size of the same screen.
+            let pixels = WallpaperFitter.pixelSize(of: screen)
             return DisplayTarget(
                 id: (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?
                     .stringValue ?? "screen-\(index)",
@@ -48,9 +49,20 @@ enum WallpaperSetter {
 /// crop macOS would make anyway, or to make it deliberately here at the
 /// display's own pixel size.
 enum WallpaperFitter {
-    /// Native pixel size of a screen, which is what a wallpaper is judged
-    /// against — `frame` is in points.
+    /// Native pixel size of a screen — the panel's own resolution, which is
+    /// what a wallpaper is really judged against.
+    ///
+    /// `frame × backingScaleFactor` gives the framebuffer, not the panel. On a
+    /// scaled Retina mode those differ (3600×2260 backing over a 3024×1964
+    /// panel), and using the larger number marked almost every wallpaper as
+    /// upscaled when it was not.
     static func pixelSize(of screen: NSScreen) -> CGSize {
+        if let number = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")]
+            as? NSNumber,
+           let mode = CGDisplayCopyDisplayMode(CGDirectDisplayID(number.uint32Value)),
+           mode.pixelWidth > 0, mode.pixelHeight > 0 {
+            return CGSize(width: mode.pixelWidth, height: mode.pixelHeight)
+        }
         let scale = screen.backingScaleFactor
         return CGSize(width: screen.frame.width * scale,
                       height: screen.frame.height * scale)

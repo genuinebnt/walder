@@ -178,6 +178,7 @@ struct FocusView: View {
                       isFavorite: store.isFavorite(wallpaper),
                       isSelecting: store.isSelecting,
                       isSelected: store.isSelected(wallpaper),
+                      isDownloaded: store.isDownloaded(wallpaper),
                       open: {
                           if store.isSelecting {
                               store.toggleSelection(wallpaper)

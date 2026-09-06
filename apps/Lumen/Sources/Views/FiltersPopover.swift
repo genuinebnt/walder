@@ -46,24 +46,38 @@ struct FiltersPopover: View {
                     }
                     .pickerStyle(.segmented).labelsHidden()
 
-                    // At Least takes one resolution; Exactly accepts several,
-                    // which is what Wallhaven's own form does.
-                    if store.filters.mode == .exactly {
-                        ChipRow(options: SearchFilters.resolutionOptions,
-                                isSelected: { store.filters.exactResolutions.contains($0) },
-                                select: { resolution in
-                                    withAnimation(Tokens.quick) {
-                                        if store.filters.exactResolutions.contains(resolution) {
-                                            store.filters.exactResolutions.remove(resolution)
-                                        } else {
-                                            store.filters.exactResolutions.insert(resolution)
-                                        }
-                                    }
-                                })
-                    } else {
-                        ChipRow(options: SearchFilters.resolutionOptions,
-                                isSelected: { $0 == store.filters.resolution },
-                                select: { store.filters.resolution = $0 })
+                    // "Any" first, because starting with a resolution already
+                    // applied is not how wallhaven.cc behaves and there was no
+                    // way to clear it.
+                    Button {
+                        withAnimation(Tokens.quick) {
+                            store.filters.resolution = SearchFilters.anyResolution
+                            store.filters.exactResolutions = []
+                        }
+                    } label: {
+                        Text("Any resolution")
+                            .font(.system(size: 12))
+                            .padding(.horizontal, 9).padding(.vertical, 4)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .foregroundStyle(noResolutionFilter ? Tokens.accent : .secondary)
+                            .background(noResolutionFilter
+                                        ? Tokens.accent.opacity(0.18)
+                                        : Color.secondary.opacity(0.12),
+                                        in: .rect(cornerRadius: 6))
+                            .contentShape(.rect)
+                    }
+                    .buttonStyle(.plain)
+
+                    // Grouped by shape, as the site lists them.
+                    ForEach(SearchFilters.resolutionGroups, id: \.label) { group in
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(group.label)
+                                .font(.system(size: 10, weight: .medium))
+                                .foregroundStyle(.tertiary)
+                            ChipRow(options: group.sizes,
+                                    isSelected: { isResolutionSelected($0) },
+                                    select: { pickResolution($0) })
+                        }
                     }
                 }
                 group("AI Art") {
@@ -161,6 +175,37 @@ struct FiltersPopover: View {
     private func savePreset() {
         store.savePreset(named: presetName)
         presetName = ""
+    }
+
+    /// True when nothing constrains resolution — the state the site starts in.
+    private var noResolutionFilter: Bool {
+        store.filters.mode == .exactly
+            ? store.filters.exactResolutions.isEmpty
+            : store.filters.resolution.isEmpty
+    }
+
+    private func isResolutionSelected(_ size: String) -> Bool {
+        store.filters.mode == .exactly
+            ? store.filters.exactResolutions.contains(size)
+            : store.filters.resolution == size
+    }
+
+    /// At Least takes one resolution; Exactly accepts several, so a tap there
+    /// toggles rather than replaces.
+    private func pickResolution(_ size: String) {
+        withAnimation(Tokens.quick) {
+            if store.filters.mode == .exactly {
+                if store.filters.exactResolutions.contains(size) {
+                    store.filters.exactResolutions.remove(size)
+                } else {
+                    store.filters.exactResolutions.insert(size)
+                }
+            } else {
+                // Tapping the active one clears it, so Any is always reachable.
+                store.filters.resolution =
+                    store.filters.resolution == size ? SearchFilters.anyResolution : size
+            }
+        }
     }
 
     private var colorGrid: some View {

@@ -101,6 +101,14 @@ enum Sorting: String, Codable, CaseIterable, Identifiable {
     }
 }
 
+/// Wallhaven's `type:` operator. It only distinguishes JPEG from PNG.
+enum FileTypeFilter: String, Codable, CaseIterable, Identifiable {
+    case any, jpg, png
+    var id: String { rawValue }
+    var label: String { self == .any ? "Any" : rawValue.uppercased() }
+    var queryTerm: String? { self == .any ? nil : "type:\(rawValue)" }
+}
+
 enum ResolutionMode: String, Codable, CaseIterable, Identifiable {
     case atLeast, exactly
     var id: String { rawValue }
@@ -119,17 +127,42 @@ struct SearchFilters: Equatable, Codable {
     var ascending = false
     var topRange = "1M"
     var mode: ResolutionMode = .atLeast
-    var resolution = "1920x1080"
+    var resolution = SearchFilters.anyResolution
     /// Exact mode accepts several resolutions; At Least takes one.
     var exactResolutions: Set<String> = []
     var ratios: Set<String> = []
     var color: String?
     /// nil leaves AI art alone, false hides it, true shows only it.
     var aiArt: Bool?
+    /// Wallhaven's `type:` operator.
+    var fileType: FileTypeFilter = .any
+    /// Tags to exclude, sent as `-tag`. The site supports this; the app did not.
+    var excludedTags: Set<String> = []
 
-    static let ratioOptions = ["16x9", "16x10", "21x9", "4x3", "1x1", "9x16", "10x16"]
-    static let resolutionOptions = ["1920x1080", "2560x1440", "3440x1440",
-                                    "3840x2160", "5120x2880", "6016x3384"]
+    /// Every ratio Wallhaven accepts, in the site's own grouping. `landscape`
+    /// and `portrait` are keywords it understands alongside exact ratios.
+    static let ratioOptions = ["16x9", "16x10", "21x9", "32x9", "48x9",
+                               "9x16", "10x16", "9x18",
+                               "1x1", "3x2", "4x3", "5x4"]
+
+    /// The site's resolution list, grouped by shape. Picking from a flat list
+    /// of six was the reason this used to feel narrower than wallhaven.cc.
+    static let resolutionGroups: [(label: String, sizes: [String])] = [
+        ("16 × 9",  ["1280x720", "1600x900", "1920x1080", "2560x1440", "3840x2160"]),
+        ("16 × 10", ["1280x800", "1600x1000", "1920x1200", "2560x1600", "3840x2400"]),
+        ("4 × 3",   ["1280x960", "1600x1200", "1920x1440", "2560x1920", "3840x2880"]),
+        ("5 × 4",   ["1280x1024", "1600x1280", "1920x1536", "2560x2048", "3840x3072"]),
+        ("Ultrawide", ["2560x1080", "3440x1440", "3840x1600", "5120x2160"]),
+        ("Super ultrawide", ["3840x1080", "5120x1440", "3840x1200", "5120x1600"]),
+        ("Triple", ["5760x1080", "7680x1440", "5760x1200"]),
+        ("Very large", ["5120x2880", "6016x3384", "7680x4320"])
+    ]
+
+    static let resolutionOptions = resolutionGroups.flatMap(\.sizes)
+
+    /// Empty means no resolution filter at all, which is how wallhaven.cc
+    /// starts. The core sends no `atleast` or `resolutions` parameter for it.
+    static let anyResolution = ""
     static let topRanges = ["1d", "3d", "1w", "1M", "3M", "6M", "1y"]
 
     /// Wallhaven's palette, in the site's own order.
@@ -142,6 +175,7 @@ struct SearchFilters: Equatable, Codable {
     private enum CodingKeys: String, CodingKey {
         case query, categories, purity, sorting, ascending, topRange, mode
         case resolution, exactResolutions, ratios, color, aiArt
+        case fileType, excludedTags
     }
 
     init() {}
@@ -167,6 +201,22 @@ struct SearchFilters: Equatable, Codable {
         ratios = try container.decodeIfPresent(Set<String>.self, forKey: .ratios) ?? fallback.ratios
         color = try container.decodeIfPresent(String.self, forKey: .color)
         aiArt = try container.decodeIfPresent(Bool.self, forKey: .aiArt)
+        fileType = try container.decodeIfPresent(FileTypeFilter.self, forKey: .fileType)
+            ?? fallback.fileType
+        excludedTags = try container.decodeIfPresent(Set<String>.self, forKey: .excludedTags)
+            ?? fallback.excludedTags
+    }
+
+    /// The `q` Wallhaven actually receives: what was typed, plus the structured
+    /// operators the popover sets. Kept here so the core stays a plain
+    /// pass-through and the operators are testable on their own.
+    var composedQuery: String {
+        var terms: [String] = []
+        let typed = query.trimmingCharacters(in: .whitespaces)
+        if !typed.isEmpty { terms.append(typed) }
+        if let fileTerm = fileType.queryTerm { terms.append(fileTerm) }
+        terms += excludedTags.sorted().map { "-\($0)" }
+        return terms.joined(separator: " ")
     }
 
     var activeCount: Int {
@@ -174,17 +224,19 @@ struct SearchFilters: Equatable, Codable {
         if categories != [.general, .anime] { n += 1 }
         if purity != [.sfw] { n += 1 }
         if mode != .atLeast { n += 1 }
-        if resolution != "1920x1080" { n += 1 }
+        if !resolution.isEmpty { n += 1 }
         n += exactResolutions.isEmpty ? 0 : 1
         n += ratios.isEmpty ? 0 : 1
         n += color == nil ? 0 : 1
         n += aiArt == nil ? 0 : 1
+        n += fileType == .any ? 0 : 1
+        n += excludedTags.isEmpty ? 0 : 1
         return n
     }
 
     func wirePayload(page: Int, seed: String? = nil) -> [String: Any] {
         var payload: [String: Any] = [
-            "query": query,
+            "query": composedQuery,
             "categories": categories.map(\.rawValue).sorted(),
             "purity": purity.map(\.rawValue).sorted(),
             "sorting": sorting.rawValue,
