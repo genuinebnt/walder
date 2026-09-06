@@ -86,6 +86,19 @@ function strings(source) {
       found.add(value);
     }
   }
+
+  // A label is often a ternary — `Label(done ? "Set" : "Set as Wallpaper", …)`
+  // — and the patterns above only see the first literal after the paren. Read
+  // every literal in the call itself so a conditional label is not reported
+  // missing when it is right there.
+  for (const match of source.matchAll(/\b(?:Text|Button|Label|Toggle|Picker|Chip)\(/g)) {
+    const window = source.slice(match.index, match.index + 240);
+    for (const literal of window.matchAll(/"((?:[^"\\]|\\.)*)"/g)) {
+      const value = literal[1].trim();
+      if (!value || value.includes('\\(')) continue;
+      found.add(value);
+    }
+  }
   return found;
 }
 
@@ -102,6 +115,17 @@ function chrome(source) {
   for (const pattern of patterns) {
     for (const match of source.matchAll(pattern)) {
       const value = match[1].trim();
+      if (!value || value.includes('\\(')) continue;
+      found.add(value);
+    }
+  }
+
+  // Same story as the labels: `systemImage: on ? "checkmark" : "sparkles"`
+  // hides the second symbol from a pattern anchored on the colon.
+  for (const match of source.matchAll(/systemImage:/g)) {
+    const window = source.slice(match.index, match.index + 140);
+    for (const literal of window.matchAll(/"((?:[^"\\]|\\.)*)"/g)) {
+      const value = literal[1].trim();
       if (!value || value.includes('\\(')) continue;
       found.add(value);
     }

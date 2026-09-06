@@ -22,6 +22,9 @@ struct PreviewPane: View {
     @State private var index: Int
     @State private var showInspector = true
     @State private var zoomed = false
+    /// Briefly true after a set, so the button can confirm without the pane
+    /// closing out from under you.
+    @State private var justSet = false
 
     init(items: [Wallpaper], selected: Wallpaper, close: @escaping () -> Void) {
         self.items = items
@@ -74,7 +77,14 @@ struct PreviewPane: View {
             return .handled
         }
         .task(id: wallpaper.id) {
-            await store.loadDetails(for: wallpaper)
+            // Order matters: the image you are looking at should not be
+            // competing for bandwidth with the ones you might look at next.
+            // Details are a small JSON call, so they run alongside.
+            async let details: Void = store.loadDetails(for: wallpaper)
+            _ = await ImageCache.shared.image(for: currentSource,
+                                              maxPixels: ImageDetail.preview)
+            await details
+            // The visible image is decoded; now warm what ← and → will need.
             prefetchNeighbours()
             await store.loadNextPageIfNeeded(after: wallpaper)
         }
@@ -91,9 +101,15 @@ struct PreviewPane: View {
         }
     }
 
-    /// Keeps the neighbours warm so paging is instant.
+    /// What the preview is actually showing.
+    private var currentSource: URL {
+        store.preferLocalPreview ? wallpaper.previewSource : wallpaper.path
+    }
+
+    /// Keeps the neighbours warm so paging is instant. Runs only once the
+    /// visible image has finished decoding.
     private func prefetchNeighbours() {
-        let neighbours = [index - 2, index - 1, index + 1, index + 2]
+        let neighbours = [index - 3, index - 2, index - 1, index + 1, index + 2, index + 3]
             .filter { items.indices.contains($0) }
             .map { items[$0].previewSource }
         ImageCache.shared.prefetch(neighbours, maxPixels: ImageDetail.preview)
@@ -105,8 +121,7 @@ struct PreviewPane: View {
         ZStack {
             Color.black
 
-            CachedImage(url: store.preferLocalPreview ? wallpaper.previewSource : wallpaper.path,
-                        maxPixels: ImageDetail.preview) { image in
+            CachedImage(url: currentSource, maxPixels: ImageDetail.preview) { image in
                 image
                     .resizable()
                     .aspectRatio(contentMode: zoomed ? .fill : .fit)
@@ -123,7 +138,10 @@ struct PreviewPane: View {
 
             overlayChrome
         }
-        .frame(minWidth: 420)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        // A zoomed image is larger than its column by definition; without this
+        // it spills under the inspector.
+        .clipped()
         .contentShape(.rect)
         .onTapGesture { withAnimation(Tokens.normal) { zoomed.toggle() } }
     }
@@ -198,6 +216,7 @@ struct PreviewPane: View {
                 }
 
                 actions
+                fitReport
                 collections
                 uploader
                 metadata
@@ -209,6 +228,10 @@ struct PreviewPane: View {
         }
         .frame(width: 316)
         .scrollContentBackground(.hidden)
+        // Opaque on purpose: the material alone let the wallpaper show through
+        // and made every label hard to read.
+        .background(.regularMaterial)
+        .background(Color(nsColor: .windowBackgroundColor))
     }
 
     private var actions: some View {
@@ -226,14 +249,17 @@ struct PreviewPane: View {
 
             Button {
                 store.setWallpaper(wallpaper)
-                close()
+                confirmSet()
             } label: {
-                Label("Set as Wallpaper", systemImage: "sparkles")
+                Label(justSet ? "Set" : "Set as Wallpaper",
+                      systemImage: justSet ? "checkmark" : "sparkles")
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.large)
             .keyboardShortcut(.defaultAction)
+            .tint(justSet ? Tokens.success : nil)
+            .animation(Tokens.quick, value: justSet)
 
             HStack(spacing: Tokens.s2) {
                 Button { store.download(wallpaper) } label: {
@@ -248,9 +274,69 @@ struct PreviewPane: View {
             }
             .controlSize(.large)
 
+            Button {
+                close()
+                store.findSimilar(to: wallpaper)
+            } label: {
+                Label("Find Similar", systemImage: "square.on.square.dashed")
+                    .frame(maxWidth: .infinity)
+            }
+            .controlSize(.large)
+            .help("Search this wallpaper's strongest tags and dominant colour")
+
             if let url = wallpaper.url {
                 Link("Open on Wallhaven", destination: url)
                     .font(.system(size: 11.5))
+            }
+        }
+    }
+
+    /// Whether this wallpaper actually suits the screen, and what to do when it
+    /// does not. Wallhaven has one file per wallpaper, so the choices are a
+    /// better-matching wallpaper or a local resize — there is no bigger
+    /// download to fetch.
+    private var fitReport: some View {
+        let fit = store.fit(wallpaper)
+        return VStack(alignment: .leading, spacing: Tokens.s2) {
+            Text("ON THIS DISPLAY").font(.sectionLabel).foregroundStyle(.secondary)
+
+            HStack(spacing: Tokens.s2) {
+                Image(systemName: fit.isPerfect ? "checkmark.circle.fill"
+                        : fit.isGood ? "checkmark.circle" : "exclamationmark.triangle.fill")
+                    .foregroundStyle(fit.isPerfect ? Tokens.success
+                                     : fit.isGood ? Tokens.success : Tokens.warning)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(fit.summary).font(.system(size: 12))
+                    Text("\(Int(fit.display.width)) × \(Int(fit.display.height)) native")
+                        .font(.caption2Mono).foregroundStyle(.secondary)
+                }
+                Spacer()
+            }
+            .padding(.horizontal, 11).padding(.vertical, 8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(.quaternary.opacity(0.4), in: .rect(cornerRadius: Tokens.control))
+
+            if !fit.isPerfect {
+                HStack(spacing: Tokens.s2) {
+                    Button {
+                        store.setFittedWallpaper(wallpaper)
+                        confirmSet()
+                    } label: {
+                        Label("Resize to Fit", systemImage: "crop")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .help("Crop and scale a copy to this display's exact pixels, then set it")
+
+                    Button {
+                        close()
+                        store.findFittingWallpapers(like: wallpaper)
+                    } label: {
+                        Label("Find This Size", systemImage: "magnifyingglass")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .help("Search similar wallpapers at your display's resolution and shape")
+                }
+                .controlSize(.small)
             }
         }
     }
@@ -294,7 +380,8 @@ struct PreviewPane: View {
             VStack(alignment: .leading, spacing: Tokens.s2) {
                 Text("UPLOADED BY").font(.sectionLabel).foregroundStyle(.secondary)
                 Button {
-                    search("@\(name)")
+                    close()
+                    Task { await store.showUploader(name) }
                 } label: {
                     HStack(spacing: Tokens.s2) {
                         Image(systemName: "person.crop.circle")
@@ -353,11 +440,23 @@ struct PreviewPane: View {
                             .fill(Color(hex: hex))
                             .frame(height: 24)
                             .overlay { RoundedRectangle(cornerRadius: 5).strokeBorder(.separator, lineWidth: 0.5) }
+                            .overlay {
+                                if store.filters.color == hex {
+                                    RoundedRectangle(cornerRadius: 5)
+                                        .strokeBorder(Tokens.accent, lineWidth: 2)
+                                }
+                            }
+                            .contentShape(.rect)
                             .onTapGesture {
-                                store.filters.color = hex
+                                // Tapping the active colour clears it, so the
+                                // palette works as a filter rather than a
+                                // one-way trip.
+                                store.filters.color = store.filters.color == hex ? nil : hex
                                 runSearch()
                             }
-                            .help("#\(hex)")
+                            .help(store.filters.color == hex
+                                  ? "Clear the #\(hex) filter"
+                                  : "Search wallpapers in #\(hex)")
                     }
                 }
             }
@@ -371,18 +470,37 @@ struct PreviewPane: View {
             VStack(alignment: .leading, spacing: Tokens.s2) {
                 Text("IMAGE TAGS").font(.sectionLabel).foregroundStyle(.secondary)
                 FlowLayout(spacing: 6) {
-                    ForEach(wallpaper.tags, id: \.self) { tag in
-                        // The "#" is what makes this a tag search rather than a
-                        // keyword search.
-                        Button(tag) { search("#\(tag)") }
-                            .buttonStyle(.plain)
-                            .font(.system(size: 11.5))
-                            .padding(.horizontal, 9).padding(.vertical, 4)
-                            .background(.quaternary.opacity(0.5), in: .capsule)
+                    // A tag with an id opens its own page; without one, fall
+                    // back to a "#tag" search, which is what the grid gives us
+                    // before the detail endpoint has answered.
+                    ForEach(tagChips, id: \.name) { chip in
+                        Button(chip.name) {
+                            close()
+                            if let ref = chip.ref {
+                                Task { await store.showTag(ref) }
+                            } else {
+                                store.filters.query = "#\(chip.name)"
+                                Task { await store.search() }
+                            }
+                        }
+                        .buttonStyle(.plain)
+                        .font(.system(size: 11.5))
+                        .padding(.horizontal, 9).padding(.vertical, 4)
+                        .background(.quaternary.opacity(0.5), in: .capsule)
+                        .contentShape(.capsule)
                     }
                 }
             }
         }
+    }
+
+    /// Tag names paired with their record when the detail endpoint has supplied
+    /// one.
+    private var tagChips: [(name: String, ref: TagRef?)] {
+        guard wallpaper.tagRefs.isEmpty else {
+            return wallpaper.tagRefs.map { ($0.name, $0) }
+        }
+        return wallpaper.tags.map { ($0, nil) }
     }
 
     private var displays: some View {
@@ -391,6 +509,7 @@ struct PreviewPane: View {
             ForEach(store.displays) { display in
                 Button {
                     store.setWallpaper(wallpaper, on: display)
+                    confirmSet()
                 } label: {
                     HStack {
                         Text(display.name).lineLimit(1)
@@ -411,9 +530,15 @@ struct PreviewPane: View {
         }
     }
 
-    private func search(_ query: String) {
-        store.filters.query = query
-        runSearch()
+    /// Flashes the confirmation on the Set button. Deliberately does not close
+    /// the pane: setting is something you do while comparing wallpapers, so
+    /// dropping back to the grid each time made the pane useless for that.
+    private func confirmSet() {
+        withAnimation(Tokens.quick) { justSet = true }
+        Task {
+            try? await Task.sleep(for: .seconds(2))
+            withAnimation(Tokens.normal) { justSet = false }
+        }
     }
 
     private func runSearch() {

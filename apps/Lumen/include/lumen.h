@@ -23,6 +23,11 @@ void  lumen_string_free(char *ptr);
 uint64_t lumen_search(const char *filters_json);
 uint64_t lumen_details(const char *id);
 
+// Uploader and tags
+uint64_t lumen_uploader_collections(const char *username);
+uint64_t lumen_uploader_collection_wallpapers(const char *json);
+uint64_t lumen_tag_info(uint64_t tag_id);
+
 // Downloads
 uint64_t lumen_download(const char *json);
 uint64_t lumen_downloads_clear_finished(void);

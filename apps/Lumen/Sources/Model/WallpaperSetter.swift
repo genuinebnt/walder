@@ -41,6 +41,71 @@ enum WallpaperSetter {
     }
 }
 
+/// Produces a copy of a wallpaper cropped and scaled to one display exactly.
+///
+/// Wallhaven serves a single file per wallpaper, so when the aspect ratio does
+/// not match there is nothing better to download — the choice is to accept the
+/// crop macOS would make anyway, or to make it deliberately here at the
+/// display's own pixel size.
+enum WallpaperFitter {
+    /// Native pixel size of a screen, which is what a wallpaper is judged
+    /// against — `frame` is in points.
+    static func pixelSize(of screen: NSScreen) -> CGSize {
+        let scale = screen.backingScaleFactor
+        return CGSize(width: screen.frame.width * scale,
+                      height: screen.frame.height * scale)
+    }
+
+    static var mainPixelSize: CGSize {
+        NSScreen.main.map(pixelSize) ?? CGSize(width: 1920, height: 1080)
+    }
+
+    /// Writes a centre-cropped, exactly-sized copy next to the original and
+    /// returns it. Returns the source unchanged when it already fits.
+    static func render(_ source: URL, to size: CGSize, in directory: URL) throws -> URL {
+        guard size.width >= 1, size.height >= 1,
+              let image = NSImage(contentsOf: source),
+              let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil)
+        else { throw Failure.unreadable }
+
+        let imageSize = CGSize(width: cgImage.width, height: cgImage.height)
+        let scale = max(size.width / imageSize.width, size.height / imageSize.height)
+        let scaled = CGSize(width: imageSize.width * scale, height: imageSize.height * scale)
+
+        guard let context = CGContext(
+            data: nil,
+            width: Int(size.width), height: Int(size.height),
+            bitsPerComponent: 8, bytesPerRow: 0,
+            space: cgImage.colorSpace ?? CGColorSpace(name: CGColorSpace.sRGB)!,
+            bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue
+        ) else { throw Failure.unreadable }
+
+        context.interpolationQuality = .high
+        // Centre the overflow, which is what macOS's own fill does.
+        context.draw(cgImage, in: CGRect(
+            x: (size.width - scaled.width) / 2,
+            y: (size.height - scaled.height) / 2,
+            width: scaled.width, height: scaled.height))
+
+        guard let output = context.makeImage() else { throw Failure.unreadable }
+        let rep = NSBitmapImageRep(cgImage: output)
+        guard let data = rep.representation(using: .jpeg, properties: [.compressionFactor: 0.95])
+        else { throw Failure.unreadable }
+
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let target = directory.appending(
+            path: "\(source.deletingPathExtension().lastPathComponent)"
+                + "-\(Int(size.width))x\(Int(size.height)).jpg")
+        try data.write(to: target, options: .atomic)
+        return target
+    }
+
+    enum Failure: LocalizedError {
+        case unreadable
+        var errorDescription: String? { "Could not read that image to resize it." }
+    }
+}
+
 /// Sets the desktop picture on every Space, not just the one in front.
 ///
 /// `NSWorkspace.setDesktopImageURL` only ever writes the current Space, which

@@ -483,4 +483,240 @@ final class Store {
             withAnimation(Tokens.normal) { savedConfirmation = false }
         }
     }
+
+    // MARK: Fitting
+
+    /// How this wallpaper sits on a display, in that display's real pixels.
+    func fit(_ wallpaper: Wallpaper, on display: DisplayTarget? = nil) -> DisplayFit {
+        let parts = wallpaper.resolution.split(separator: "x")
+        let image = CGSize(width: Double(parts.first ?? "0") ?? 0,
+                           height: Double(parts.last ?? "0") ?? 0)
+        let screen = display.flatMap { target in
+            NSScreen.screens.first { $0.localizedName == target.name }
+        }
+        let size = screen.map(WallpaperFitter.pixelSize) ?? WallpaperFitter.mainPixelSize
+        return DisplayFit(image: image, display: size)
+    }
+
+    /// Crops and scales a copy to the display's exact pixels, then sets it.
+    ///
+    /// Wallhaven has no alternate-resolution download, so this is the only way
+    /// to get a pixel-exact wallpaper out of a file whose shape does not match.
+    @MainActor
+    func setFittedWallpaper(_ wallpaper: Wallpaper, on display: DisplayTarget? = nil) {
+        let screen = display.flatMap { target in
+            NSScreen.screens.first { $0.localizedName == target.name }
+        }
+        let size = screen.map(WallpaperFitter.pixelSize) ?? WallpaperFitter.mainPixelSize
+
+        Task {
+            do {
+                let source = try await LumenCore.shared.ensureLocal(
+                    url: wallpaper.path.absoluteString,
+                    filename: wallpaper.filename)
+                let directory = URL(filePath: LumenCore.shared.downloadDirectory)
+                    .appending(path: "Fitted")
+                let fitted = try WallpaperFitter.render(source, to: size, in: directory)
+
+                withAnimation(Tokens.normal) {
+                    current = wallpaper
+                    recents = ([wallpaper] + recents.filter { $0.id != wallpaper.id })
+                        .prefix(6).map { $0 }
+                    if let display, let index = displays.firstIndex(of: display) {
+                        displays[index].wallpaper = wallpaper
+                    } else {
+                        for index in displays.indices { displays[index].wallpaper = wallpaper }
+                    }
+                }
+                try WallpaperSetter.apply(fileURL: fitted, to: screen, fit: .fill)
+                if wallpaperScope == .allSpaces, display == nil {
+                    try? SpacesWallpaper.applyEverywhere(fileURL: fitted)
+                }
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    /// Searches for wallpapers that actually fit this display: the same subject
+    /// as `wallpaper`, at or above the display's native resolution.
+    @MainActor
+    func findFittingWallpapers(like wallpaper: Wallpaper) {
+        let size = WallpaperFitter.mainPixelSize
+        let names = wallpaper.tagRefs.isEmpty ? wallpaper.tags : wallpaper.tagRefs.map(\.name)
+
+        var next = SearchFilters()
+        next.categories = filters.categories
+        next.purity = filters.purity
+        next.sorting = names.isEmpty ? .toplist : .relevance
+        next.query = names.prefix(2).map { "+\($0)" }.joined(separator: " ")
+        next.mode = .atLeast
+        next.resolution = "\(Int(size.width))x\(Int(size.height))"
+        // Ratio is what actually removes the black bars; resolution alone does
+        // not stop a 21:9 image being cropped on a 16:10 screen.
+        next.ratios = [ratioLabel(for: size)]
+        filters = next
+        Task { await search() }
+    }
+
+    /// Nearest ratio Wallhaven understands for a display of this shape.
+    private func ratioLabel(for size: CGSize) -> String {
+        let target = size.width / max(size.height, 1)
+        let known: [(String, Double)] = [
+            ("16x9", 16.0 / 9), ("16x10", 16.0 / 10), ("21x9", 21.0 / 9),
+            ("4x3", 4.0 / 3), ("1x1", 1), ("9x16", 9.0 / 16), ("10x16", 10.0 / 16)
+        ]
+        return known.min { abs($0.1 - target) < abs($1.1 - target) }?.0 ?? "16x9"
+    }
+
+    /// Searches for wallpapers like this one, from its own tags and palette.
+    ///
+    /// Wallhaven has no similarity endpoint, so this is the closest thing it
+    /// supports: an AND of the strongest tags, narrowed to the dominant colour.
+    /// Category and purity carry over so results stay inside what the user
+    /// already said they want to see.
+    @MainActor
+    func findSimilar(to wallpaper: Wallpaper) {
+        let names = wallpaper.tagRefs.isEmpty ? wallpaper.tags : wallpaper.tagRefs.map(\.name)
+        var next = SearchFilters()
+        next.categories = filters.categories
+        next.purity = filters.purity
+        next.resolution = filters.resolution
+        next.sorting = names.isEmpty ? .toplist : .relevance
+        // Three tags is enough to be specific without returning nothing.
+        next.query = names.prefix(3).map { "+\($0)" }.joined(separator: " ")
+        next.color = wallpaper.colors.first
+        filters = next
+        Task { await search() }
+    }
+
+    // MARK: Focused browsing
+    //
+    // An uploader's work, one tag, or one of an uploader's collections. These
+    // keep their own results so opening an author page does not throw away the
+    // search the user was in the middle of.
+
+    enum Focus: Equatable {
+        case uploader(String)
+        case tag(TagRef)
+        case uploaderCollection(username: String, collection: UploaderCollection)
+
+        var title: String {
+            switch self {
+            case .uploader(let name): name
+            case .tag(let ref): "#\(ref.name)"
+            case .uploaderCollection(_, let collection): collection.label
+            }
+        }
+    }
+
+    var focus: Focus?
+    var focusWallpapers: [Wallpaper] = []
+    var focusPage = 1
+    var focusLastPage = 1
+    var isLoadingFocus = false
+    var focusTotal = 0
+
+    /// Extra context for the pane: an uploader's collections, or a tag's record.
+    var uploaderCollections: [UploaderCollection] = []
+    var tagInfo: TagInfo?
+
+    @MainActor
+    func showUploader(_ name: String) async {
+        beginFocus(.uploader(name))
+        // Public collections are a bonus; a failure there must not hold up the
+        // wallpapers, so it runs alongside rather than before.
+        async let collections = try? await LumenCore.shared.uploaderCollections(username: name)
+        await loadFocus(reset: true)
+        uploaderCollections = await collections ?? []
+    }
+
+    @MainActor
+    func showTag(_ ref: TagRef) async {
+        beginFocus(.tag(ref))
+        async let record = try? await LumenCore.shared.tagInfo(id: ref.id)
+        await loadFocus(reset: true)
+        tagInfo = await record
+    }
+
+    @MainActor
+    func showUploaderCollection(_ collection: UploaderCollection, of username: String) async {
+        beginFocus(.uploaderCollection(username: username, collection: collection))
+        await loadFocus(reset: true)
+    }
+
+    /// Clears the pane and records what is now in focus. The caller loads.
+    @MainActor
+    private func beginFocus(_ next: Focus) {
+        withAnimation(Tokens.normal) {
+            focus = next
+            focusWallpapers = []
+            focusPage = 1
+            focusLastPage = 1
+            focusTotal = 0
+            if case .uploader = next {} else { uploaderCollections = [] }
+            if case .tag = next {} else { tagInfo = nil }
+        }
+    }
+
+    @MainActor
+    func closeFocus() {
+        withAnimation(Tokens.normal) {
+            focus = nil
+            focusWallpapers = []
+            uploaderCollections = []
+            tagInfo = nil
+        }
+    }
+
+    @MainActor
+    func loadFocus(reset: Bool = false) async {
+        guard coreReady, let focus else { return }
+        if reset { focusPage = 1 }
+        isLoadingFocus = true
+        defer { isLoadingFocus = false }
+
+        do {
+            let page: SearchPage
+            switch focus {
+            case .uploader(let name):
+                page = try await LumenCore.shared.search(query(prefix: "@", name), page: focusPage)
+            case .tag(let ref):
+                page = try await LumenCore.shared.search(query(prefix: "#", ref.name), page: focusPage)
+            case .uploaderCollection(let username, let collection):
+                page = try await LumenCore.shared.uploaderCollection(
+                    username: username, id: collection.id, page: focusPage)
+            }
+            focusLastPage = max(page.lastPage, 1)
+            focusTotal = page.total
+            focusWallpapers = reset ? page.wallpapers : focusWallpapers + page.wallpapers
+            remember(page.wallpapers)
+            errorMessage = nil
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    /// Filters for a focused page.
+    ///
+    /// Only category and purity carry over — those are about what the user is
+    /// willing to see. Resolution, ratio and colour do not: an uploader page
+    /// should show that uploader's work, and inheriting a 4K-and-21:9 filter
+    /// from the last search silently emptied it.
+    private func query(prefix: String, _ value: String) -> SearchFilters {
+        var scoped = SearchFilters()
+        scoped.categories = filters.categories
+        scoped.purity = filters.purity
+        scoped.query = prefix + value
+        scoped.sorting = .dateAdded
+        return scoped
+    }
+
+    @MainActor
+    func loadFocusNextPageIfNeeded(after wallpaper: Wallpaper) async {
+        guard !isLoadingFocus, focusPage < focusLastPage,
+              focusWallpapers.suffix(6).contains(wallpaper) else { return }
+        focusPage += 1
+        await loadFocus()
+    }
 }

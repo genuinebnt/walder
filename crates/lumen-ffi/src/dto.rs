@@ -190,6 +190,10 @@ pub struct WallpaperDto {
     /// Dominant palette, as hex without a leading `#`.
     pub colors: Vec<String>,
     pub tags: Vec<String>,
+    /// Tags with their identity, so a tag page can look one up. `tags` stays a
+    /// plain name list because that is all the grid needs.
+    #[serde(rename = "tagRefs")]
+    pub tag_refs: Vec<TagRefDto>,
     #[serde(rename = "localFile")]
     pub local_file: Option<String>,
 }
@@ -223,9 +227,64 @@ impl From<&Wallpaper> for WallpaperDto {
                 .filter(|c| c.len() == 6)
                 .collect(),
             tags: w.tags.iter().map(|t| t.name.clone()).collect(),
+            tag_refs: w.tags.iter().map(TagRefDto::from).collect(),
             local_file: None,
         }
     }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct TagRefDto {
+    pub id: i64,
+    pub name: String,
+    pub category: String,
+    pub purity: String,
+}
+
+impl From<&Tag> for TagRefDto {
+    fn from(t: &Tag) -> Self {
+        Self {
+            id: t.id as i64,
+            name: t.name.clone(),
+            category: t.category.clone(),
+            purity: t.purity.to_string(),
+        }
+    }
+}
+
+/// A tag as its own page: what Wallhaven knows about it beyond the name.
+#[derive(Debug, Clone, Serialize)]
+pub struct TagInfoDto {
+    pub id: i64,
+    pub name: String,
+    pub alias: Option<String>,
+    pub category: String,
+    pub purity: String,
+    #[serde(rename = "createdAt")]
+    pub created_at: Option<String>,
+}
+
+impl From<&Tag> for TagInfoDto {
+    fn from(t: &Tag) -> Self {
+        Self {
+            id: t.id as i64,
+            name: t.name.clone(),
+            alias: t.alias.clone().filter(|a| !a.is_empty()),
+            category: t.category.clone(),
+            purity: t.purity.to_string(),
+            created_at: t.created_at.clone(),
+        }
+    }
+}
+
+/// One of an uploader's public collections on Wallhaven.
+#[derive(Debug, Clone, Serialize)]
+pub struct UploaderCollectionDto {
+    pub id: i64,
+    pub label: String,
+    pub count: i64,
+    pub views: i64,
+    pub public: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]

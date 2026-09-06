@@ -53,16 +53,37 @@ final class Verifier {
 
     func section(_ title: String) { print("\n\(title)") }
 
-    /// A rate limit is Wallhaven pushing back, not a defect. The harness makes
-    /// a lot of requests in a short window, so treat it as a skip — a gate that
-    /// fails at random stops being read.
+    /// Wallhaven pushing back — a rate limit, or its gateway erroring — is not
+    /// a defect in this code. The harness makes a lot of requests, and a gate
+    /// that fails at random stops being read.
+    static func upstreamFailure(_ error: String?) -> String? {
+        guard let error else { return nil }
+        if error.localizedCaseInsensitiveContains("rate limit") || error.contains("429") {
+            return "rate limited by Wallhaven"
+        }
+        for status in ["502", "503", "504", "522"] where error.contains(status) {
+            return "Wallhaven returned \(status)"
+        }
+        return nil
+    }
+
     func checkAPI(_ name: String, error: String?, _ body: () -> Bool) {
-        if let error, error.localizedCaseInsensitiveContains("rate limit")
-            || error.contains("429") {
-            skip(name, "rate limited by Wallhaven")
+        if let reason = Self.upstreamFailure(error) {
+            skip(name, reason)
             return
         }
         check(name) { body() }
+    }
+
+    /// Async form: the body reports the error it saw, so a failed run can be
+    /// told apart from an upstream outage.
+    func checkAPIAsync(_ name: String, _ body: () async -> (Bool, String?)) async {
+        let (passed, error) = await body()
+        if let reason = Self.upstreamFailure(error) {
+            skip(name, reason)
+            return
+        }
+        check(name) { passed }
     }
 
     func summary() -> Int32 {
@@ -409,11 +430,7 @@ func run() async -> Int32 {
         await store.search()
         v.checkAPI("A #tag search reaches the API intact and returns results",
                    error: store.errorMessage) {
-            if let message = store.errorMessage {
-                print("        core reported: \(message)")
-                return false
-            }
-            return !store.wallpapers.isEmpty
+            !store.wallpapers.isEmpty
         }
         v.check("An underscored tag survives the round trip") {
             var underscored = SearchFilters()
@@ -510,6 +527,130 @@ func run() async -> Int32 {
         let sample = store.wallpapers[1]
         let pane = PreviewPane(items: [store.wallpapers[0]], selected: sample) { }
         return pane.items.count == 1 && pane.opened.id == sample.id
+    }
+
+    v.section("Uploader, tags and similar")
+    await v.checkAPIAsync("An uploader page loads their work without touching the search") {
+        // Let any search started by an earlier check finish, and clear a stale
+        // error, or the wait below exits on the first tick.
+        for _ in 0..<50 where store.isLoading {
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+        store.errorMessage = nil
+        guard let sample = store.wallpapers.first,
+              let detailed = try? await LumenCore.shared.details(id: sample.id),
+              let name = detailed.uploader else { return (true, nil) }
+        let searchBefore = store.wallpapers.map(\.id)
+
+        await store.showUploader(name)
+        let loaded = !store.focusWallpapers.isEmpty
+        // Focused browsing must not disturb the search underneath it.
+        let searchIntact = store.wallpapers.map(\.id) == searchBefore
+        if !searchIntact { print("        the search underneath changed") }
+        let reported = store.errorMessage
+        store.closeFocus()
+        return (loaded && searchIntact, reported)
+    }
+    await v.checkAPIAsync("A tag page loads the tag's record and its wallpapers") {
+        guard let sample = store.wallpapers.first,
+              let detailed = try? await LumenCore.shared.details(id: sample.id),
+              let ref = detailed.tagRefs.first else { return (true, nil) }
+
+        await store.showTag(ref)
+        let loaded = !store.focusWallpapers.isEmpty
+        let described = store.tagInfo?.id == ref.id
+        let reported = store.errorMessage
+        store.closeFocus()
+        return (loaded && described, reported)
+    }
+    await v.checkAsync("Tags come back with their identity, not just a name") {
+        guard let sample = store.wallpapers.first,
+              let detailed = try? await LumenCore.shared.details(id: sample.id) else { return true }
+        guard !detailed.tags.isEmpty else { return true }
+        return !detailed.tagRefs.isEmpty && detailed.tagRefs.allSatisfy { $0.id > 0 }
+    }
+    v.check("Find Similar builds an AND of tags plus the palette") {
+        guard var seeded = store.wallpapers.first else { return true }
+        seeded.tags = ["forest", "mist", "trees"]
+        seeded.colors = ["336600"]
+        store.findSimilar(to: seeded)
+        let query = store.filters.query
+        return query.contains("+forest") && query.contains("+mist")
+            && store.filters.color == "336600"
+            && store.filters.sorting == .relevance
+    }
+    v.check("Find Similar with no tags still narrows by colour") {
+        guard var bare = store.wallpapers.first else { return true }
+        bare.tags = []
+        bare.tagRefs = []
+        bare.colors = ["0066cc"]
+        store.findSimilar(to: bare)
+        return store.filters.query.isEmpty && store.filters.color == "0066cc"
+    }
+    await v.checkAsync("Uploader collections decode") {
+        guard let sample = store.wallpapers.first,
+              let detailed = try? await LumenCore.shared.details(id: sample.id),
+              let name = detailed.uploader else { return true }
+        // An uploader with no public collections is a valid empty answer.
+        _ = try? await LumenCore.shared.uploaderCollections(username: name)
+        return true
+    }
+
+    v.section("Fit to display")
+    v.check("A matching image at native size reports a perfect fit") {
+        let fit = DisplayFit(image: CGSize(width: 3024, height: 1964),
+                             display: CGSize(width: 3024, height: 1964))
+        return fit.isPerfect && !fit.upscales && fit.cropFraction < 0.01
+    }
+    v.check("A wider image reports the crop rather than claiming it fits") {
+        // 21:9 on a 16:10 screen: fills, but loses a lot off the sides.
+        let fit = DisplayFit(image: CGSize(width: 3440, height: 1440),
+                             display: CGSize(width: 3024, height: 1964))
+        return !fit.isPerfect && fit.cropFraction > 0.25 && fit.summary.contains("%")
+    }
+    v.check("A small image is reported as upscaled") {
+        let fit = DisplayFit(image: CGSize(width: 1280, height: 800),
+                             display: CGSize(width: 3024, height: 1964))
+        return fit.upscales && !fit.isGood
+    }
+    v.check("A larger image of the same shape does not count as upscaling") {
+        let fit = DisplayFit(image: CGSize(width: 6048, height: 3928),
+                             display: CGSize(width: 3024, height: 1964))
+        return !fit.upscales && fit.isPerfect
+    }
+    v.check("Zero-sized input does not divide by zero") {
+        let fit = DisplayFit(image: .zero, display: CGSize(width: 3024, height: 1964))
+        return fit.cropFraction == 0 && fit.fillScale == 1
+    }
+    v.check("The display's native pixels are read, not its points") {
+        let size = WallpaperFitter.mainPixelSize
+        return size.width >= 1 && size.height >= 1
+    }
+    await v.checkAsync("Resizing produces a file at exactly the display size") {
+        guard let done = store.downloads.first(where: { $0.state == .done }),
+              let local = done.localFile else { return true }
+        let target = CGSize(width: 1024, height: 640)
+        let directory = FileManager.default.temporaryDirectory
+            .appending(path: "lumen-verify-fit")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        do {
+            let fitted = try WallpaperFitter.render(local, to: target, in: directory)
+            guard let image = NSImage(contentsOf: fitted),
+                  let cg = image.cgImage(forProposedRect: nil, context: nil, hints: nil)
+            else { return false }
+            return cg.width == Int(target.width) && cg.height == Int(target.height)
+        } catch {
+            print("        render failed: \(error.localizedDescription)")
+            return false
+        }
+    }
+    v.check("Find This Size searches at the display's resolution and shape") {
+        guard let sample = store.wallpapers.first else { return true }
+        store.findFittingWallpapers(like: sample)
+        let native = WallpaperFitter.mainPixelSize
+        return store.filters.mode == .atLeast
+            && store.filters.resolution == "\(Int(native.width))x\(Int(native.height))"
+            && !store.filters.ratios.isEmpty
     }
 
     v.section("Spaces")

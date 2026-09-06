@@ -22,6 +22,8 @@ struct Wallpaper: Identifiable, Hashable, Codable {
     /// Dominant palette, hex without a leading `#`.
     var colors: [String] = []
     var tags: [String] = []
+    /// Tags with their identity, so a tag page can be opened from one.
+    var tagRefs: [TagRef] = []
     var localFile: URL?     // set once downloaded; preview prefers it
 
     var displayResolution: String { resolution.replacingOccurrences(of: "x", with: " × ") }
@@ -31,6 +33,46 @@ struct Wallpaper: Identifiable, Hashable, Codable {
 
     /// Minimal identity the core needs to act on this wallpaper.
     var wirePayload: [String: Any] { ["id": id] }
+}
+
+/// A tag as it appears on a wallpaper.
+struct TagRef: Identifiable, Hashable, Codable {
+    let id: Int
+    let name: String
+    let category: String
+    let purity: Purity
+}
+
+/// What Wallhaven knows about a tag beyond its name.
+struct TagInfo: Identifiable, Hashable, Decodable {
+    let id: Int
+    let name: String
+    let alias: String?
+    let category: String
+    let purity: Purity
+    let createdAt: String?
+
+    /// Alias list as Wallhaven writes it, comma separated.
+    var aliases: [String] {
+        (alias ?? "").split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+    }
+}
+
+/// One of an uploader's public collections on Wallhaven. Distinct from the
+/// local `Collection`, which Lumen stores itself.
+struct UploaderCollection: Identifiable, Hashable, Decodable {
+    let id: Int
+    let label: String
+    let count: Int
+    let views: Int
+    let published: Bool
+
+    private enum CodingKeys: String, CodingKey {
+        case id, label, count, views
+        case published = "public"
+    }
 }
 
 enum Purity: String, Codable, CaseIterable {
@@ -214,6 +256,56 @@ struct Collection: Identifiable, Hashable, Decodable {
     let id: String
     var name: String
     var wallpapers: [Wallpaper] = []
+}
+
+/// How a wallpaper sits on a particular display.
+///
+/// macOS fills the screen and crops the overflow, so "does it fit" is really
+/// two questions: how much of the image is lost to the crop, and is there
+/// enough resolution to avoid softness. Wallhaven serves one file per
+/// wallpaper — there is no alternate-resolution download — so the answer when
+/// it does not fit is either a better-matching wallpaper or a local resize.
+struct DisplayFit {
+    let image: CGSize          // pixels
+    let display: CGSize        // pixels
+
+    /// Scale needed to cover the display.
+    var fillScale: Double {
+        guard image.width > 0, image.height > 0 else { return 1 }
+        return max(display.width / image.width, display.height / image.height)
+    }
+
+    /// Fraction of the image lost off the edges when filling, 0...1.
+    var cropFraction: Double {
+        guard image.width > 0, image.height > 0 else { return 0 }
+        let covered = display.width * display.height
+        let scaled = (image.width * fillScale) * (image.height * fillScale)
+        guard scaled > 0 else { return 0 }
+        return max(0, 1 - covered / scaled)
+    }
+
+    /// True when the image has to be enlarged, which softens it.
+    var upscales: Bool { fillScale > 1.001 }
+
+    /// Same shape and at least as many pixels: nothing is lost either way.
+    var isPerfect: Bool { !upscales && cropFraction < 0.01 }
+
+    /// Loses a sliver at most — not worth flagging.
+    var isGood: Bool { !upscales && cropFraction < 0.08 }
+
+    var summary: String {
+        if isPerfect { return "Fits this display exactly" }
+        if upscales && cropFraction >= 0.08 {
+            return "Upscaled \(percent(fillScale - 1)) and crops \(percent(cropFraction))"
+        }
+        if upscales { return "Below your display — upscaled \(percent(fillScale - 1))" }
+        if cropFraction >= 0.08 { return "Crops \(percent(cropFraction)) to fill" }
+        return "Fits, crops \(percent(cropFraction))"
+    }
+
+    private func percent(_ value: Double) -> String {
+        "\(Int((value * 100).rounded()))%"
+    }
 }
 
 /// Where a set applies. macOS gives each Space its own desktop picture, and

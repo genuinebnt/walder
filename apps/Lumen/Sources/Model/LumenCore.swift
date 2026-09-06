@@ -105,6 +105,25 @@ final class LumenCore: @unchecked Sendable {
         decodeSync([Wallpaper].self, Self.takeString(lumen_favorites_list())) ?? []
     }
 
+    // MARK: Uploader and tags
+
+    func uploaderCollections(username: String) async throws -> [UploaderCollection] {
+        try await call([UploaderCollection].self) {
+            username.withCString { lumen_uploader_collections($0) }
+        }
+    }
+
+    func uploaderCollection(username: String, id: Int, page: Int) async throws -> SearchPage {
+        try await call(SearchPage.self) {
+            lumen_uploader_collection_wallpapers(
+                Self.json(["username": username, "collectionId": id, "page": page]))
+        }
+    }
+
+    func tagInfo(id: Int) async throws -> TagInfo {
+        try await call(TagInfo.self) { lumen_tag_info(UInt64(id)) }
+    }
+
     // MARK: Collections
 
     func collections() -> [Collection] {

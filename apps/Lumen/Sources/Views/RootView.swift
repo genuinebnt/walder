@@ -47,6 +47,10 @@ struct RootView: View {
                 .zIndex(1)
             }
         }
+        // The toolbar is an NSToolbar living in the window's title bar, so it
+        // renders above any SwiftUI overlay whatever its zIndex — it has to be
+        // hidden, not covered.
+        .toolbar(selection == nil ? .automatic : .hidden, for: .windowToolbar)
         // Previewing collapses the sidebar so a zoomed image gets the whole
         // window instead of running into it.
         .onChange(of: selection?.id) { _, id in
@@ -76,6 +80,8 @@ struct RootView: View {
             Task { await store.search() }
         }
         .onChange(of: section) { _, new in
+            // Picking a sidebar item means leaving whatever was in focus.
+            if store.focus != nil { store.closeFocus() }
             // Toplist is the same grid with a different sort — ask the core for it.
             guard new == .toplist, store.filters.sorting != .toplist else { return }
             store.filters.sorting = .toplist
@@ -85,7 +91,8 @@ struct RootView: View {
 
     /// What ← and → step through, which depends on the pane in view.
     private var viewerItems: [Wallpaper] {
-        section == .favorites ? store.favorites : store.wallpapers
+        if store.focus != nil { return store.focusWallpapers }
+        return section == .favorites ? store.favorites : store.wallpapers
     }
 
     // MARK: Sidebar
@@ -147,6 +154,18 @@ struct RootView: View {
 
     @ViewBuilder
     private var content: some View {
+        // An uploader, tag or uploader collection takes over the detail pane
+        // and keeps its own results, so the search underneath is untouched.
+        if store.focus != nil {
+            FocusView(selection: $selection)
+                .transition(.opacity.combined(with: .offset(y: 10)))
+        } else {
+            paneContent
+        }
+    }
+
+    @ViewBuilder
+    private var paneContent: some View {
         switch section {
         case .browse, .toplist, .favorites:
             BrowseView(section: section, selection: $selection)

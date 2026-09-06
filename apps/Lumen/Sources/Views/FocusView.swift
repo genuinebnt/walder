@@ -1,0 +1,211 @@
+import SwiftUI
+
+/// One uploader, one tag, or one of an uploader's collections.
+///
+/// All three are the same shape — a header saying what you are looking at, then
+/// that thing's wallpapers — so they share a pane rather than three near-copies.
+/// It keeps its own results, so opening an author page does not discard the
+/// search you were in the middle of.
+struct FocusView: View {
+    @Environment(Store.self) private var store
+    @Binding var selection: Wallpaper?
+
+    private var items: [Wallpaper] { store.focusWallpapers }
+    private var theme: GridTheme { store.gridTheme }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: Tokens.s4) {
+                header
+
+                if case .uploader(let name) = store.focus, !store.uploaderCollections.isEmpty {
+                    collections(of: name)
+                }
+
+                if case .tag = store.focus, let info = store.tagInfo {
+                    tagRecord(info)
+                }
+
+                grid
+
+                if store.isLoadingFocus { loadingRow }
+                if items.isEmpty && !store.isLoadingFocus { emptyState }
+            }
+            .padding(Tokens.s4)
+        }
+        .scrollContentBackground(.hidden)
+    }
+
+    // MARK: Header
+
+    @ViewBuilder
+    private var header: some View {
+        if let focus = store.focus {
+            HStack(alignment: .center, spacing: Tokens.s3) {
+                Button {
+                    store.closeFocus()
+                } label: {
+                    Label("Back", systemImage: "chevron.left")
+                        .font(.system(size: 12, weight: .medium))
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .keyboardShortcut(.cancelAction)
+
+                Image(systemName: symbol(for: focus))
+                    .font(.system(size: 22))
+                    .foregroundStyle(Tokens.accent)
+                    .frame(width: 40, height: 40)
+                    .background(Tokens.accent.opacity(0.14), in: .circle)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(focus.title)
+                        .font(.system(size: 17, weight: .semibold))
+                        .lineLimit(1)
+                    Text(subtitle(for: focus))
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer()
+
+                if case .uploader(let name) = focus {
+                    Link("Open on Wallhaven",
+                         destination: URL(string: "https://wallhaven.cc/user/\(name)")!)
+                        .font(.system(size: 11.5))
+                }
+            }
+            .padding(.bottom, Tokens.s1)
+        }
+    }
+
+    private func symbol(for focus: Store.Focus) -> String {
+        switch focus {
+        case .uploader: "person.crop.circle"
+        case .tag: "number"
+        case .uploaderCollection: "rectangle.stack"
+        }
+    }
+
+    private func subtitle(for focus: Store.Focus) -> String {
+        let counted = store.focusTotal > 0
+            ? "\(store.focusTotal) wallpapers"
+            : "\(items.count) loaded"
+        switch focus {
+        case .uploader: return "Uploader · \(counted)"
+        case .tag: return "Tag · \(counted)"
+        case .uploaderCollection(let username, _): return "\(username)'s collection · \(counted)"
+        }
+    }
+
+    // MARK: Uploader collections
+
+    private func collections(of username: String) -> some View {
+        VStack(alignment: .leading, spacing: Tokens.s2) {
+            Text("COLLECTIONS").font(.sectionLabel).foregroundStyle(.secondary)
+            FlowLayout(spacing: 6) {
+                ForEach(store.uploaderCollections) { collection in
+                    Button {
+                        Task { await store.showUploaderCollection(collection, of: username) }
+                    } label: {
+                        HStack(spacing: 6) {
+                            Text(collection.label).lineLimit(1)
+                            Text("\(collection.count)")
+                                .font(.caption2Mono)
+                                .foregroundStyle(.secondary)
+                        }
+                        .font(.system(size: 12))
+                        .padding(.horizontal, 10).padding(.vertical, 5)
+                        .background(.quaternary.opacity(0.45), in: .capsule)
+                        .contentShape(.capsule)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+    }
+
+    // MARK: Tag record
+
+    private func tagRecord(_ info: TagInfo) -> some View {
+        VStack(alignment: .leading, spacing: Tokens.s2) {
+            Text("ABOUT THIS TAG").font(.sectionLabel).foregroundStyle(.secondary)
+            HStack(spacing: Tokens.s2) {
+                Chip(text: info.category, tint: Tokens.accent)
+                Chip(text: info.purity.rawValue.uppercased(),
+                     tint: info.purity == .nsfw ? Tokens.danger
+                         : info.purity == .sketchy ? Tokens.warning : Tokens.success)
+                if let created = info.createdAt {
+                    Text("added \(created.prefix(10))")
+                        .font(.caption2Mono).foregroundStyle(.secondary)
+                }
+                Spacer()
+            }
+            if !info.aliases.isEmpty {
+                Text("Also known as \(info.aliases.joined(separator: ", "))")
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(Tokens.s3)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .card()
+    }
+
+    // MARK: Results
+
+    private var grid: some View {
+        Group {
+            if theme == .masonry {
+                MasonryLayout(columnWidth: theme.minTileWidth, spacing: theme.spacing) {
+                    ForEach(items) { tile($0) }
+                }
+            } else {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: theme.minTileWidth),
+                                             spacing: theme.spacing)],
+                          spacing: theme.spacing) {
+                    ForEach(items) { tile($0) }
+                }
+            }
+        }
+        .transaction { $0.animation = nil }
+    }
+
+    private func tile(_ wallpaper: Wallpaper) -> some View {
+        WallpaperTile(wallpaper: wallpaper,
+                      theme: theme,
+                      isHovered: false,
+                      isFavorite: store.isFavorite(wallpaper),
+                      open: {
+                          withAnimation(Tokens.normal) { selection = wallpaper }
+                          Task { await store.loadDetails(for: wallpaper) }
+                      })
+            .contextMenu {
+                Button("Set as Wallpaper") { store.setWallpaper(wallpaper) }
+                Button(store.isFavorite(wallpaper) ? "Remove from Favorites" : "Add to Favorites") {
+                    store.toggleFavorite(wallpaper)
+                }
+                Button("Download") { store.download(wallpaper) }
+            }
+            .task { await store.loadFocusNextPageIfNeeded(after: wallpaper) }
+    }
+
+    private var loadingRow: some View {
+        HStack(spacing: Tokens.s2) {
+            ProgressView().controlSize(.small)
+            Text("Loading more wallpapers").font(.system(size: 12.5)).foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, Tokens.s5)
+    }
+
+    private var emptyState: some View {
+        ContentUnavailableView {
+            Label("Nothing here", systemImage: "tray")
+        } description: {
+            Text("Wallhaven returned no wallpapers for this.")
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, Tokens.s6)
+    }
+}

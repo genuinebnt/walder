@@ -302,6 +302,120 @@ pub unsafe extern "C" fn lumen_details(id_str: *const c_char) -> u64 {
     id
 }
 
+// ── uploader and tags ─────────────────────────────────────────────────────
+
+/// An uploader's public collections. Callback `kind: "uploaderCollections"`.
+///
+/// # Safety
+/// `username` must be NUL-terminated UTF-8, or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn lumen_uploader_collections(username: *const c_char) -> u64 {
+    let name = unsafe { str_from(username) };
+    let id = next_id();
+    let Some(core) = core() else {
+        emit(id, err_json("uploaderCollections", "core not initialised"));
+        return id;
+    };
+    if name.trim().is_empty() {
+        emit(id, err_json("uploaderCollections", "username is required"));
+        return id;
+    }
+
+    core.runtime.spawn(async move {
+        let client = core.provider.read().unwrap().clone();
+        match client.get_collections(Some(&name)).await {
+            Ok(found) => {
+                let list: Vec<UploaderCollectionDto> = found
+                    .iter()
+                    .map(|c| UploaderCollectionDto {
+                        id: c.id as i64,
+                        label: c.label.clone(),
+                        count: c.count as i64,
+                        views: c.views as i64,
+                        public: c.public,
+                    })
+                    .collect();
+                emit(
+                    id,
+                    serde_json::to_string(&Envelope::ok("uploaderCollections", list))
+                        .unwrap_or_default(),
+                );
+            }
+            Err(e) => emit(id, err_json("uploaderCollections", e)),
+        }
+    });
+    id
+}
+
+/// The wallpapers in one of an uploader's collections. Callback `kind: "search"`.
+///
+/// `json`: `{ "username": String, "collectionId": Int, "page": Int }`
+///
+/// # Safety
+/// `json` must be NUL-terminated UTF-8, or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn lumen_uploader_collection_wallpapers(json: *const c_char) -> u64 {
+    let raw = unsafe { str_from(json) };
+    let id = next_id();
+    let Some(core) = core() else {
+        emit(id, err_json("search", "core not initialised"));
+        return id;
+    };
+
+    let value: serde_json::Value = serde_json::from_str(&raw).unwrap_or(serde_json::Value::Null);
+    let username = value["username"].as_str().unwrap_or_default().to_string();
+    let collection_id = value["collectionId"].as_u64().unwrap_or_default();
+    let page = value["page"].as_u64().unwrap_or(1).max(1) as u32;
+    if username.is_empty() || collection_id == 0 {
+        emit(id, err_json("search", "username and collectionId are required"));
+        return id;
+    }
+
+    core.runtime.spawn(async move {
+        let client = core.provider.read().unwrap().clone();
+        match client
+            .get_collection_wallpapers(&username, collection_id, page)
+            .await
+        {
+            Ok(result) => {
+                let _ = core.db.cache_wallpapers(&result.wallpapers);
+                let dto = SearchPageDto::from(&result);
+                emit(
+                    id,
+                    serde_json::to_string(&Envelope::ok("search", dto)).unwrap_or_default(),
+                );
+            }
+            Err(e) => emit(id, err_json("search", e)),
+        }
+    });
+    id
+}
+
+/// What Wallhaven knows about one tag. Callback `kind: "tag"`.
+#[unsafe(no_mangle)]
+pub extern "C" fn lumen_tag_info(tag_id: u64) -> u64 {
+    let id = next_id();
+    let Some(core) = core() else {
+        emit(id, err_json("tag", "core not initialised"));
+        return id;
+    };
+
+    core.runtime.spawn(async move {
+        let client = core.provider.read().unwrap().clone();
+        match client.get_tag(tag_id).await {
+            Ok(tag) => {
+                let dto = TagInfoDto::from(&tag);
+                emit(
+                    id,
+                    serde_json::to_string(&Envelope::ok("tag", dto)).unwrap_or_default(),
+                );
+            }
+            Err(e) => emit(id, err_json("tag", e)),
+        }
+    });
+    id
+}
+
 // ── downloads ─────────────────────────────────────────────────────────────
 
 /// Enqueues a download. Progress arrives as `kind: "downloads"` pushes.
