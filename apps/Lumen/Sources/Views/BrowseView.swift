@@ -51,7 +51,16 @@ struct BrowseView: View {
                       theme: theme,
                       isHovered: hovered == wallpaper.id,
                       isFavorite: store.isFavorite(wallpaper),
-                      open: { open(wallpaper) })
+                      isSelecting: store.isSelecting,
+                      isSelected: store.isSelected(wallpaper),
+                      open: {
+                          // In select mode the whole tile is a checkbox.
+                          if store.isSelecting {
+                              store.toggleSelection(wallpaper)
+                          } else {
+                              open(wallpaper)
+                          }
+                      })
             .onHover { inside in
                 withAnimation(Tokens.quick) { hovered = inside ? wallpaper.id : (hovered == wallpaper.id ? nil : hovered) }
             }
@@ -129,6 +138,8 @@ struct WallpaperTile: View {
     let theme: GridTheme
     let isHovered: Bool
     let isFavorite: Bool
+    var isSelecting = false
+    var isSelected = false
     let open: () -> Void
 
     private var aspect: Double { theme == .masonry ? wallpaper.ratio : (theme == .cinema ? 16.0/9 : 16.0/10) }
@@ -151,7 +162,14 @@ struct WallpaperTile: View {
         .clipped()
         .overlay { hoverLayer }
         .overlay { purityBorder }
+        .overlay { selectionLayer }
         .clipShape(.rect(cornerRadius: theme.cornerRadius))
+        .overlay {
+            if isSelecting && isSelected {
+                RoundedRectangle(cornerRadius: theme.cornerRadius)
+                    .strokeBorder(Tokens.accent, lineWidth: 3)
+            }
+        }
         // Flatten to one layer before the shadow: without this every hover
         // re-rasterises the image, its overlays and the border separately.
         .compositingGroup()
@@ -205,8 +223,33 @@ struct WallpaperTile: View {
             .padding(Tokens.s3)
             .foregroundStyle(.white)
         }
-        .opacity(isHovered ? 1 : 0)
+        .opacity(isHovered && !isSelecting ? 1 : 0)
+        .allowsHitTesting(!isSelecting)
         .animation(Tokens.quick, value: isHovered)
+    }
+
+    /// A checkbox in the corner while selecting, so the state is visible
+    /// without hovering.
+    @ViewBuilder
+    private var selectionLayer: some View {
+        if isSelecting {
+            VStack {
+                HStack {
+                    Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                        .font(.system(size: 18))
+                        .foregroundStyle(isSelected ? Color.white : Color.white.opacity(0.85))
+                        .background {
+                            Circle()
+                                .fill(isSelected ? Tokens.accent : .black.opacity(0.35))
+                                .padding(1)
+                        }
+                        .padding(Tokens.s2)
+                    Spacer()
+                }
+                Spacer()
+            }
+            .allowsHitTesting(false)
+        }
     }
 
     @ViewBuilder

@@ -775,6 +775,152 @@ pub unsafe extern "C" fn lumen_collection_set_member(json: *const c_char) -> *mu
     }
 }
 
+// ── bulk actions ──────────────────────────────────────────────────────────
+
+/// Reads a JSON array of wallpaper ids from `value["ids"]`.
+fn ids_from(value: &serde_json::Value) -> Vec<String> {
+    value["ids"]
+        .as_array()
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| item.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Bookmarks or un-bookmarks several wallpapers at once.
+///
+/// `json`: `{ "ids": [String], "favorited": Bool }`
+/// Returns `{ "changed": Int }`. Caller frees with [`lumen_string_free`].
+///
+/// # Safety
+/// `json` must be NUL-terminated UTF-8, or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn lumen_favorites_set_many(json: *const c_char) -> *mut c_char {
+    let raw = unsafe { str_from(json) };
+    let Some(core) = core() else {
+        return to_c(err_json("favorites", "core not initialised"));
+    };
+    let value: serde_json::Value = serde_json::from_str(&raw).unwrap_or(serde_json::Value::Null);
+    let ids = ids_from(&value);
+    let favorited = value["favorited"].as_bool().unwrap_or(true);
+    if ids.is_empty() {
+        return to_c(err_json("favorites", "ids are required"));
+    }
+
+    let result = if favorited {
+        core.db.add_bookmarks_for(&ids)
+    } else {
+        core.db.remove_bookmarks_for(&ids)
+    };
+    match result {
+        Ok(changed) => to_c(
+            serde_json::json!({ "ok": true, "kind": "favorites", "data": { "changed": changed } })
+                .to_string(),
+        ),
+        Err(e) => to_c(err_json("favorites", e)),
+    }
+}
+
+/// Files several wallpapers into one collection.
+///
+/// `json`: `{ "collectionId": String, "ids": [String] }`
+/// Returns `{ "changed": Int }`. Caller frees with [`lumen_string_free`].
+///
+/// # Safety
+/// `json` must be NUL-terminated UTF-8, or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn lumen_collection_add_many(json: *const c_char) -> *mut c_char {
+    let raw = unsafe { str_from(json) };
+    let Some(core) = core() else {
+        return to_c(err_json("collection", "core not initialised"));
+    };
+    let value: serde_json::Value = serde_json::from_str(&raw).unwrap_or(serde_json::Value::Null);
+    let ids = ids_from(&value);
+    let Ok(collection_id) = uuid::Uuid::parse_str(value["collectionId"].as_str().unwrap_or_default())
+    else {
+        return to_c(err_json("collection", "not a collection id"));
+    };
+    if ids.is_empty() {
+        return to_c(err_json("collection", "ids are required"));
+    }
+
+    match core.db.add_many_to_collection(collection_id, &ids) {
+        Ok(changed) => to_c(
+            serde_json::json!({ "ok": true, "kind": "collection", "data": { "changed": changed } })
+                .to_string(),
+        ),
+        Err(e) => to_c(err_json("collection", e)),
+    }
+}
+
+/// Enqueues several downloads at once. Progress arrives as `kind: "downloads"`.
+///
+/// `json`: `{ "items": [{ "id": String, "url": String, "filename": String }] }`
+///
+/// # Safety
+/// `json` must be NUL-terminated UTF-8, or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn lumen_download_many(json: *const c_char) -> u64 {
+    let raw = unsafe { str_from(json) };
+    let id = next_id();
+    let Some(core) = core() else {
+        emit(id, err_json("download", "core not initialised"));
+        return id;
+    };
+
+    let value: serde_json::Value = serde_json::from_str(&raw).unwrap_or(serde_json::Value::Null);
+    let items: Vec<(String, String, String)> = value["items"]
+        .as_array()
+        .map(|entries| {
+            entries
+                .iter()
+                .filter_map(|entry| {
+                    let wallpaper_id = entry["id"].as_str()?.to_string();
+                    let url = entry["url"].as_str()?.to_string();
+                    let filename = entry["filename"].as_str()?.to_string();
+                    (!url.is_empty() && !filename.is_empty())
+                        .then_some((wallpaper_id, url, filename))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    if items.is_empty() {
+        emit(id, err_json("download", "items are required"));
+        return id;
+    }
+
+    core.runtime.spawn(async move {
+        let dir = core.download_dir.read().unwrap().clone();
+        if let Err(e) = std::fs::create_dir_all(&dir) {
+            emit(id, err_json("download", e));
+            return;
+        }
+        // The manager's semaphore bounds how many actually run at once, so
+        // enqueuing the whole selection is safe.
+        let mut queued = 0;
+        for (wallpaper_id, url, filename) in items {
+            if core
+                .downloads
+                .enqueue(wallpaper_id, url, filename, &dir)
+                .await
+                .is_ok()
+            {
+                queued += 1;
+            }
+        }
+        emit(
+            id,
+            serde_json::json!({ "ok": true, "kind": "download", "data": { "queued": queued } })
+                .to_string(),
+        );
+    });
+    id
+}
+
 // ── preferences ───────────────────────────────────────────────────────────
 
 /// Applies live preference changes (API key, download directory).

@@ -554,9 +554,16 @@ func run() async -> Int32 {
     await v.checkAPIAsync("A tag page loads the tag's record and its wallpapers") {
         guard let sample = store.wallpapers.first,
               let detailed = try? await LumenCore.shared.details(id: sample.id),
-              let ref = detailed.tagRefs.first else { return (true, nil) }
+              !detailed.tagRefs.isEmpty else { return (true, nil) }
 
-        await store.showTag(ref)
+        // A rare tag can legitimately have no matches under the active
+        // filters, so try a few rather than betting on the first.
+        var ref = detailed.tagRefs[0]
+        for candidate in detailed.tagRefs.prefix(4) {
+            ref = candidate
+            await store.showTag(candidate)
+            if !store.focusWallpapers.isEmpty { break }
+        }
         let loaded = !store.focusWallpapers.isEmpty
         let described = store.tagInfo?.id == ref.id
         let reported = store.errorMessage
@@ -594,6 +601,88 @@ func run() async -> Int32 {
         // An uploader with no public collections is a valid empty answer.
         _ = try? await LumenCore.shared.uploaderCollections(username: name)
         return true
+    }
+
+    v.section("Selection and bulk actions")
+    v.check("Select mode toggles and clears on exit") {
+        store.setSelecting(true)
+        guard store.isSelecting else { return false }
+        guard let first = store.wallpapers.first else { return true }
+        store.toggleSelection(first)
+        guard store.selectionCount == 1 else { return false }
+        store.setSelecting(false)
+        return !store.isSelecting && store.selectionCount == 0
+    }
+    v.check("Toggling the same wallpaper twice deselects it") {
+        guard let first = store.wallpapers.first else { return true }
+        store.setSelecting(true)
+        store.toggleSelection(first)
+        store.toggleSelection(first)
+        return store.selectionCount == 0
+    }
+    v.check("Select All takes the whole visible list") {
+        guard !store.wallpapers.isEmpty else { return true }
+        store.selectAll(store.wallpapers)
+        return store.selectionCount == store.wallpapers.count
+    }
+    v.check("Deselect clears without leaving select mode") {
+        store.clearSelection()
+        return store.selectionCount == 0 && store.isSelecting
+    }
+    v.check("Selected wallpapers come back in list order") {
+        guard store.wallpapers.count >= 3 else { return true }
+        let wanted = Array(store.wallpapers.prefix(3))
+        store.selectAll(wanted)
+        return store.selectedWallpapers(from: store.wallpapers).map(\.id) == wanted.map(\.id)
+    }
+    await v.checkAsync("Bulk favourite saves every selected wallpaper at once") {
+        guard store.wallpapers.count >= 3 else { return true }
+        let wanted = Array(store.wallpapers.prefix(3))
+        store.selectAll(wanted)
+        let before = store.favorites.count
+        store.favoriteSelected(from: store.wallpapers)
+        let saved = wanted.allSatisfy { store.isFavorite($0) }
+        let grew = store.favorites.count >= before
+
+        // Put the database back.
+        store.favoriteSelected(from: store.wallpapers, favorited: false)
+        let removed = wanted.allSatisfy { !store.isFavorite($0) }
+        return saved && grew && removed
+    }
+    v.check("Bulk filing puts the selection in a collection") {
+        guard store.wallpapers.count >= 2 else { return true }
+        store.createCollection(named: "Verify bulk")
+        guard let collection = store.collections.first(where: { $0.name == "Verify bulk" })
+        else { return false }
+        let wanted = Array(store.wallpapers.prefix(2))
+        store.selectAll(wanted)
+        store.addSelectedToCollection(collection, from: store.wallpapers)
+
+        let filed = store.collections.first { $0.id == collection.id }?.wallpapers.count ?? 0
+        store.deleteCollection(collection)
+        return filed == wanted.count
+    }
+    await v.checkAsync("Bulk download enqueues every selection in one call") {
+        guard store.wallpapers.count >= 2 else { return true }
+        let wanted = Array(store.wallpapers.suffix(2))
+        store.selectAll(wanted)
+        let before = store.downloads.count
+        store.downloadSelected(from: store.wallpapers)
+        for _ in 0..<80 where store.downloads.count < before + wanted.count {
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+        let queued = store.downloads.count >= before + wanted.count
+        store.setSelecting(false)
+        return queued
+    }
+    v.check("Bulk actions ignore an empty selection") {
+        store.setSelecting(true)
+        store.clearSelection()
+        let before = store.downloads.count
+        store.downloadSelected(from: store.wallpapers)
+        store.favoriteSelected(from: store.wallpapers)
+        store.setSelecting(false)
+        return store.downloads.count == before
     }
 
     v.section("Fit to display")

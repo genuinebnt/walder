@@ -484,6 +484,100 @@ final class Store {
         }
     }
 
+    // MARK: Selection
+    //
+    // Bulk actions run through the core in one transaction rather than a call
+    // per wallpaper, so filing a page of results is one commit, not twenty-four.
+
+    /// True while the grid is in select mode; tiles then select rather than open.
+    var isSelecting = false
+    /// Ids of the selected wallpapers.
+    var selected: Set<String> = []
+
+    var selectionCount: Int { selected.count }
+
+    @MainActor
+    func setSelecting(_ on: Bool) {
+        withAnimation(Tokens.quick) {
+            isSelecting = on
+            if !on { selected.removeAll() }
+        }
+    }
+
+    func isSelected(_ wallpaper: Wallpaper) -> Bool { selected.contains(wallpaper.id) }
+
+    @MainActor
+    func toggleSelection(_ wallpaper: Wallpaper) {
+        withAnimation(Tokens.quick) {
+            if selected.contains(wallpaper.id) {
+                selected.remove(wallpaper.id)
+            } else {
+                selected.insert(wallpaper.id)
+                known[wallpaper.id] = wallpaper
+            }
+        }
+    }
+
+    @MainActor
+    func selectAll(_ wallpapers: [Wallpaper]) {
+        remember(wallpapers)
+        withAnimation(Tokens.quick) { selected = Set(wallpapers.map(\.id)) }
+    }
+
+    @MainActor
+    func clearSelection() {
+        withAnimation(Tokens.quick) { selected.removeAll() }
+    }
+
+    /// The selected wallpapers, in the order they appear in `list`.
+    func selectedWallpapers(from list: [Wallpaper]) -> [Wallpaper] {
+        let inList = list.filter { selected.contains($0.id) }
+        guard inList.count < selected.count else { return inList }
+        // Something selected in another pane is still worth acting on.
+        let missing = selected.subtracting(inList.map(\.id))
+        return inList + missing.compactMap { known[$0] }
+    }
+
+    @MainActor
+    func downloadSelected(from list: [Wallpaper]) {
+        let picked = selectedWallpapers(from: list)
+        guard !picked.isEmpty else { return }
+        remember(picked)
+        let items = picked
+            .filter { wallpaper in !downloads.contains { $0.wallpaperId == wallpaper.id } }
+            .map { (id: $0.id, url: $0.path.absoluteString, filename: $0.filename) }
+        guard !items.isEmpty else { return }
+        Task {
+            do {
+                try await LumenCore.shared.download(items)
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    @MainActor
+    func favoriteSelected(from list: [Wallpaper], favorited: Bool = true) {
+        let picked = selectedWallpapers(from: list)
+        guard !picked.isEmpty else { return }
+        let changed = LumenCore.shared.setFavorites(ids: picked.map(\.id), favorited: favorited)
+        if changed == 0 && favorited {
+            errorMessage = "Those wallpapers are already saved."
+        }
+        reloadFavorites()
+    }
+
+    @MainActor
+    func addSelectedToCollection(_ collection: Collection, from list: [Wallpaper]) {
+        let picked = selectedWallpapers(from: list)
+        guard !picked.isEmpty else { return }
+        let changed = LumenCore.shared.addToCollection(id: collection.id, ids: picked.map(\.id))
+        if changed == 0 {
+            errorMessage = "Nothing was added to \(collection.name)."
+        }
+        reloadCollections()
+    }
+
     // MARK: Fitting
 
     /// How this wallpaper sits on a display, in that display's real pixels.

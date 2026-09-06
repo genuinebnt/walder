@@ -218,6 +218,142 @@ impl Database {
         Ok(())
     }
 
+    /// Bookmarks several wallpapers in one transaction.
+    ///
+    /// Bulk actions over a page of results would otherwise be one commit per
+    /// wallpaper. Ids with no cached wallpaper are skipped, and the count of
+    /// what was actually written comes back.
+    pub fn add_bookmarks_for(&self, wallpaper_ids: &[String]) -> wallsetter_core::Result<usize> {
+        if wallpaper_ids.is_empty() {
+            return Ok(0);
+        }
+        let mut conn = self
+            .pool
+            .get()
+            .map_err(|e| WallsetterError::Database(e.to_string()))?;
+        let transaction = conn
+            .transaction()
+            .map_err(|e| WallsetterError::Database(e.to_string()))?;
+
+        let mut written = 0;
+        {
+            let mut lookup = transaction
+                .prepare_cached("SELECT data FROM wallpapers WHERE id = ?1")
+                .map_err(|e| WallsetterError::Database(e.to_string()))?;
+            let mut exists = transaction
+                .prepare_cached("SELECT COUNT(1) FROM bookmarks WHERE wallpaper_id = ?1")
+                .map_err(|e| WallsetterError::Database(e.to_string()))?;
+            let mut insert = transaction
+                .prepare_cached(
+                    "INSERT OR REPLACE INTO bookmarks (
+                        id, wallpaper_id, provider, folder_id, added_at, thumbnail_url,
+                        resolution_width, resolution_height
+                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                )
+                .map_err(|e| WallsetterError::Database(e.to_string()))?;
+
+            for wallpaper_id in wallpaper_ids {
+                let already: i64 = exists
+                    .query_row([wallpaper_id], |row| row.get(0))
+                    .map_err(|e| WallsetterError::Database(e.to_string()))?;
+                if already > 0 {
+                    continue;
+                }
+                let json: Option<String> = lookup
+                    .query_row([wallpaper_id], |row| row.get(0))
+                    .optional()
+                    .map_err(|e| WallsetterError::Database(e.to_string()))?;
+                let Some(json) = json else { continue };
+                let Ok(wallpaper) = serde_json::from_str::<Wallpaper>(&json) else {
+                    continue;
+                };
+                let bookmark = Bookmark::new(&wallpaper, None);
+                insert
+                    .execute((
+                        bookmark.id.to_string(),
+                        &bookmark.wallpaper_id,
+                        bookmark.provider.to_string(),
+                        bookmark.folder_id.map(|id| id.to_string()),
+                        bookmark.added_at.to_rfc3339(),
+                        &bookmark.thumbnail_url,
+                        bookmark.resolution.width,
+                        bookmark.resolution.height,
+                    ))
+                    .map_err(|e| WallsetterError::Database(e.to_string()))?;
+                written += 1;
+            }
+        }
+        transaction
+            .commit()
+            .map_err(|e| WallsetterError::Database(e.to_string()))?;
+        Ok(written)
+    }
+
+    /// Removes bookmarks for several wallpapers in one transaction.
+    pub fn remove_bookmarks_for(&self, wallpaper_ids: &[String]) -> wallsetter_core::Result<usize> {
+        if wallpaper_ids.is_empty() {
+            return Ok(0);
+        }
+        let mut conn = self
+            .pool
+            .get()
+            .map_err(|e| WallsetterError::Database(e.to_string()))?;
+        let transaction = conn
+            .transaction()
+            .map_err(|e| WallsetterError::Database(e.to_string()))?;
+        let mut removed = 0;
+        {
+            let mut stmt = transaction
+                .prepare_cached("DELETE FROM bookmarks WHERE wallpaper_id = ?1")
+                .map_err(|e| WallsetterError::Database(e.to_string()))?;
+            for wallpaper_id in wallpaper_ids {
+                removed += stmt
+                    .execute([wallpaper_id])
+                    .map_err(|e| WallsetterError::Database(e.to_string()))?;
+            }
+        }
+        transaction
+            .commit()
+            .map_err(|e| WallsetterError::Database(e.to_string()))?;
+        Ok(removed)
+    }
+
+    /// Files several wallpapers into a collection in one transaction.
+    pub fn add_many_to_collection(
+        &self,
+        collection_id: Uuid,
+        wallpaper_ids: &[String],
+    ) -> wallsetter_core::Result<usize> {
+        if wallpaper_ids.is_empty() {
+            return Ok(0);
+        }
+        let mut conn = self
+            .pool
+            .get()
+            .map_err(|e| WallsetterError::Database(e.to_string()))?;
+        let transaction = conn
+            .transaction()
+            .map_err(|e| WallsetterError::Database(e.to_string()))?;
+        let mut filed = 0;
+        {
+            let mut stmt = transaction
+                .prepare_cached(
+                    "INSERT OR IGNORE INTO collection_items (collection_id, wallpaper_id)
+                     SELECT ?1, id FROM wallpapers WHERE id = ?2",
+                )
+                .map_err(|e| WallsetterError::Database(e.to_string()))?;
+            for wallpaper_id in wallpaper_ids {
+                filed += stmt
+                    .execute((collection_id.to_string(), wallpaper_id))
+                    .map_err(|e| WallsetterError::Database(e.to_string()))?;
+            }
+        }
+        transaction
+            .commit()
+            .map_err(|e| WallsetterError::Database(e.to_string()))?;
+        Ok(filed)
+    }
+
     pub fn remove_bookmark(&self, id: Uuid) -> wallsetter_core::Result<()> {
         let conn = self
             .pool

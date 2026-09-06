@@ -70,7 +70,12 @@ struct RootView: View {
                 .toolbar { toolbar }
                 .background(.background.opacity(0.35))
                 .background(.ultraThinMaterial)     // vibrancy behind the content pane
-                .safeAreaInset(edge: .bottom, spacing: 0) { statusBar }
+                .safeAreaInset(edge: .bottom, spacing: 0) {
+                    VStack(spacing: 0) {
+                        if store.isSelecting { selectionBar }
+                        statusBar
+                    }
+                }
                 .overlay(alignment: .top) { errorBanner }
         }
         .background(WindowBackdrop(wallpaper: store.current))
@@ -80,8 +85,10 @@ struct RootView: View {
             Task { await store.search() }
         }
         .onChange(of: section) { _, new in
-            // Picking a sidebar item means leaving whatever was in focus.
+            // Picking a sidebar item means leaving whatever was in focus, and
+            // a selection made against a list you can no longer see.
             if store.focus != nil { store.closeFocus() }
+            if store.isSelecting { store.setSelecting(false) }
             // Toplist is the same grid with a different sort — ask the core for it.
             guard new == .toplist, store.filters.sorting != .toplist else { return }
             store.filters.sorting = .toplist
@@ -190,6 +197,15 @@ struct RootView: View {
                 .fixedSize()
             }
             ToolbarItem {
+                Button {
+                    store.setSelecting(!store.isSelecting)
+                } label: {
+                    Label("Select", systemImage: store.isSelecting
+                          ? "checkmark.circle.fill" : "checkmark.circle")
+                }
+                .help("Select several wallpapers to download or save at once")
+            }
+            ToolbarItem {
                 Button { showFilters.toggle() } label: {
                     Label("Filters", systemImage: "line.3.horizontal.decrease.circle")
                         .badge(store.filters.activeCount)
@@ -233,6 +249,65 @@ struct RootView: View {
             .padding(Tokens.s3)
             .transition(.move(edge: .top).combined(with: .opacity))
         }
+    }
+
+    /// What you can do with a selection. Sits above the status bar so it does
+    /// not move the grid when it appears.
+    private var selectionBar: some View {
+        HStack(spacing: Tokens.s2) {
+            Text(store.selectionCount == 0
+                 ? "Select wallpapers"
+                 : "\(store.selectionCount) selected")
+                .font(.system(size: 12, weight: .medium))
+                .frame(minWidth: 96, alignment: .leading)
+
+            Button("Select All") { store.selectAll(viewerItems) }
+                .keyboardShortcut("a", modifiers: .command)
+            Button("Deselect") { store.clearSelection() }
+                .disabled(store.selectionCount == 0)
+
+            Divider().frame(height: 16)
+
+            Button {
+                store.downloadSelected(from: viewerItems)
+            } label: {
+                Label("Download", systemImage: "arrow.down.circle")
+            }
+            .disabled(store.selectionCount == 0)
+
+            Button {
+                store.favoriteSelected(from: viewerItems)
+            } label: {
+                Label("Favorite", systemImage: "heart")
+            }
+            .disabled(store.selectionCount == 0)
+
+            if !store.collections.isEmpty {
+                Menu {
+                    ForEach(store.collections) { collection in
+                        Button(collection.name) {
+                            store.addSelectedToCollection(collection, from: viewerItems)
+                        }
+                    }
+                } label: {
+                    Label("Add to Collection", systemImage: "rectangle.stack.badge.plus")
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+                .disabled(store.selectionCount == 0)
+            }
+
+            Spacer()
+
+            Button("Done") { store.setSelecting(false) }
+                .keyboardShortcut(.escape, modifiers: [])
+        }
+        .controlSize(.small)
+        .padding(.horizontal, Tokens.s3)
+        .frame(height: 34)
+        .background(.bar)
+        .overlay(alignment: .top) { Divider() }
+        .transition(.move(edge: .bottom).combined(with: .opacity))
     }
 
     private var statusBar: some View {

@@ -124,6 +124,33 @@ final class LumenCore: @unchecked Sendable {
         try await call(TagInfo.self) { lumen_tag_info(UInt64(id)) }
     }
 
+    // MARK: Bulk actions
+
+    /// Returns how many rows actually changed.
+    @discardableResult
+    func setFavorites(ids: [String], favorited: Bool) -> Int {
+        let reply = Self.takeString(
+            lumen_favorites_set_many(Self.json(["ids": ids, "favorited": favorited])))
+        struct Changed: Decodable { let changed: Int }
+        return decodeSync(Changed.self, reply)?.changed ?? 0
+    }
+
+    @discardableResult
+    func addToCollection(id collectionID: String, ids: [String]) -> Int {
+        let reply = Self.takeString(
+            lumen_collection_add_many(Self.json(["collectionId": collectionID, "ids": ids])))
+        struct Changed: Decodable { let changed: Int }
+        return decodeSync(Changed.self, reply)?.changed ?? 0
+    }
+
+    /// Enqueues a whole selection; the core's semaphore bounds concurrency.
+    func download(_ items: [(id: String, url: String, filename: String)]) async throws {
+        let payload = items.map { ["id": $0.id, "url": $0.url, "filename": $0.filename] }
+        _ = try await call(Queued.self) { lumen_download_many(Self.json(["items": payload])) }
+    }
+
+    private struct Queued: Decodable { let queued: Int }
+
     // MARK: Collections
 
     func collections() -> [Collection] {

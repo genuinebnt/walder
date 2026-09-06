@@ -176,7 +176,13 @@ struct FocusView: View {
                       theme: theme,
                       isHovered: false,
                       isFavorite: store.isFavorite(wallpaper),
+                      isSelecting: store.isSelecting,
+                      isSelected: store.isSelected(wallpaper),
                       open: {
+                          if store.isSelecting {
+                              store.toggleSelection(wallpaper)
+                              return
+                          }
                           withAnimation(Tokens.normal) { selection = wallpaper }
                           Task { await store.loadDetails(for: wallpaper) }
                       })
