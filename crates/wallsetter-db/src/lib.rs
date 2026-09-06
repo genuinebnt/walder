@@ -201,6 +201,24 @@ impl Database {
         )
         .map_err(|e| WallsetterError::Database(e.to_string()))?;
 
+        // Tag radar: a saved query that is re-run in the background, with the
+        // newest wallpaper it has already reported so a match is only ever
+        // announced once.
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS radar_subscriptions (
+                id TEXT PRIMARY KEY,
+                query TEXT NOT NULL UNIQUE,
+                label TEXT NOT NULL,
+                min_favorites INTEGER NOT NULL DEFAULT 0,
+                last_seen_id TEXT,
+                last_checked DATETIME,
+                unseen INTEGER NOT NULL DEFAULT 0,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )",
+            [],
+        )
+        .map_err(|e| WallsetterError::Database(e.to_string()))?;
+
         // Indices for the columns the app actually filters and joins on.
         // Without them every favourite check is a full scan of bookmarks.
         conn.execute_batch(
@@ -1496,6 +1514,139 @@ impl Database {
     }
 }
 
+impl Database {
+    // ──────────────────────────────────────────────
+    // Tag radar
+    // ──────────────────────────────────────────────
+
+    /// Subscribes to a query. Subscribing twice to the same one updates the
+    /// threshold rather than adding a duplicate.
+    pub fn add_subscription(
+        &self,
+        query: &str,
+        label: &str,
+        min_favorites: u32,
+    ) -> wallsetter_core::Result<Uuid> {
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| WallsetterError::Database(e.to_string()))?;
+
+        let existing: Option<String> = conn
+            .query_row(
+                "SELECT id FROM radar_subscriptions WHERE query = ?1",
+                [query],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|e| WallsetterError::Database(e.to_string()))?;
+
+        if let Some(id) = existing {
+            conn.execute(
+                "UPDATE radar_subscriptions SET label = ?2, min_favorites = ?3 WHERE id = ?1",
+                (&id, label, min_favorites),
+            )
+            .map_err(|e| WallsetterError::Database(e.to_string()))?;
+            return Uuid::parse_str(&id).map_err(|e| WallsetterError::Database(e.to_string()));
+        }
+
+        let id = Uuid::new_v4();
+        conn.execute(
+            "INSERT INTO radar_subscriptions (id, query, label, min_favorites)
+             VALUES (?1, ?2, ?3, ?4)",
+            (id.to_string(), query, label, min_favorites),
+        )
+        .map_err(|e| WallsetterError::Database(e.to_string()))?;
+        Ok(id)
+    }
+
+    /// `(id, query, label, min_favorites, last_seen_id, unseen)`.
+    pub fn subscriptions(
+        &self,
+    ) -> wallsetter_core::Result<Vec<(Uuid, String, String, u32, Option<String>, u32)>> {
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| WallsetterError::Database(e.to_string()))?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, query, label, min_favorites, last_seen_id, unseen
+                 FROM radar_subscriptions ORDER BY created_at",
+            )
+            .map_err(|e| WallsetterError::Database(e.to_string()))?;
+
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, u32>(3)?,
+                    row.get::<_, Option<String>>(4)?,
+                    row.get::<_, u32>(5)?,
+                ))
+            })
+            .map_err(|e| WallsetterError::Database(e.to_string()))?;
+
+        let mut found = Vec::new();
+        for row in rows {
+            let (id, query, label, threshold, last_seen, unseen) =
+                row.map_err(|e| WallsetterError::Database(e.to_string()))?;
+            if let Ok(uuid) = Uuid::parse_str(&id) {
+                found.push((uuid, query, label, threshold, last_seen, unseen));
+            }
+        }
+        Ok(found)
+    }
+
+    pub fn remove_subscription(&self, id: Uuid) -> wallsetter_core::Result<()> {
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| WallsetterError::Database(e.to_string()))?;
+        conn.execute("DELETE FROM radar_subscriptions WHERE id = ?1", [id.to_string()])
+            .map_err(|e| WallsetterError::Database(e.to_string()))?;
+        Ok(())
+    }
+
+    /// Records what the last check saw. `unseen` accumulates until the user
+    /// looks, so a run that finds nothing does not clear an earlier find.
+    pub fn record_subscription_check(
+        &self,
+        id: Uuid,
+        newest_id: Option<&str>,
+        new_matches: u32,
+    ) -> wallsetter_core::Result<()> {
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| WallsetterError::Database(e.to_string()))?;
+        conn.execute(
+            "UPDATE radar_subscriptions
+             SET last_seen_id = COALESCE(?2, last_seen_id),
+                 last_checked = CURRENT_TIMESTAMP,
+                 unseen = unseen + ?3
+             WHERE id = ?1",
+            (id.to_string(), newest_id, new_matches),
+        )
+        .map_err(|e| WallsetterError::Database(e.to_string()))?;
+        Ok(())
+    }
+
+    pub fn clear_subscription_unseen(&self, id: Uuid) -> wallsetter_core::Result<()> {
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| WallsetterError::Database(e.to_string()))?;
+        conn.execute(
+            "UPDATE radar_subscriptions SET unseen = 0 WHERE id = ?1",
+            [id.to_string()],
+        )
+        .map_err(|e| WallsetterError::Database(e.to_string()))?;
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1787,6 +1938,45 @@ mod tests {
         }
         // Trimmed on write, so it cannot grow without limit.
         assert!(db.wallpaper_history(500).expect("read").len() <= 200);
+    }
+
+    #[test]
+    fn subscribing_twice_updates_rather_than_duplicating() {
+        let (db, _dir) = temp_db();
+        let first = db.add_subscription("id:31", "forest", 0).expect("subscribe");
+        let second = db.add_subscription("id:31", "forest", 500).expect("re-subscribe");
+        assert_eq!(first, second);
+
+        let all = db.subscriptions().expect("list");
+        assert_eq!(all.len(), 1);
+        assert_eq!(all[0].3, 500, "the threshold is updated");
+    }
+
+    #[test]
+    fn unseen_accumulates_until_looked_at() {
+        let (db, _dir) = temp_db();
+        let id = db.add_subscription("@someone", "someone", 0).expect("subscribe");
+
+        db.record_subscription_check(id, Some("aaa"), 3).expect("check");
+        // A later check finding nothing must not clear an earlier find.
+        db.record_subscription_check(id, Some("aaa"), 0).expect("check");
+        assert_eq!(db.subscriptions().expect("list")[0].5, 3);
+
+        db.record_subscription_check(id, Some("bbb"), 2).expect("check");
+        assert_eq!(db.subscriptions().expect("list")[0].5, 5);
+
+        db.clear_subscription_unseen(id).expect("seen");
+        assert_eq!(db.subscriptions().expect("list")[0].5, 0);
+    }
+
+    #[test]
+    fn the_last_seen_marker_is_kept_when_a_check_finds_nothing() {
+        let (db, _dir) = temp_db();
+        let id = db.add_subscription("id:9", "nine", 0).expect("subscribe");
+        db.record_subscription_check(id, Some("aaa"), 1).expect("check");
+        // Passing None must not erase the marker, or everything looks new again.
+        db.record_subscription_check(id, None, 0).expect("check");
+        assert_eq!(db.subscriptions().expect("list")[0].4.as_deref(), Some("aaa"));
     }
 }
 

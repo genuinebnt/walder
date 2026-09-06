@@ -90,7 +90,21 @@ struct RootView: View {
         .onReceive(NotificationCenter.default.publisher(for: .lumenUndo)) { _ in
             store.undoWallpaper()
         }
-        .onChange(of: section) { _, new in
+        .onReceive(NotificationCenter.default.publisher(for: .lumenBack)) { _ in
+            guard let previous = store.goBack(from: here) else { return }
+            apply(previous)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .lumenForward)) { _ in
+            guard let next = store.goForward(from: here) else { return }
+            apply(next)
+        }
+        // Opening an author or tag page is a place too, not just a pane change.
+        .onChange(of: store.focus) { old, new in
+            guard old == nil, new != nil else { return }
+            store.recordDestination(.init(pane: section.rawValue, focus: nil))
+        }
+        .onChange(of: section) { old, new in
+            store.recordDestination(.init(pane: old.rawValue, focus: store.focus))
             // Picking a sidebar item means leaving whatever was in focus, and
             // a selection made against a list you can no longer see.
             if store.focus != nil { store.closeFocus() }
@@ -100,6 +114,16 @@ struct RootView: View {
             store.filters.sorting = .toplist
             Task { await store.search() }
         }
+    }
+
+    /// Where the app is right now, for the navigation stack.
+    private var here: Store.Destination {
+        .init(pane: section.rawValue, focus: store.focus)
+    }
+
+    private func apply(_ destination: Store.Destination) {
+        guard let pane = Section(rawValue: destination.pane) else { return }
+        withAnimation(Tokens.normal) { section = pane }
     }
 
     /// What ← and → step through, which depends on the pane in view.
@@ -123,7 +147,8 @@ struct RootView: View {
             }
             SwiftUI.Section("System") {
                 row(.displays, badge: store.displays.count)
-                row(.schedule); row(.settings)
+                row(.schedule, badge: store.unseenMatches)
+                row(.settings)
             }
         }
         .listStyle(.sidebar)

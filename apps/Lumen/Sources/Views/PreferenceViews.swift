@@ -38,6 +38,57 @@ struct ScheduleView: View {
                 }
             }
 
+            SwiftUI.Section("Tag Radar") {
+                Toggle("Watch saved searches in the background", isOn: Binding(
+                    get: { store.radarEnabled }, set: { store.radarEnabled = $0 }))
+                Picker("Check every", selection: Binding(
+                    get: { store.radarMinutes }, set: { store.radarMinutes = $0 })) {
+                    Text("30 minutes").tag(30)
+                    Text("Hourly").tag(60)
+                    Text("Every 3 hours").tag(180)
+                    Text("Daily").tag(1440)
+                }
+                .disabled(!store.radarEnabled)
+
+                if store.subscriptions.isEmpty {
+                    Text("Nothing watched yet. Open a tag or uploader and choose Watch.")
+                        .font(.system(size: 11.5)).foregroundStyle(.secondary)
+                } else {
+                    ForEach(store.subscriptions) { subscription in
+                        HStack(spacing: Tokens.s3) {
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(subscription.label).font(.system(size: 12)).lineLimit(1)
+                                Text(subscription.minFavorites > 0
+                                     ? "\(subscription.query) · at least \(subscription.minFavorites) favourites"
+                                     : subscription.query)
+                                    .font(.caption2Mono).foregroundStyle(.secondary).lineLimit(1)
+                            }
+                            Spacer()
+                            if subscription.unseen > 0 {
+                                Chip(text: "\(subscription.unseen) new", tint: Tokens.accent)
+                            }
+                            Button("Open") { store.openSubscription(subscription) }
+                                .controlSize(.small)
+                            Button {
+                                store.unsubscribe(subscription)
+                            } label: {
+                                Image(systemName: "trash").font(.system(size: 11))
+                            }
+                            .buttonStyle(.plain)
+                            .foregroundStyle(.secondary)
+                        }
+                    }
+
+                    HStack {
+                        Button("Check Now") { Task { await store.checkRadar() } }
+                            .controlSize(.small)
+                            .disabled(store.isCheckingRadar)
+                        if store.isCheckingRadar { ProgressView().controlSize(.small) }
+                        Spacer()
+                    }
+                }
+            }
+
             SwiftUI.Section("Recently Set") {
                 if store.history.isEmpty {
                     Text("Nothing yet. Wallpapers you set are listed here.")

@@ -666,6 +666,74 @@ func run() async -> Int32 {
         return store.downloads.count == before
     }
 
+    v.section("Navigation history")
+    v.check("Back and forward walk the panes") {
+        let browse = Store.Destination(pane: "browse", focus: nil)
+        let downloads = Store.Destination(pane: "downloads", focus: nil)
+        store.recordDestination(browse)
+        store.recordDestination(downloads)
+        guard store.canGoBack else { return false }
+
+        let settings = Store.Destination(pane: "settings", focus: nil)
+        guard store.goBack(from: settings)?.pane == "downloads" else { return false }
+        guard store.canGoForward else { return false }
+        return store.goForward(from: downloads)?.pane == "settings"
+    }
+    v.check("Going somewhere new clears the forward stack") {
+        // Browser behaviour: a new destination discards what you stepped back from.
+        _ = store.goBack(from: .init(pane: "settings", focus: nil))
+        store.recordDestination(.init(pane: "favorites", focus: nil))
+        return !store.canGoForward
+    }
+    v.check("The same place twice is not recorded twice") {
+        // Start from a place that is definitely not already on top, or the
+        // first record is legitimately deduped and the count never moves.
+        store.recordDestination(.init(pane: "collections", focus: nil))
+        let before = store.backStack.count
+        let here = Store.Destination(pane: "displays", focus: nil)
+        store.recordDestination(here)
+        store.recordDestination(here)
+        return store.backStack.count == before + 1
+    }
+
+    v.section("Tag radar")
+    v.check("Subscribing is idempotent and updates the threshold") {
+        store.subscribe(to: "id:31", label: "Verify tag", minFavorites: 0)
+        let after = store.subscriptions.filter { $0.query == "id:31" }
+        store.subscribe(to: "id:31", label: "Verify tag", minFavorites: 250)
+        let updated = store.subscriptions.filter { $0.query == "id:31" }
+        return after.count == 1 && updated.count == 1 && updated[0].minFavorites == 250
+    }
+    v.check("A blank query is rejected") {
+        let before = store.subscriptions.count
+        store.subscribe(to: "   ", label: "nothing")
+        return store.subscriptions.count == before
+    }
+    await v.checkAPIAsync("A check runs the saved searches") { () -> (Bool, String?) in
+        guard store.subscriptions.contains(where: { $0.query == "id:31" }) else { return (true, nil) }
+        do {
+            // Only subscriptions with something new come back, so an empty
+            // result is a valid answer — this asserts it completes.
+            _ = try await LumenCore.shared.checkRadar()
+            return (true, nil)
+        } catch {
+            return (false, error.localizedDescription)
+        }
+    }
+    v.check("Opening a subscription searches it and clears the badge") {
+        guard let subscription = store.subscriptions.first(where: { $0.query == "id:31" })
+        else { return true }
+        store.openSubscription(subscription)
+        let cleared = store.subscriptions.first { $0.id == subscription.id }?.unseen == 0
+        return cleared && store.filters.query == "id:31"
+    }
+    v.check("Unsubscribing removes it") {
+        guard let subscription = store.subscriptions.first(where: { $0.query == "id:31" })
+        else { return true }
+        store.unsubscribe(subscription)
+        return !store.subscriptions.contains { $0.query == "id:31" }
+    }
+
     v.section("Spotlight metadata")
     v.check("Tags and origin are written where Finder and Spotlight read them") {
         let url = FileManager.default.temporaryDirectory

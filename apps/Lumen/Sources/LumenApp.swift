@@ -14,7 +14,11 @@ struct LumenApp: App {
                 .frame(minWidth: 880, minHeight: 560)
                 .task {
                     store.boot()
+                    RadarNotifier.requestPermissionIfNeeded()
                     await store.search()
+                    // One check on launch, so a subscription is useful before
+                    // the first timer fires.
+                    await store.checkRadar()
                 }
                 // The desktop follows light and dark like the rest of the
                 // system, when a pair has been set.
@@ -44,6 +48,12 @@ struct LumenApp: App {
 struct LumenCommands: Commands {
     var body: some Commands {
         CommandGroup(replacing: .newItem) { }
+        CommandGroup(after: .sidebar) {
+            Button("Back") { NotificationCenter.default.post(name: .lumenBack, object: nil) }
+                .keyboardShortcut("[", modifiers: .command)
+            Button("Forward") { NotificationCenter.default.post(name: .lumenForward, object: nil) }
+                .keyboardShortcut("]", modifiers: .command)
+        }
         CommandMenu("Wallpaper") {
             Button("Shuffle Now") { NotificationCenter.default.post(name: .lumenShuffle, object: nil) }
                 .keyboardShortcut("r", modifiers: [.command, .shift])
@@ -60,4 +70,6 @@ extension Notification.Name {
     static let lumenShuffle = Notification.Name("lumen.shuffle")
     static let lumenReload = Notification.Name("lumen.reload")
     static let lumenUndo = Notification.Name("lumen.undo")
+    static let lumenBack = Notification.Name("lumen.back")
+    static let lumenForward = Notification.Name("lumen.forward")
 }

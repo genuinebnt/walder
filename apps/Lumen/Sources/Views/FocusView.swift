@@ -74,6 +74,20 @@ struct FocusView: View {
 
                 Spacer()
 
+                // Watching is offered where you already are: on the tag or
+                // uploader you are looking at.
+                if let query = watchQuery(for: focus) {
+                    Button {
+                        store.subscribe(to: query, label: focus.title)
+                    } label: {
+                        Label(isWatched(query) ? "Watching" : "Watch",
+                              systemImage: isWatched(query) ? "bell.fill" : "bell")
+                    }
+                    .controlSize(.small)
+                    .disabled(isWatched(query))
+                    .help("Notice new wallpapers matching this in the background")
+                }
+
                 if case .uploader(let name) = focus {
                     Link("Open on Wallhaven",
                          destination: URL(string: "https://wallhaven.cc/user/\(name)")!)
@@ -82,6 +96,20 @@ struct FocusView: View {
             }
             .padding(.bottom, Tokens.s1)
         }
+    }
+
+    /// The query a subscription would run. A collection is a snapshot rather
+    /// than a search, so it is not watchable.
+    private func watchQuery(for focus: Store.Focus) -> String? {
+        switch focus {
+        case .uploader(let name): "@\(name)"
+        case .tag(let ref): "id:\(ref.id)"
+        case .uploaderCollection: nil
+        }
+    }
+
+    private func isWatched(_ query: String) -> Bool {
+        store.subscriptions.contains { $0.query == query }
     }
 
     private func symbol(for focus: Store.Focus) -> String {

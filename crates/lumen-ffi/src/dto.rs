@@ -401,6 +401,18 @@ pub struct HistoryEntryDto {
     pub set_at: String,
 }
 
+/// A saved search that is re-run in the background.
+#[derive(Debug, Clone, Serialize)]
+pub struct SubscriptionDto {
+    pub id: String,
+    pub query: String,
+    pub label: String,
+    #[serde(rename = "minFavorites")]
+    pub min_favorites: u32,
+    /// Matches found since the user last looked.
+    pub unseen: u32,
+}
+
 /// Every callback payload is this envelope, so Swift decodes one shape.
 #[derive(Debug, Clone, Serialize)]
 pub struct Envelope<T: Serialize> {

@@ -45,6 +45,13 @@ char *lumen_collection_create(const char *name);
 char *lumen_collection_delete(const char *id);
 char *lumen_collection_set_member(const char *json);
 
+// Tag radar
+char    *lumen_radar_subscribe(const char *json);
+char    *lumen_radar_list(void);
+char    *lumen_radar_remove(const char *id);
+char    *lumen_radar_mark_seen(const char *id);
+uint64_t lumen_radar_check(void);
+
 // Wallpaper history
 char *lumen_history_record(const char *json);
 char *lumen_history(uint32_t limit);

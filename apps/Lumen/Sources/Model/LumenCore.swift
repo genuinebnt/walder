@@ -129,6 +129,36 @@ final class LumenCore: @unchecked Sendable {
         Set(decodeSync([String].self, Self.takeString(lumen_downloaded_ids())) ?? [])
     }
 
+    // MARK: Tag radar
+
+    @discardableResult
+    func subscribe(query: String, label: String, minFavorites: Int) -> Bool {
+        let payload: [String: Any] = [
+            "query": query, "label": label, "minFavorites": minFavorites
+        ]
+        let reply = Self.takeString(lumen_radar_subscribe(Self.json(payload)))
+        struct Created: Decodable { let id: String }
+        return decodeSync(Created.self, reply) != nil
+    }
+
+    func subscriptions() -> [Subscription] {
+        decodeSync([Subscription].self, Self.takeString(lumen_radar_list())) ?? []
+    }
+
+    func unsubscribe(id: String) {
+        _ = id.withCString { Self.takeString(lumen_radar_remove($0)) }
+    }
+
+    func markSubscriptionSeen(id: String) {
+        _ = id.withCString { Self.takeString(lumen_radar_mark_seen($0)) }
+    }
+
+    /// Re-runs every subscription. Only subscriptions with something new
+    /// appear in the result.
+    func checkRadar() async throws -> [RadarResult] {
+        try await call([RadarResult].self) { lumen_radar_check() }
+    }
+
     // MARK: History
 
     func recordHistory(wallpaperID: String?, path: String, label: String) {

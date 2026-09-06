@@ -775,6 +775,168 @@ pub unsafe extern "C" fn lumen_collection_set_member(json: *const c_char) -> *mu
     }
 }
 
+// ── tag radar ─────────────────────────────────────────────────────────────
+
+/// Subscribes to a query, so new matches are noticed in the background.
+///
+/// `json`: `{ "query": String, "label": String, "minFavorites": Int }`
+///
+/// # Safety
+/// `json` must be NUL-terminated UTF-8, or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn lumen_radar_subscribe(json: *const c_char) -> *mut c_char {
+    let raw = unsafe { str_from(json) };
+    let Some(core) = core() else {
+        return to_c(err_json("radar", "core not initialised"));
+    };
+    let value: serde_json::Value = serde_json::from_str(&raw).unwrap_or(serde_json::Value::Null);
+    let query = value["query"].as_str().unwrap_or_default().trim().to_string();
+    if query.is_empty() {
+        return to_c(err_json("radar", "query is required"));
+    }
+    let label = value["label"].as_str().unwrap_or(&query).to_string();
+    let threshold = value["minFavorites"].as_u64().unwrap_or(0) as u32;
+
+    match core.db.add_subscription(&query, &label, threshold) {
+        Ok(id) => to_c(
+            serde_json::json!({ "ok": true, "kind": "radar", "data": { "id": id.to_string() } })
+                .to_string(),
+        ),
+        Err(e) => to_c(err_json("radar", e)),
+    }
+}
+
+/// Every subscription. Caller frees with [`lumen_string_free`].
+#[unsafe(no_mangle)]
+pub extern "C" fn lumen_radar_list() -> *mut c_char {
+    let Some(core) = core() else {
+        return to_c(err_json("radar", "core not initialised"));
+    };
+    match core.db.subscriptions() {
+        Ok(found) => {
+            let list: Vec<SubscriptionDto> = found
+                .into_iter()
+                .map(|(id, query, label, threshold, _, unseen)| SubscriptionDto {
+                    id: id.to_string(),
+                    query,
+                    label,
+                    min_favorites: threshold,
+                    unseen,
+                })
+                .collect();
+            to_c(serde_json::to_string(&Envelope::ok("radar", list)).unwrap_or_default())
+        }
+        Err(e) => to_c(err_json("radar", e)),
+    }
+}
+
+/// # Safety
+/// `id` must be NUL-terminated UTF-8, or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn lumen_radar_remove(id: *const c_char) -> *mut c_char {
+    let raw = unsafe { str_from(id) };
+    let Some(core) = core() else {
+        return to_c(err_json("radar", "core not initialised"));
+    };
+    let Ok(uuid) = uuid::Uuid::parse_str(raw.trim()) else {
+        return to_c(err_json("radar", "not a subscription id"));
+    };
+    match core.db.remove_subscription(uuid) {
+        Ok(()) => to_c(serde_json::json!({ "ok": true, "kind": "radar" }).to_string()),
+        Err(e) => to_c(err_json("radar", e)),
+    }
+}
+
+/// Marks a subscription as looked at.
+///
+/// # Safety
+/// `id` must be NUL-terminated UTF-8, or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn lumen_radar_mark_seen(id: *const c_char) -> *mut c_char {
+    let raw = unsafe { str_from(id) };
+    let Some(core) = core() else {
+        return to_c(err_json("radar", "core not initialised"));
+    };
+    let Ok(uuid) = uuid::Uuid::parse_str(raw.trim()) else {
+        return to_c(err_json("radar", "not a subscription id"));
+    };
+    match core.db.clear_subscription_unseen(uuid) {
+        Ok(()) => to_c(serde_json::json!({ "ok": true, "kind": "radar" }).to_string()),
+        Err(e) => to_c(err_json("radar", e)),
+    }
+}
+
+/// Re-runs every subscription and reports what is new.
+///
+/// Callback `kind: "radarResults"` with
+/// `[{ id, label, newMatches, wallpapers: [WallpaperDto] }]`.
+#[unsafe(no_mangle)]
+pub extern "C" fn lumen_radar_check() -> u64 {
+    let id = next_id();
+    let Some(core) = core() else {
+        emit(id, err_json("radarResults", "core not initialised"));
+        return id;
+    };
+
+    core.runtime.spawn(async move {
+        let subscriptions = match core.db.subscriptions() {
+            Ok(found) => found,
+            Err(e) => {
+                emit(id, err_json("radarResults", e));
+                return;
+            }
+        };
+
+        let mut report = Vec::new();
+        for (subscription_id, query, label, threshold, last_seen, _) in subscriptions {
+            let filters = SearchFilters {
+                query: Some(query.clone()),
+                categories: vec![Category::General, Category::Anime, Category::People],
+                purity: vec![Purity::Sfw],
+                // Newest first is what makes "since last time" meaningful.
+                sorting: Sorting::DateAdded,
+                order: SortOrder::Desc,
+                page: 1,
+                ..Default::default()
+            };
+
+            let client = core.provider.read().unwrap().clone();
+            let Ok(page) = client.search(&filters).await else { continue };
+
+            // Everything above the last wallpaper this subscription reported.
+            let fresh: Vec<_> = page
+                .wallpapers
+                .iter()
+                .take_while(|w| Some(&w.id) != last_seen.as_ref())
+                .filter(|w| w.favorites >= threshold as u64)
+                .collect();
+
+            let newest = page.wallpapers.first().map(|w| w.id.clone());
+            let _ = core.db.cache_wallpapers(&page.wallpapers);
+            let _ = core.db.record_subscription_check(
+                subscription_id,
+                newest.as_deref(),
+                fresh.len() as u32,
+            );
+
+            if !fresh.is_empty() {
+                report.push(serde_json::json!({
+                    "id": subscription_id.to_string(),
+                    "label": label,
+                    "newMatches": fresh.len(),
+                    "wallpapers": fresh.iter().map(|w| WallpaperDto::from(*w)).collect::<Vec<_>>(),
+                }));
+            }
+        }
+
+        emit(
+            id,
+            serde_json::json!({ "ok": true, "kind": "radarResults", "data": report }).to_string(),
+        );
+    });
+    id
+}
+
 // ── wallpaper history ─────────────────────────────────────────────────────
 
 /// Records what was just set, so it can be listed and undone.

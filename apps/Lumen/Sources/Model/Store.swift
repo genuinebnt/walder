@@ -105,6 +105,8 @@ final class Store {
         showPurityBorders = bool("showPurityBorders", default: true)
         pauseOnBattery = bool("pauseOnBattery", default: false)
         presets = Self.loadJSON([FilterPreset].self, "filterPresets", from: defaults) ?? []
+        radarMinutes = int("radarMinutes", default: 180)
+        radarEnabled = bool("radarEnabled", default: false)
         followsAppearance = bool("followsAppearance", default: false)
         lightWallpaper = Self.loadJSON(Wallpaper?.self, "lightWallpaper", from: defaults) ?? nil
         darkWallpaper = Self.loadJSON(Wallpaper?.self, "darkWallpaper", from: defaults) ?? nil
@@ -174,6 +176,8 @@ final class Store {
         refreshDownloadedIDs()
         reloadLibrary()
         reloadHistory()
+        reloadSubscriptions()
+        rearmRadar()
         rearmRotation()
     }
 
@@ -527,6 +531,163 @@ final class Store {
         Task {
             try? await Task.sleep(for: .seconds(2.5))
             withAnimation(Tokens.normal) { savedConfirmation = false }
+        }
+    }
+
+    // MARK: Tag radar
+    //
+    // Saved searches re-run on a timer. Notification Center is the nice
+    // delivery, but it needs permission that an ad-hoc signed build may not
+    // get — so the in-app badge is what the feature actually rests on.
+
+    var subscriptions: [Subscription] = []
+    var radarFindings: [RadarResult] = []
+    var isCheckingRadar = false
+    var radarMinutes: Int { didSet { save(radarMinutes, "radarMinutes"); rearmRadar() } }
+    var radarEnabled: Bool { didSet { save(radarEnabled, "radarEnabled"); rearmRadar() } }
+
+    /// Total matches waiting across every subscription.
+    var unseenMatches: Int { subscriptions.reduce(0) { $0 + $1.unseen } }
+
+    @ObservationIgnored private var radarTimer: Timer?
+
+    @MainActor
+    func reloadSubscriptions() {
+        guard coreReady else { return }
+        subscriptions = LumenCore.shared.subscriptions()
+    }
+
+    @MainActor
+    func subscribe(to query: String, label: String? = nil, minFavorites: Int = 0) {
+        let trimmed = query.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty else { return }
+        guard LumenCore.shared.subscribe(query: trimmed,
+                                         label: label ?? trimmed,
+                                         minFavorites: max(0, minFavorites)) else {
+            errorMessage = "Could not save that subscription."
+            return
+        }
+        reloadSubscriptions()
+        rearmRadar()
+    }
+
+    @MainActor
+    func unsubscribe(_ subscription: Subscription) {
+        LumenCore.shared.unsubscribe(id: subscription.id)
+        radarFindings.removeAll { $0.id == subscription.id }
+        reloadSubscriptions()
+    }
+
+    /// Opens a subscription's results as a search, and clears its badge.
+    @MainActor
+    func openSubscription(_ subscription: Subscription) {
+        LumenCore.shared.markSubscriptionSeen(id: subscription.id)
+        radarFindings.removeAll { $0.id == subscription.id }
+        reloadSubscriptions()
+
+        var next = SearchFilters()
+        next.query = subscription.query
+        next.sorting = .dateAdded
+        filters = next
+        Task { await search() }
+    }
+
+    @MainActor
+    func checkRadar() async {
+        guard coreReady, !subscriptions.isEmpty, !isCheckingRadar else { return }
+        isCheckingRadar = true
+        defer { isCheckingRadar = false }
+        do {
+            let found = try await LumenCore.shared.checkRadar()
+            radarFindings = found
+            reloadSubscriptions()
+            if !found.isEmpty { RadarNotifier.announce(found) }
+        } catch {
+            // A failed check is not worth interrupting the user for; the next
+            // one will try again.
+            radarFindings = []
+        }
+    }
+
+    /// Re-arms the background check. Every radar setting calls into this.
+    func rearmRadar() {
+        radarTimer?.invalidate()
+        radarTimer = nil
+        guard radarEnabled, !subscriptions.isEmpty else { return }
+
+        let interval = TimeInterval(max(radarMinutes, 15) * 60)
+        radarTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
+            Task { @MainActor in await self?.checkRadar() }
+        }
+    }
+
+    // MARK: Navigation history
+    //
+    // Where you have been, so ⌘[ and ⌘] work the way they do in a browser.
+    // A destination is a pane plus whatever was in focus, since an author page
+    // and the Browse pane behind it are different places.
+
+    struct Destination: Equatable {
+        let pane: String
+        let focus: Focus?
+    }
+
+    private(set) var backStack: [Destination] = []
+    private(set) var forwardStack: [Destination] = []
+    /// Set while a back or forward step is being applied, so restoring a
+    /// destination does not record itself as a new one.
+    @ObservationIgnored private var isNavigating = false
+
+    var canGoBack: Bool { !backStack.isEmpty }
+    var canGoForward: Bool { !forwardStack.isEmpty }
+
+    /// Records the place being left. Going somewhere new clears the forward
+    /// stack, as it does in every browser.
+    @MainActor
+    func recordDestination(_ leaving: Destination) {
+        guard !isNavigating else { return }
+        guard backStack.last != leaving else { return }
+        backStack.append(leaving)
+        if backStack.count > 50 { backStack.removeFirst() }
+        forwardStack.removeAll()
+    }
+
+    /// Returns the destination to restore, having pushed `current` forward.
+    @MainActor
+    func goBack(from current: Destination) -> Destination? {
+        guard let previous = backStack.popLast() else { return nil }
+        forwardStack.append(current)
+        isNavigating = true
+        defer { isNavigating = false }
+        applyFocus(previous.focus)
+        return previous
+    }
+
+    @MainActor
+    func goForward(from current: Destination) -> Destination? {
+        guard let next = forwardStack.popLast() else { return nil }
+        backStack.append(current)
+        isNavigating = true
+        defer { isNavigating = false }
+        applyFocus(next.focus)
+        return next
+    }
+
+    /// Restores the focused page a destination carries, reloading its results.
+    @MainActor
+    private func applyFocus(_ wanted: Focus?) {
+        guard let wanted else {
+            if focus != nil { closeFocus() }
+            return
+        }
+        guard focus != wanted else { return }
+        Task {
+            switch wanted {
+            case .uploader(let name): await showUploader(name)
+            case .tag(let ref): await showTag(ref)
+            case .uploaderCollection(let username, let collection):
+                await showUploaderCollection(collection, of: username)
+            }
         }
     }
 

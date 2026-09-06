@@ -424,6 +424,24 @@ struct HistoryEntry: Identifiable, Hashable, Decodable {
     }
 }
 
+/// A saved search that Lumen re-runs in the background.
+struct Subscription: Identifiable, Hashable, Decodable {
+    let id: String
+    let query: String
+    let label: String
+    let minFavorites: Int
+    /// Matches found since the last time this was looked at.
+    let unseen: Int
+}
+
+/// What one subscription turned up on a check.
+struct RadarResult: Identifiable, Decodable {
+    let id: String
+    let label: String
+    let newMatches: Int
+    let wallpapers: [Wallpaper]
+}
+
 /// Where a set applies. macOS gives each Space its own desktop picture, and
 /// `NSWorkspace` only ever writes the one you are looking at.
 enum WallpaperScope: String, Codable, CaseIterable, Identifiable {
