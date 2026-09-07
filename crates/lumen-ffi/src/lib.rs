@@ -778,6 +778,89 @@ pub unsafe extern "C" fn lumen_collection_set_member(json: *const c_char) -> *mu
     }
 }
 
+// ── crop rectangles ───────────────────────────────────────────────────────
+
+/// Saves a crop for one file on one display.
+///
+/// `json`: `{ "path": String, "display": String, "x": Double, "y": Double,
+///            "width": Double, "height": Double }`
+///
+/// # Safety
+/// `json` must be NUL-terminated UTF-8, or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn lumen_crop_save(json: *const c_char) -> *mut c_char {
+    let raw = unsafe { str_from(json) };
+    let Some(core) = core() else {
+        return to_c(err_json("crop", "core not initialised"));
+    };
+    let value: serde_json::Value = serde_json::from_str(&raw).unwrap_or(serde_json::Value::Null);
+    let path = value["path"].as_str().unwrap_or_default();
+    let display = value["display"].as_str().unwrap_or_default();
+    if path.is_empty() || display.is_empty() {
+        return to_c(err_json("crop", "path and display are required"));
+    }
+    let rect = (
+        value["x"].as_f64().unwrap_or(0.0),
+        value["y"].as_f64().unwrap_or(0.0),
+        value["width"].as_f64().unwrap_or(1.0),
+        value["height"].as_f64().unwrap_or(1.0),
+    );
+
+    match core.db.save_crop(path, display, rect) {
+        Ok(()) => to_c(serde_json::json!({ "ok": true, "kind": "crop" }).to_string()),
+        Err(e) => to_c(err_json("crop", e)),
+    }
+}
+
+/// The saved crop for a file on a display, or null.
+///
+/// `json`: `{ "path": String, "display": String }`
+///
+/// # Safety
+/// `json` must be NUL-terminated UTF-8, or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn lumen_crop_get(json: *const c_char) -> *mut c_char {
+    let raw = unsafe { str_from(json) };
+    let Some(core) = core() else {
+        return to_c(err_json("crop", "core not initialised"));
+    };
+    let value: serde_json::Value = serde_json::from_str(&raw).unwrap_or(serde_json::Value::Null);
+    let path = value["path"].as_str().unwrap_or_default();
+    let display = value["display"].as_str().unwrap_or_default();
+
+    match core.db.crop(path, display) {
+        Ok(Some((x, y, width, height))) => to_c(
+            serde_json::json!({
+                "ok": true, "kind": "crop",
+                "data": { "x": x, "y": y, "width": width, "height": height }
+            })
+            .to_string(),
+        ),
+        Ok(None) => to_c(serde_json::json!({ "ok": true, "kind": "crop" }).to_string()),
+        Err(e) => to_c(err_json("crop", e)),
+    }
+}
+
+/// Forgets a saved crop.
+///
+/// # Safety
+/// `json` must be NUL-terminated UTF-8, or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn lumen_crop_clear(json: *const c_char) -> *mut c_char {
+    let raw = unsafe { str_from(json) };
+    let Some(core) = core() else {
+        return to_c(err_json("crop", "core not initialised"));
+    };
+    let value: serde_json::Value = serde_json::from_str(&raw).unwrap_or(serde_json::Value::Null);
+    match core.db.clear_crop(
+        value["path"].as_str().unwrap_or_default(),
+        value["display"].as_str().unwrap_or_default(),
+    ) {
+        Ok(()) => to_c(serde_json::json!({ "ok": true, "kind": "crop" }).to_string()),
+        Err(e) => to_c(err_json("crop", e)),
+    }
+}
+
 // ── image feature prints ──────────────────────────────────────────────────
 
 /// Stores feature prints computed by Vision on the Swift side.

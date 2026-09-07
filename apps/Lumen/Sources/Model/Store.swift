@@ -535,6 +535,37 @@ final class Store {
         }
     }
 
+    // MARK: Local aspect ratios
+    //
+    // The grid needs each image's shape to lay out honestly. Reading a header
+    // is fast but not free, and doing it for two thousand tiles during layout
+    // is not acceptable — so they are read once, off the main thread, and
+    // cached.
+
+    private var aspectRatios: [String: Double] = [:]
+
+    /// Shape of a local wallpaper, 16:10 until its header has been read.
+    func aspectRatio(of wallpaper: LocalWallpaper) -> Double {
+        aspectRatios[wallpaper.path] ?? 16.0 / 10
+    }
+
+    /// Reads the shapes of whatever is on screen, in the background.
+    @MainActor
+    func loadAspectRatios(for wallpapers: [LocalWallpaper]) async {
+        let missing = wallpapers.filter { aspectRatios[$0.path] == nil }
+        guard !missing.isEmpty else { return }
+
+        let measured = await Task.detached(priority: .utility) {
+            missing.reduce(into: [String: Double]()) { found, wallpaper in
+                guard let size = wallpaper.pixelSize, size.height > 0 else { return }
+                found[wallpaper.path] = size.width / size.height
+            }
+        }.value
+
+        guard !measured.isEmpty else { return }
+        aspectRatios.merge(measured) { _, new in new }
+    }
+
     // MARK: Library similarity
     //
     // Vision feature prints over the imported library. This is what finds the

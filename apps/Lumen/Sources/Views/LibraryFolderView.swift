@@ -83,6 +83,8 @@ struct LibraryFolderView: View {
                     Button("Clear") { store.clearSimilarity() }
                 }
 
+                layoutPicker
+
                 if store.isScanningLibrary || store.isIndexingPrints {
                     ProgressView().controlSize(.small)
                 }
@@ -269,11 +271,35 @@ struct LibraryFolderView: View {
     private var grid: some View {
         // Only what is at this level; subfolders are their own tiles above.
         let shown = store.currentFiles
-        return LazyVGrid(columns: [GridItem(.adaptive(minimum: theme.minTileWidth),
-                                            spacing: theme.spacing)],
-                         spacing: theme.spacing) {
-            ForEach(shown) { tile($0) }
+        return Group {
+            if theme == .masonry {
+                // Masonry keeps each image's real shape, which is the layout
+                // that never crops.
+                MasonryLayout(columnWidth: theme.minTileWidth, spacing: theme.spacing) {
+                    ForEach(shown) { tile($0) }
+                }
+            } else {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: theme.minTileWidth),
+                                             spacing: theme.spacing)],
+                          spacing: theme.spacing) {
+                    ForEach(shown) { tile($0) }
+                }
+            }
         }
+        .transaction { $0.animation = nil }
+        .task(id: shown.map(\.id)) { await store.loadAspectRatios(for: shown) }
+    }
+
+    /// The layout picker, matching the one the Wallhaven grid has.
+    private var layoutPicker: some View {
+        Picker("", selection: Binding(get: { store.gridTheme },
+                                      set: { store.gridTheme = $0 })) {
+            ForEach(GridTheme.allCases) { Text($0.label).tag($0) }
+        }
+        .pickerStyle(.segmented)
+        .labelsHidden()
+        .controlSize(.small)
+        .fixedSize()
     }
 
     private func tile(_ wallpaper: LocalWallpaper) -> some View {
@@ -286,7 +312,7 @@ struct LibraryFolderView: View {
             Rectangle().fill(.quaternary)
                 .overlay { Image(systemName: "photo").foregroundStyle(.tertiary) }
         }
-        .aspectRatio(16.0 / 10, contentMode: .fill)
+        .aspectRatio(tileAspect(for: wallpaper), contentMode: .fill)
         .frame(maxWidth: .infinity)
         .clipped()
         .overlay { hoverLayer(wallpaper) }
@@ -323,6 +349,16 @@ struct LibraryFolderView: View {
             Button("Reveal in Finder") {
                 NSWorkspace.shared.activateFileViewerSelecting([wallpaper.url])
             }
+        }
+    }
+
+    /// Masonry uses the image's real shape; the fixed layouts use their own,
+    /// which is what crops a portrait wallpaper into a strip of its middle.
+    private func tileAspect(for wallpaper: LocalWallpaper) -> Double {
+        switch theme {
+        case .masonry: store.aspectRatio(of: wallpaper)
+        case .cinema: 16.0 / 9
+        default: 16.0 / 10
         }
     }
 

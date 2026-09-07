@@ -45,6 +45,11 @@ char *lumen_collection_create(const char *name);
 char *lumen_collection_delete(const char *id);
 char *lumen_collection_set_member(const char *json);
 
+// Crop rectangles
+char *lumen_crop_save(const char *json);
+char *lumen_crop_get(const char *json);
+char *lumen_crop_clear(const char *json);
+
 // Image feature prints
 char *lumen_prints_store(const char *json);
 char *lumen_prints_all(void);

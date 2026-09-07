@@ -72,17 +72,35 @@ enum WallpaperFitter {
         NSScreen.main.map(pixelSize) ?? CGSize(width: 1920, height: 1080)
     }
 
-    /// Writes a centre-cropped, exactly-sized copy next to the original and
-    /// returns it. Returns the source unchanged when it already fits.
-    static func render(_ source: URL, to size: CGSize, in directory: URL) throws -> URL {
+    /// Writes an exactly-sized copy next to the original and returns it.
+    ///
+    /// `crop` is normalised (0...1) in the source image's own space. Passing
+    /// nil centre-crops, which is what macOS does on its own.
+    static func render(_ sourceURL: URL, to size: CGSize, in directory: URL,
+                       crop: CGRect? = nil) throws -> URL {
         guard size.width >= 1, size.height >= 1,
-              let image = NSImage(contentsOf: source),
+              let image = NSImage(contentsOf: sourceURL),
               let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil)
         else { throw Failure.unreadable }
 
         let imageSize = CGSize(width: cgImage.width, height: cgImage.height)
-        let scale = max(size.width / imageSize.width, size.height / imageSize.height)
-        let scaled = CGSize(width: imageSize.width * scale, height: imageSize.height * scale)
+
+        // A chosen crop is taken out of the source first; the result is then
+        // scaled to the display. Without one, fall back to a centre crop.
+        let source: CGImage
+        if let crop, crop.width > 0, crop.height > 0 {
+            let pixels = CGRect(x: crop.minX * imageSize.width,
+                                y: crop.minY * imageSize.height,
+                                width: crop.width * imageSize.width,
+                                height: crop.height * imageSize.height).integral
+            source = cgImage.cropping(to: pixels) ?? cgImage
+        } else {
+            source = cgImage
+        }
+
+        let sourceSize = CGSize(width: source.width, height: source.height)
+        let scale = max(size.width / sourceSize.width, size.height / sourceSize.height)
+        let scaled = CGSize(width: sourceSize.width * scale, height: sourceSize.height * scale)
 
         guard let context = CGContext(
             data: nil,
@@ -93,8 +111,7 @@ enum WallpaperFitter {
         ) else { throw Failure.unreadable }
 
         context.interpolationQuality = .high
-        // Centre the overflow, which is what macOS's own fill does.
-        context.draw(cgImage, in: CGRect(
+        context.draw(source, in: CGRect(
             x: (size.width - scaled.width) / 2,
             y: (size.height - scaled.height) / 2,
             width: scaled.width, height: scaled.height))
@@ -106,8 +123,9 @@ enum WallpaperFitter {
 
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let target = directory.appending(
-            path: "\(source.deletingPathExtension().lastPathComponent)"
-                + "-\(Int(size.width))x\(Int(size.height)).jpg")
+            path: "\(sourceURL.deletingPathExtension().lastPathComponent)"
+                + "-\(Int(size.width))x\(Int(size.height))"
+                + (crop == nil ? "" : "-cropped") + ".jpg")
         try data.write(to: target, options: .atomic)
         return target
     }

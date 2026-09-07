@@ -241,6 +241,23 @@ impl Database {
             [],
         );
 
+        // How a wallpaper should be cropped for a given display. Stored per
+        // display because the right crop for a 16:10 laptop is not the right
+        // crop for an ultrawide.
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS crop_rects (
+                path TEXT NOT NULL,
+                display TEXT NOT NULL,
+                x REAL NOT NULL,
+                y REAL NOT NULL,
+                width REAL NOT NULL,
+                height REAL NOT NULL,
+                PRIMARY KEY (path, display)
+            )",
+            [],
+        )
+        .map_err(|e| WallsetterError::Database(e.to_string()))?;
+
         // Indices for the columns the app actually filters and joins on.
         // Without them every favourite check is a full scan of bookmarks.
         conn.execute_batch(
@@ -1841,6 +1858,68 @@ impl Database {
             .commit()
             .map_err(|e| WallsetterError::Database(e.to_string()))?;
         Ok(gone.len())
+    }
+}
+
+impl Database {
+    // ──────────────────────────────────────────────
+    // Crop rectangles
+    // ──────────────────────────────────────────────
+
+    /// Saves how a wallpaper should be cropped for one display.
+    /// The rect is normalised (0...1) in the source image's own space, so it
+    /// survives the file being replaced by a different resolution of itself.
+    pub fn save_crop(
+        &self,
+        path: &str,
+        display: &str,
+        rect: (f64, f64, f64, f64),
+    ) -> wallsetter_core::Result<()> {
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| WallsetterError::Database(e.to_string()))?;
+        conn.execute(
+            "INSERT INTO crop_rects (path, display, x, y, width, height)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+             ON CONFLICT(path, display) DO UPDATE SET
+                x = excluded.x, y = excluded.y,
+                width = excluded.width, height = excluded.height",
+            (path, display, rect.0, rect.1, rect.2, rect.3),
+        )
+        .map_err(|e| WallsetterError::Database(e.to_string()))?;
+        Ok(())
+    }
+
+    pub fn crop(
+        &self,
+        path: &str,
+        display: &str,
+    ) -> wallsetter_core::Result<Option<(f64, f64, f64, f64)>> {
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| WallsetterError::Database(e.to_string()))?;
+        conn.query_row(
+            "SELECT x, y, width, height FROM crop_rects WHERE path = ?1 AND display = ?2",
+            (path, display),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .optional()
+        .map_err(|e| WallsetterError::Database(e.to_string()))
+    }
+
+    pub fn clear_crop(&self, path: &str, display: &str) -> wallsetter_core::Result<()> {
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| WallsetterError::Database(e.to_string()))?;
+        conn.execute(
+            "DELETE FROM crop_rects WHERE path = ?1 AND display = ?2",
+            (path, display),
+        )
+        .map_err(|e| WallsetterError::Database(e.to_string()))?;
+        Ok(())
     }
 }
 

@@ -66,6 +66,11 @@ The SwiftUI rewrite closed most of the original list.
   badge and a Notification Center alert when permission allows.
 - **Palette match** — sets the system accent to the nearest of the seven macOS
   offers, with the previous value remembered so it can be put back.
+- **Duplicate and similar detection** — Vision feature prints over the library,
+  so the same wallpaper at another resolution is found. Threshold measured, not
+  guessed: unrelated pairs sit at 0.97–1.27, a resize at 0.24.
+- **Folder browsing** — imports keep their structure, with breadcrumbs, and the
+  same four layouts the Wallhaven grid offers.
 
 Backend hardening in the same pass: WAL and enforced foreign keys, indices on
 every filtered column, a joined favourites read instead of a query per row, a
@@ -81,13 +86,31 @@ lookups.
 
 ---
 
+## Agreed, not yet built
+
+Decided on 2026-09-07. In the order they are worth doing.
+
+| Feature | What it is | Notes |
+| --- | --- | --- |
+| **Crop to fit my display** | A pan/zoom pass before setting, so a 21:9 image is not centre-cropped badly on a 16:10 screen. Saved per wallpaper *and per display*. | Storage, the crop-aware renderer and the contrast suggestion are done; the editor UI is not. |
+| **Contrast-aware crop** | When the menu bar would be illegible, offer the vertical offset that puts a calmer band under it. | `MenuBarLegibility.suggestedOffset` exists. Needs the crop editor to land first. |
+| **Bulk resolution rule** | Auto-skip results below the largest display's native resolution. | `WallpaperFitter.pixelSize` already reports it; mostly a filter and a toggle. |
+| **Library health** | Total size, largest files, how many sit below the display's resolution, duplicate count, what is unindexed. | Useful at a few thousand files. All the inputs exist. |
+| **Auto-collections** | Cluster the library with the stored Vision prints and propose collections to accept or reject. | Naming is by example, not by understanding — a print knows "these look alike", not what they are. |
+| **Taste-ranked browsing** | Print favourites, re-rank results by closeness to that centroid. | Only re-orders results already fetched; Wallhaven cannot be asked for "my taste", so it works within a page. |
+| **Drop to import** | Drag an image or a URL onto Lumen to add it to the library or set it. | Cheap; `NSItemProvider` both ways. |
+| **Rotation without repeats** | Shuffle can pick the same wallpaper twice; history makes avoiding the last N trivial. | Small. |
+| **Export / backup** | Favourites, collections and subscriptions as JSON, so a reinstall does not lose them. | Also the honest answer to "what if the database breaks". |
+| **Quick Look** | Space bar in the Folders pane. | `QLPreviewPanel`. |
+| **Colour search in the library** | Wallhaven can be filtered by colour; the local library cannot. | Needs a dominant-colour pass per file, which the print indexing could do in the same sweep. |
+
 ## Phase 1 — cheap, high payoff
 
 Small, self-contained, no new dependencies.
 
 | Feature | Notes |
 | --- | --- |
-| **Bulk resolution rule** | Auto-skip anything below the largest connected display's native resolution. `NSScreen` already reports it in `WallpaperSetter.connectedDisplays()`. |
+| *(cleared — everything here has shipped or moved above)* |
 
 ## Phase 2 — the distinctive ones
 
@@ -96,7 +119,6 @@ These are what would separate Lumen from every other Wallhaven downloader.
 | Feature | Why it stands out | Cost |
 | --- | --- | --- |
 | **Per-Space wallpapers, individually** | "All Spaces" ships, but assigning a *different* wallpaper to each Space does not. The store models it; the missing piece is knowing which Space is which. | Medium now the store's shape is understood. |
-| **Crop to fit my display** | A pan/zoom pass before setting, so a 21:9 image is not centre-cropped badly on a 16:10 screen. Save the crop with the wallpaper. | Medium — a real editor surface, plus storing the crop rect per wallpaper per display. |
 | **Shortcuts actions** | "Set random wallpaper from Favorites", and a Focus-mode trigger. | Medium — App Intents, which needs the app to expose an intent extension. |
 | **Live preview on the desktop** | Set on hover, revert on Escape. | Low mechanically, but it writes the real desktop picture — needs a reliable revert path or it strands the user's wallpaper. |
 

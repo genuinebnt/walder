@@ -23,16 +23,58 @@ enum MenuBarLegibility {
     /// occupies is deliberate: text sits inside the bar with margin.
     private static let barHeight: CGFloat = 26
 
-    /// Assesses `image` as it would appear filling a display of `displaySize`.
-    static func assess(_ image: NSImage, displaySize: CGSize) -> Verdict? {
+    /// The crop that would put the calmest band under the menu bar.
+    ///
+    /// Turns the warning into something actionable: rather than only saying the
+    /// bar will be hard to read, offer the vertical offset that fixes it. Nil
+    /// when no offset is meaningfully better than the one in use.
+    static func suggestedOffset(for image: NSImage, crop: CGRect,
+                                displaySize: CGSize) -> CGFloat? {
+        guard let current = assess(image, displaySize: displaySize, crop: crop),
+              current.isRisky else { return nil }
+
+        // Slide the crop window up and down within what the image allows.
+        let room = 1 - crop.height
+        guard room > 0.01 else { return nil }
+
+        var best: (offset: CGFloat, score: CGFloat)?
+        for step in stride(from: CGFloat(0), through: CGFloat(1), by: 0.05) {
+            let y = room * step
+            guard abs(y - crop.minY) > 0.005 else { continue }
+            let candidate = CGRect(x: crop.minX, y: y, width: crop.width, height: crop.height)
+            guard let verdict = assess(image, displaySize: displaySize, crop: candidate),
+                  !verdict.isRisky else { continue }
+            // Prefer the smallest move that works, so the picture stays put.
+            let score = abs(y - crop.minY)
+            if best == nil || score < best!.score { best = (offset: y, score: score) }
+        }
+        return best?.offset
+    }
+
+    /// Assesses `image` as it would appear filling a display of `displaySize`,
+    /// optionally through a normalised crop.
+    static func assess(_ image: NSImage, displaySize: CGSize,
+                       crop: CGRect? = nil) -> Verdict? {
         guard let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil),
               cgImage.width > 0, cgImage.height > 0,
               displaySize.width > 0, displaySize.height > 0
         else { return nil }
 
+        // A chosen crop replaces the centre crop macOS would make.
+        let cropped: CGImage
+        if let crop, crop.width > 0, crop.height > 0 {
+            let pixels = CGRect(x: crop.minX * CGFloat(cgImage.width),
+                                y: crop.minY * CGFloat(cgImage.height),
+                                width: crop.width * CGFloat(cgImage.width),
+                                height: crop.height * CGFloat(cgImage.height)).integral
+            cropped = cgImage.cropping(to: pixels) ?? cgImage
+        } else {
+            cropped = cgImage
+        }
+
         // The part of the image that survives a centre-crop to the display's
         // shape, which is what macOS shows.
-        let imageSize = CGSize(width: cgImage.width, height: cgImage.height)
+        let imageSize = CGSize(width: cropped.width, height: cropped.height)
         let scale = max(displaySize.width / imageSize.width,
                         displaySize.height / imageSize.height)
         let visible = CGSize(width: displaySize.width / scale,
@@ -46,8 +88,8 @@ enum MenuBarLegibility {
         let strip = CGRect(x: originX, y: originY, width: visible.width, height: stripHeight)
             .integral
 
-        guard let cropped = cgImage.cropping(to: strip) else { return nil }
-        return measure(cropped)
+        guard let strip = cropped.cropping(to: strip) else { return nil }
+        return measure(strip)
     }
 
     /// Downsamples the strip to a handful of pixels and reads them. Sampling
