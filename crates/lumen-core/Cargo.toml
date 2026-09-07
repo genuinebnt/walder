@@ -10,3 +10,4 @@ chrono.workspace = true
 uuid.workspace = true
 url.workspace = true
 thiserror.workspace = true
+directories.workspace = true

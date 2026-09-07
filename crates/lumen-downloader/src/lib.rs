@@ -42,6 +42,11 @@ impl DownloadManager {
 
     /// Changes how many downloads may run at once, taking effect as soon as
     /// in-flight tasks release their permits.
+    /// How many downloads run at once.
+    pub fn max_concurrent(&self) -> usize {
+        self.max_concurrent.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
     pub fn set_max_concurrent(&self, limit: usize) {
         use std::sync::atomic::Ordering;
         let limit = limit.max(1);

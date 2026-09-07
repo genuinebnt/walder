@@ -50,7 +50,7 @@ pub struct Wallpaper {
     pub created_at: Option<DateTime<Utc>>,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Resolution {
     pub width: u32,
     pub height: u32,

@@ -11,7 +11,9 @@
 //! Every string crossing the boundary is UTF-8 and NUL-terminated. Strings the
 //! Rust side allocates must be handed back to [`lumen_string_free`].
 
-mod dto;
+// Public so the CLI can write a downloaded file's sidecar in exactly the shape
+// the app reads it back in, rather than keeping a second definition of it.
+pub mod dto;
 
 use dto::*;
 use std::ffi::{CStr, CString, c_char};
@@ -82,21 +84,6 @@ fn core() -> Option<&'static Core> {
 }
 
 /// Expands a leading `~` and falls back to `~/Pictures/Lumen`.
-fn resolve_dir(raw: &str) -> PathBuf {
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        return directories::UserDirs::new()
-            .and_then(|d| d.picture_dir().map(|p| p.join("Lumen")))
-            .unwrap_or_else(|| PathBuf::from("."));
-    }
-    if let Some(rest) = trimmed.strip_prefix("~/") {
-        if let Some(home) = directories::BaseDirs::new().map(|b| b.home_dir().to_path_buf()) {
-            return home.join(rest);
-        }
-    }
-    PathBuf::from(trimmed)
-}
-
 // ── string helpers ────────────────────────────────────────────────────────
 
 /// # Safety
@@ -144,7 +131,7 @@ pub unsafe extern "C" fn lumen_init(config_json: *const c_char) -> *mut c_char {
         .and_then(|v| v.as_str())
         .filter(|s| !s.is_empty())
         .map(str::to_string);
-    let dir = resolve_dir(cfg.get("downloadDir").and_then(|v| v.as_str()).unwrap_or(""));
+    let dir = lumen_core::paths::resolve_dir(cfg.get("downloadDir").and_then(|v| v.as_str()).unwrap_or(""));
     let max_parallel = cfg
         .get("maxParallel")
         .and_then(|v| v.as_u64())
@@ -156,6 +143,7 @@ pub unsafe extern "C" fn lumen_init(config_json: *const c_char) -> *mut c_char {
         core.provider.write().unwrap().set_api_key(api_key);
         *core.download_dir.write().unwrap() = dir;
         core.downloads.set_max_concurrent(max_parallel);
+        persist_preferences(core);
         return to_c(serde_json::json!({ "ok": true, "kind": "init", "data": "reconfigured" }).to_string());
     }
 
@@ -166,17 +154,13 @@ pub unsafe extern "C" fn lumen_init(config_json: *const c_char) -> *mut c_char {
             .build()
             .map_err(|e| LumenError::Other(format!("runtime: {e}")))?;
 
-        let data_dir = directories::ProjectDirs::from("cc", "lumen", "Lumen")
-            .map(|d| d.data_dir().to_path_buf())
-            .unwrap_or_else(|| PathBuf::from("."));
+        let data_dir = lumen_core::paths::data_dir();
         std::fs::create_dir_all(&data_dir)?;
         std::fs::create_dir_all(&dir)?;
 
-        let db = Database::new(&data_dir.join("lumen.db"))?;
+        let db = Database::new(&lumen_core::paths::db_path())?;
 
-        let cache_dir = directories::ProjectDirs::from("cc", "lumen", "Lumen")
-            .map(|d| d.cache_dir().to_path_buf())
-            .unwrap_or_else(|| data_dir.join("cache"));
+        let cache_dir = lumen_core::paths::cache_dir();
         std::fs::create_dir_all(&cache_dir)?;
 
         Ok(Core {
@@ -195,6 +179,7 @@ pub unsafe extern "C" fn lumen_init(config_json: *const c_char) -> *mut c_char {
             // A library imported before subpaths existed would otherwise stay
             // flat until the user thought to rescan.
             let _ = core.db.backfill_subpaths();
+            persist_preferences(core);
             ensure_downloads_indexed(core);
             spawn_download_watch(core);
             to_c(serde_json::json!({ "ok": true, "kind": "init", "data": "started" }).to_string())
@@ -1327,9 +1312,10 @@ pub extern "C" fn lumen_history_drop_latest() -> *mut c_char {
 
 // ── imported folders ──────────────────────────────────────────────────────
 
-/// Extensions worth treating as a wallpaper. Deliberately narrow: the point is
-/// pictures you would put on a desktop, not every file macOS can decode.
-const IMAGE_EXTENSIONS: [&str; 7] = ["jpg", "jpeg", "png", "heic", "webp", "tif", "tiff"];
+/// The scan, in the shape the database's sync call takes.
+fn scan(root: &std::path::Path) -> Vec<(String, String, u64, String)> {
+    lumen_core::scan::as_rows(&lumen_core::scan::scan_images(root))
+}
 
 /// Registers the download directory as an imported folder and indexes it.
 ///
@@ -1347,59 +1333,8 @@ fn ensure_downloads_indexed(core: &'static Core) {
     else {
         return;
     };
-    let files = scan_images(&dir);
+    let files = scan(&dir);
     let _ = core.db.sync_imported_wallpapers(folder_id, &files);
-}
-
-/// Walks a folder for images. Recurses, because wallpaper folders are usually
-/// organised into subfolders, but skips hidden entries and Lumen's own `.part`
-/// files.
-fn scan_images(root: &std::path::Path) -> Vec<(String, String, u64, String)> {
-    fn walk(
-        dir: &std::path::Path,
-        root: &std::path::Path,
-        depth: u32,
-        out: &mut Vec<(String, String, u64, String)>,
-    ) {
-        // A guard against a symlink loop, and against indexing a whole home
-        // directory by accident.
-        if depth > 6 {
-            return;
-        }
-        let Ok(entries) = std::fs::read_dir(dir) else { return };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            let name = entry.file_name().to_string_lossy().into_owned();
-            if name.starts_with('.') {
-                continue;
-            }
-            if path.is_dir() {
-                walk(&path, root, depth + 1, out);
-                continue;
-            }
-            let extension = path
-                .extension()
-                .map(|e| e.to_string_lossy().to_ascii_lowercase())
-                .unwrap_or_default();
-            if !IMAGE_EXTENSIONS.contains(&extension.as_str()) {
-                continue;
-            }
-            let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
-            // Relative directory inside the imported root, so the app can show
-            // the folder structure rather than one flat list.
-            let subpath = path
-                .parent()
-                .and_then(|parent| parent.strip_prefix(root).ok())
-                .map(|rel| rel.to_string_lossy().into_owned())
-                .unwrap_or_default();
-            out.push((path.to_string_lossy().into_owned(), name, size, subpath));
-        }
-    }
-
-    let mut found = Vec::new();
-    walk(root, root, 0, &mut found);
-    found.sort_by(|a, b| (a.3.as_str(), a.1.as_str()).cmp(&(b.3.as_str(), b.1.as_str())));
-    found
 }
 
 /// Imports a folder and indexes the images in it. Importing the same folder
@@ -1433,7 +1368,7 @@ pub unsafe extern "C" fn lumen_library_import(path: *const c_char) -> u64 {
             .and_then(|folder_id| {
                 // Scanning can take a moment on a large folder, which is why
                 // this is async rather than a synchronous call.
-                let files = scan_images(&root);
+                let files = scan(&root);
                 core.db.sync_imported_wallpapers(folder_id, &files)?;
                 Ok((folder_id, files.len()))
             });
@@ -1487,7 +1422,7 @@ pub extern "C" fn lumen_library_rescan() -> u64 {
         let result = core.db.imported_folders().and_then(|folders| {
             let mut total = 0;
             for (folder_id, _, path, _) in &folders {
-                let files = scan_images(std::path::Path::new(path));
+                let files = scan(std::path::Path::new(path));
                 total += core.db.sync_imported_wallpapers(*folder_id, &files)?;
             }
             Ok(total)
@@ -1798,6 +1733,25 @@ pub unsafe extern "C" fn lumen_download_many(json: *const c_char) -> u64 {
 /// Applies live preference changes (API key, download directory).
 ///
 /// # Safety
+/// Mirrors the settings the app holds into the database.
+///
+/// The app keeps these in `UserDefaults`, which nothing outside the bundle can
+/// read — so without this the CLI would have no API key and no download folder
+/// even though the user had configured both. The database row is what the two
+/// front ends share.
+fn persist_preferences(core: &'static Core) {
+    let Ok(mut prefs) = core.db.get_preferences() else { return };
+    // An absent key means "this process has none", not "clear the stored one".
+    // Without that distinction the verify harness — which runs against its own
+    // defaults and so starts keyless — would wipe the key the app configured.
+    if let Some(key) = core.provider.read().unwrap().api_key() {
+        prefs.api_key = Some(key);
+    }
+    prefs.download_dir = core.download_dir.read().unwrap().to_string_lossy().into_owned();
+    prefs.max_parallel_downloads = core.downloads.max_concurrent() as u32;
+    let _ = core.db.save_preferences(&prefs);
+}
+
 /// `json` must be NUL-terminated UTF-8, or null.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lumen_set_preferences(json: *const c_char) -> *mut c_char {
@@ -1814,7 +1768,7 @@ pub unsafe extern "C" fn lumen_set_preferences(json: *const c_char) -> *mut c_ch
             .set_api_key((!key.is_empty()).then(|| key.to_string()));
     }
     if let Some(dir) = value.get("downloadDir").and_then(|v| v.as_str()) {
-        let resolved = resolve_dir(dir);
+        let resolved = lumen_core::paths::resolve_dir(dir);
         let _ = std::fs::create_dir_all(&resolved);
         let changed = *core.download_dir.read().unwrap() != resolved;
         *core.download_dir.write().unwrap() = resolved;
@@ -1826,6 +1780,7 @@ pub unsafe extern "C" fn lumen_set_preferences(json: *const c_char) -> *mut c_ch
     if let Some(limit) = value.get("maxParallel").and_then(|v| v.as_u64()) {
         core.downloads.set_max_concurrent(limit.clamp(1, 12) as usize);
     }
+    persist_preferences(core);
     to_c(serde_json::json!({ "ok": true, "kind": "preferences" }).to_string())
 }
 

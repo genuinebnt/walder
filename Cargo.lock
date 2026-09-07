@@ -1013,17 +1013,22 @@ dependencies = [
  "directories",
  "futures",
  "indicatif",
+ "libc",
  "lumen-core",
  "lumen-db",
  "lumen-downloader",
+ "lumen-ffi",
  "lumen-provider",
  "lumen-scheduler",
  "lumen-setter",
+ "rand 0.8.5",
+ "reqwest",
  "serde",
  "serde_json",
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]
@@ -1031,6 +1036,7 @@ name = "lumen-core"
 version = "1.0.0"
 dependencies = [
  "chrono",
+ "directories",
  "serde",
  "serde_json",
  "thiserror 2.0.18",

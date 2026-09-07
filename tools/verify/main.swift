@@ -1278,16 +1278,16 @@ func run() async -> Int32 {
         store.reconcilePreviewInspector(windowWidth: 1400, expanded: false)
         return store.previewShowsInspector && !store.previewInspectorAutoHidden
     }
-    v.check("Expanding asks for more room than fitting does") {
-        // The same window that comfortably holds both when the image is
-        // letterboxed does not once the image is expanded.
-        guard Store.inspectorFits(windowWidth: 1000, expanded: false),
-              !Store.inspectorFits(windowWidth: 1000, expanded: true) else { return false }
+    v.check("Expanding the image hides the inspector, however wide the window") {
+        // Clicking the image asks for the whole window, so the inspector goes
+        // even on a display with room to spare — and comes back on the way out.
+        guard !Store.inspectorFits(windowWidth: 6000, expanded: true),
+              Store.inspectorFits(windowWidth: 1000, expanded: false) else { return false }
         store.previewShowsInspector = true
         store.previewInspectorAutoHidden = false
-        store.reconcilePreviewInspector(windowWidth: 1000, expanded: true)
+        store.reconcilePreviewInspector(windowWidth: 3400, expanded: true)
         guard !store.previewShowsInspector else { return false }
-        store.reconcilePreviewInspector(windowWidth: 1000, expanded: false)
+        store.reconcilePreviewInspector(windowWidth: 3400, expanded: false)
         return store.previewShowsInspector
     }
     v.check("An inspector closed by hand is not reopened by the rule") {

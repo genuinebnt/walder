@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Builds Lumen and installs it to /Applications so it can be run alongside
-# development. Quits a running copy first, since the bundle is replaced.
+# development, and puts lumen-cli somewhere on the PATH. Quits a running copy
+# first, since the bundle is replaced.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -22,5 +23,23 @@ cp -R "$ROOT/build/Lumen.app" "$DEST/Lumen.app"
 # clearing the quarantine bit is enough for a locally built app.
 xattr -dr com.apple.quarantine "$DEST/Lumen.app" 2>/dev/null || true
 codesign --force --deep --sign - "$DEST/Lumen.app" 2>/dev/null || true
+
+echo "==> Building lumen-cli"
+cargo build --release --manifest-path "$ROOT/Cargo.toml" -p lumen-cli
+
+# /usr/local/bin when it is writable without sudo, otherwise the per-user
+# equivalent — installing the CLI should not need a password.
+if [ -w /usr/local/bin ]; then
+    BIN_DIR=/usr/local/bin
+else
+    BIN_DIR="$HOME/.local/bin"
+    mkdir -p "$BIN_DIR"
+fi
+install -m 755 "$ROOT/target/release/lumen-cli" "$BIN_DIR/lumen-cli"
+echo "==> Installed $BIN_DIR/lumen-cli"
+case ":$PATH:" in
+    *":$BIN_DIR:"*) ;;
+    *) echo "    (add it to your PATH: export PATH=\"$BIN_DIR:\$PATH\")" ;;
+esac
 
 echo "==> Installed. Launch with: open -a Lumen"

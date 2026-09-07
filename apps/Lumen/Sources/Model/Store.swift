@@ -1948,14 +1948,16 @@ final class Store {
     static let inspectorWidth: CGFloat = 316
     /// What the image column needs to still read as a preview.
     static let minimumPreviewWidth: CGFloat = 520
-    /// What it needs once the image is expanded — expanding says the image is
-    /// the point, so a squeezed column defeats it.
-    static let expandedPreviewWidth: CGFloat = 900
 
-    /// Whether the window is wide enough for both columns.
+    /// Whether the inspector should be showing.
+    ///
+    /// Clicking the image expands it to fill the window, and that is a request
+    /// for the whole window — so the inspector yields whatever the width.
+    /// Otherwise it stays as long as the image column still has room to read
+    /// as a preview beside it.
     static func inspectorFits(windowWidth: CGFloat, expanded: Bool) -> Bool {
-        let needed = expanded ? expandedPreviewWidth : minimumPreviewWidth
-        return windowWidth - inspectorWidth >= needed
+        if expanded { return false }
+        return windowWidth - inspectorWidth >= minimumPreviewWidth
     }
 
     /// Hides the inspector when there is no room for it beside the image, and

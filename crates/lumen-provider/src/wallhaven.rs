@@ -68,6 +68,11 @@ impl WallhavenClient {
         Self { client, api_key }
     }
 
+    /// The key in use, so it can be mirrored to the shared preferences row.
+    pub fn api_key(&self) -> Option<String> {
+        self.api_key.clone()
+    }
+
     pub fn set_api_key(&mut self, key: Option<String>) {
         self.api_key = key;
     }
