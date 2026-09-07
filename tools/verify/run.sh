@@ -33,6 +33,7 @@ swiftc -Onone \
     "$ROOT/apps/Lumen/Sources/Model/RadarNotifier.swift" \
     "$ROOT/apps/Lumen/Sources/Model/SystemAccent.swift" \
     "$ROOT/apps/Lumen/Sources/Model/ImagePrints.swift" \
+    "$ROOT/apps/Lumen/Sources/Model/SimilarityGraph.swift" \
     "$ROOT/apps/Lumen/Sources/Model/ImageCache.swift" \
     "$ROOT/apps/Lumen/Sources/Views/PreviewPane.swift" \
     "$ROOT/apps/Lumen/Sources/Views/MasonryGrid.swift" \

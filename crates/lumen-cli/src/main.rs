@@ -222,6 +222,23 @@ enum LibraryCommand {
         #[arg(long)]
         favorites: bool,
     },
+    /// Fetch the Wallhaven metadata for files named after a wallpaper id.
+    ///
+    /// For folders of old downloads: the tags, palette and uploader never
+    /// existed on disk, but the filename is enough to ask for them back.
+    Backfill {
+        /// Only this folder. Defaults to every imported folder.
+        name: Option<String>,
+        /// Show what would be fetched without asking Wallhaven anything.
+        #[arg(long)]
+        dry_run: bool,
+        /// Stop after this many.
+        #[arg(long)]
+        limit: Option<usize>,
+        /// Requests per minute. Wallhaven allows 45.
+        #[arg(long, default_value_t = 40)]
+        rate: u32,
+    },
     /// Mark a local image as a favourite.
     Favorite { path: String },
     /// Unmark it.
@@ -355,6 +372,9 @@ async fn run() -> anyhow::Result<()> {
             LibraryCommand::Forget { name } => commands::library::forget(&app, &name)?,
             LibraryCommand::List { name, favorites } => {
                 commands::library::wallpapers(&app, name.as_deref(), favorites)?
+            }
+            LibraryCommand::Backfill { name, dry_run, limit, rate } => {
+                commands::backfill::run(&app, name.as_deref(), limit, rate, dry_run).await?
             }
             LibraryCommand::Favorite { path } => commands::library::favorite(&app, &path, true)?,
             LibraryCommand::Unfavorite { path } => commands::library::favorite(&app, &path, false)?,

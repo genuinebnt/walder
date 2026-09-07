@@ -24,6 +24,8 @@ struct LibraryFolderView: View {
                     proposals
                 } else if !store.duplicateGroups.isEmpty {
                     duplicates
+                } else if !store.discoveries.isEmpty {
+                    discoveries
                 } else if !store.similarToSelection.isEmpty {
                     similar
                 } else if items.isEmpty {
@@ -112,18 +114,29 @@ struct LibraryFolderView: View {
                 .help("Groups the library by what things look like. Names are a "
                       + "guess from the folder — a print knows appearance, not subject.")
 
+                Button {
+                    Task { await store.discover() }
+                } label: {
+                    Label("Discover", systemImage: "sparkle.magnifyingglass")
+                }
+                .disabled(store.isDiscovering || store.libraryWallpapers.isEmpty)
+                .help("Walks out from your favourites through the library, so what "
+                      + "comes back is related to them rather than a copy of them.")
+
                 if !store.duplicateGroups.isEmpty || !store.similarToSelection.isEmpty
-                    || !store.proposals.isEmpty {
+                    || !store.proposals.isEmpty || !store.discoveries.isEmpty {
                     Button("Clear") {
                         store.clearSimilarity()
                         store.clearProposals()
+                        store.clearDiscoveries()
                     }
                 }
 
                 layoutPicker
                 colourPicker
 
-                if store.isScanningLibrary || store.isIndexingPrints || store.isClustering {
+                if store.isScanningLibrary || store.isIndexingPrints || store.isClustering
+                    || store.isDiscovering {
                     ProgressView().controlSize(.small)
                 }
                 Spacer()
@@ -391,6 +404,19 @@ struct LibraryFolderView: View {
         }
     }
 
+    private var discoveries: some View {
+        VStack(alignment: .leading, spacing: Tokens.s2) {
+            Text("WORTH ANOTHER LOOK").font(.sectionLabel).foregroundStyle(.secondary)
+            Text("Followed out from what you have favourited, skipping what you set recently.")
+                .font(.system(size: 11.5)).foregroundStyle(.secondary)
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: theme.minTileWidth),
+                                         spacing: theme.spacing)],
+                      spacing: theme.spacing) {
+                ForEach(store.discoveries) { tile($0) }
+            }
+        }
+    }
+
     private var similar: some View {
         VStack(alignment: .leading, spacing: Tokens.s2) {
             Text("SIMILAR IN YOUR LIBRARY").font(.sectionLabel).foregroundStyle(.secondary)
@@ -407,6 +433,7 @@ struct LibraryFolderView: View {
     /// What the preview steps through: whatever this pane is showing.
     private var visibleItems: [LocalWallpaper] {
         if !store.duplicateGroups.isEmpty { return store.duplicateGroups.flatMap { $0 } }
+        if !store.discoveries.isEmpty { return store.discoveries }
         if !store.similarToSelection.isEmpty { return store.similarToSelection }
         return store.currentFiles
     }

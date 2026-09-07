@@ -914,25 +914,113 @@ final class Store {
         }
     }
 
+    // MARK: The similarity graph
+    //
+    // Three features used to each do their own sweep over the prints with a
+    // different measure. They now share one weighted graph, which is both
+    // faster — it is built once — and better, because a graph can answer
+    // questions a distance list cannot. See [SimilarityGraph].
+
+    /// Held between calls: building is the expensive part, and the library
+    /// changes far less often than these features are used.
+    @ObservationIgnored private var cachedGraph: (paths: Set<String>, graph: SimilarityGraph)?
+
+    /// The library as a graph, built on first use and reused until the set of
+    /// indexed files changes.
+    private func libraryGraph() async -> SimilarityGraph? {
+        let prints = await loadedPrints()
+        guard prints.count > 1 else { return nil }
+
+        let key = Set(prints.map(\.path))
+        if let cached = cachedGraph, cached.paths == key { return cached.graph }
+
+        let entries = prints.compactMap { entry -> (path: String, vector: [Float])? in
+            ImagePrints.vector(entry.print).map { (entry.path, $0) }
+        }
+        guard entries.count > 1 else { return nil }
+
+        let graph = await Task.detached(priority: .userInitiated) {
+            SimilarityGraph.build(from: entries)
+        }.value
+        cachedGraph = (key, graph)
+        return graph
+    }
+
+    /// Drops the graph, for when the indexed set has changed under it.
+    func forgetSimilarityGraph() { cachedGraph = nil }
+
     /// Files in the library most like this one.
+    ///
+    /// Ranked by proximity through the graph rather than by straight-line
+    /// distance, which keeps hubs — the handful of prints that measure close to
+    /// almost everything — out of every result list.
     @MainActor
     func findSimilarInLibrary(to wallpaper: LocalWallpaper) async {
         guard coreReady else { return }
         await indexLibrary()
 
-        let prints = await loadedPrints()
-        guard let target = prints.first(where: { $0.path == wallpaper.path })?.print else {
+        guard let graph = await libraryGraph() else {
             similarToSelection = []
             return
         }
+        let path = wallpaper.path
         let nearest = await Task.detached(priority: .userInitiated) {
-            ImagePrints.nearest(to: target, in: prints, excluding: wallpaper.path)
+            graph.related(to: path)
         }.value
 
         let byPath = Dictionary(uniqueKeysWithValues: libraryWallpapers.map { ($0.path, $0) })
         withAnimation(Tokens.normal) {
             similarToSelection = nearest.compactMap { byPath[$0.path] }
         }
+    }
+
+    // MARK: Discover
+
+    /// Wallpapers of your own worth another look.
+    var discoveries: [LocalWallpaper] = []
+    var isDiscovering = false
+
+    /// Follows the graph out from what you have favourited.
+    ///
+    /// Deliberately not "nearest to your favourites": that returns near-copies
+    /// of things you have already chosen. A walk that keeps restarting from the
+    /// favourites spreads into the neighbourhoods around them, so something two
+    /// hops away through a dense cluster can outrank a closer but isolated
+    /// file — which is the difference between a search result and a suggestion.
+    ///
+    /// Recently-set wallpapers are held back, because the answer to "show me
+    /// something" should not be what was on the screen yesterday.
+    @MainActor
+    func discover() async {
+        guard coreReady else { return }
+        await indexLibrary()
+
+        let liked = libraryWallpapers.filter(\.isFavorite).map(\.path)
+        guard !liked.isEmpty else {
+            errorMessage = "Favourite a few of your own wallpapers first — "
+                + "that is what Discover follows."
+            return
+        }
+        guard let graph = await libraryGraph() else { return }
+
+        isDiscovering = true
+        defer { isDiscovering = false }
+
+        let recent = Set(history.prefix(20).map(\.url.path))
+        let picks = await Task.detached(priority: .userInitiated) {
+            graph.discover(likes: liked, excluding: recent, limit: 24)
+        }.value
+
+        let byPath = Dictionary(uniqueKeysWithValues: libraryWallpapers.map { ($0.path, $0) })
+        withAnimation(Tokens.normal) {
+            discoveries = picks.compactMap { byPath[$0.path] }
+        }
+    }
+
+    /// Clears the Discover results, so the pane goes back to the folder.
+    @MainActor
+    func clearDiscoveries() {
+        withAnimation(Tokens.normal) { discoveries = [] }
     }
 
     // MARK: Trash
@@ -1302,9 +1390,12 @@ final class Store {
         defer { isClustering = false }
 
         let wanted = Set(candidates.map(\.path))
-        let prints = await loadedPrints().filter { wanted.contains($0.path) }
+        // Communities over the graph rather than single-link clustering, which
+        // chained: A resembled B and B resembled C, so a group ended up holding
+        // A and C which resembled nothing of each other.
+        guard let graph = await libraryGraph() else { return }
         let groups = await Task.detached(priority: .userInitiated) {
-            ImagePrints.cluster(prints)
+            graph.communities().map { $0.filter { wanted.contains($0) } }
         }.value
 
         let byPath = Dictionary(uniqueKeysWithValues: candidates.map { ($0.path, $0) })
@@ -1386,18 +1477,36 @@ final class Store {
         let candidates = await prints(for: wallpapers.map(\.thumb))
         guard !candidates.isEmpty else { return }
 
+        // A graph over the favourites *and* the results together, walked from
+        // the favourites. Mean distance — what this did before — ranks by
+        // closeness to the average of what you like, which rewards the
+        // unremarkable middle and buries anything distinctive. The walk instead
+        // follows the connections between results, so a wallpaper that sits in
+        // a cluster around one favourite scores well even when its straight-line
+        // distance to the rest is large.
+        let referenceKeys = references.keys.map { "fav:\($0)" }
+        var entries: [(path: String, vector: [Float])] = []
+        for (key, print) in references {
+            if let vector = ImagePrints.vector(print) { entries.append(("fav:\(key)", vector)) }
+        }
+        for (key, print) in candidates {
+            if let vector = ImagePrints.vector(print) { entries.append((key, vector)) }
+        }
+        guard entries.count > 1 else { return }
+
         let scored = await Task.detached(priority: .userInitiated) {
-            candidates.compactMap { entry -> (String, Float)? in
-                ImagePrints.affinity(of: entry.value, to: references.map(\.value))
-                    .map { (entry.key, $0) }
+            let graph = SimilarityGraph.build(from: entries)
+            let seeds = Dictionary(referenceKeys.map { ($0, Float(1)) }, uniquingKeysWith: +)
+            let scores = graph.walk(from: seeds)
+            return zip(graph.paths, scores).reduce(into: [String: Float]()) { out, pair in
+                out[pair.0] = pair.1
             }
         }.value
 
-        let ranking = Dictionary(uniqueKeysWithValues: scored)
         withAnimation(Tokens.normal) {
+            // Highest score first: this is a ranking now, not a distance.
             wallpapers.sort { a, b in
-                (ranking[a.thumb.absoluteString] ?? .greatestFiniteMagnitude)
-                    < (ranking[b.thumb.absoluteString] ?? .greatestFiniteMagnitude)
+                (scored[a.thumb.absoluteString] ?? 0) > (scored[b.thumb.absoluteString] ?? 0)
             }
             tasteRanked = true
         }

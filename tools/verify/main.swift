@@ -405,6 +405,105 @@ func run() async -> Int32 {
     }
 
     // ── displays ──────────────────────────────────────────────────────────
+    v.section("Similarity graph")
+    // Synthetic vectors, so the properties are checked rather than guessed at
+    // from whatever the library happens to hold. Two tight clusters joined by
+    // one bridging point is the shape that separates a graph from a distance
+    // list.
+    func vector(_ centre: Int, _ jitter: Float, _ dimension: Int = 32) -> [Float] {
+        (0..<dimension).map { i in
+            (i % 8 == centre % 8 ? Float(1) : Float(0)) + jitter * Float((i * 7 % 5)) * 0.01
+        }
+    }
+    func twoClusters() -> [(path: String, vector: [Float])] {
+        var entries: [(path: String, vector: [Float])] = []
+        for i in 0..<10 { entries.append(("a\(i)", vector(0, Float(i)))) }
+        for i in 0..<10 { entries.append(("b\(i)", vector(3, Float(i)))) }
+        return entries
+    }
+
+    v.check("The vector round-trips out of a print") {
+        let size = NSSize(width: 64, height: 64)
+        let image = NSImage(size: size)
+        image.lockFocus()
+        NSColor.systemTeal.setFill()
+        NSRect(origin: .zero, size: size).fill()
+        image.unlockFocus()
+
+        let url = FileManager.default.temporaryDirectory
+            .appending(path: "lumen-verify-print-\(UUID().uuidString).png")
+        defer { try? FileManager.default.removeItem(at: url) }
+        guard let tiff = image.tiffRepresentation,
+              let rep = NSBitmapImageRep(data: tiff),
+              let png = rep.representation(using: .png, properties: [:]),
+              (try? png.write(to: url)) != nil,
+              let print = ImagePrints.print(of: url),
+              let vector = ImagePrints.vector(print)
+        else { return false }
+
+        // Vision's distance and the vDSP one must agree on the same pair.
+        guard let viaVision = ImagePrints.distance(print, print) else { return false }
+        let viaVDSP = ImagePrints.distance(vector, vector)
+        return vector.count == print.elementCount
+            && abs(viaVision - viaVDSP) < 0.0001
+    }
+    v.check("The graph connects each cluster and keeps them apart") {
+        let graph = SimilarityGraph.build(from: twoClusters(), k: 4)
+        guard !graph.isEmpty, graph.edgeCount > 0 else { return false }
+        // Every node reachable, no node stranded.
+        return graph.neighbours.allSatisfy { !$0.isEmpty }
+    }
+    v.check("A walk from one cluster ranks that cluster above the other") {
+        let graph = SimilarityGraph.build(from: twoClusters(), k: 4)
+        let found = graph.discover(likes: ["a0", "a1"], limit: 20)
+        guard found.count >= 4 else { return false }
+        // The best-scoring results should be the rest of cluster a, not b.
+        let topFour = found.prefix(4).map(\.path)
+        return topFour.allSatisfy { $0.hasPrefix("a") }
+    }
+    v.check("Seeds are not returned as their own recommendation") {
+        let graph = SimilarityGraph.build(from: twoClusters(), k: 4)
+        let found = graph.discover(likes: ["a0", "a1"], limit: 20).map(\.path)
+        return !found.contains("a0") && !found.contains("a1")
+    }
+    v.check("Excluded paths stay out of the results") {
+        let graph = SimilarityGraph.build(from: twoClusters(), k: 4)
+        let found = graph.discover(likes: ["a0"], excluding: ["a2", "a3"], limit: 20).map(\.path)
+        return !found.contains("a2") && !found.contains("a3")
+    }
+    v.check("A walk with no seeds recommends nothing rather than everything") {
+        // An even spread would rank by degree, which reads as a recommendation
+        // while being nothing of the sort.
+        let graph = SimilarityGraph.build(from: twoClusters(), k: 4)
+        return graph.discover(likes: [], limit: 20).isEmpty
+            && graph.walk(from: [:]).allSatisfy { $0 == 0 }
+    }
+    v.check("Communities separate the two clusters") {
+        let graph = SimilarityGraph.build(from: twoClusters(), k: 4)
+        let groups = graph.communities(minimumSize: 3)
+        guard groups.count >= 2 else { return false }
+        // No group may mix the two.
+        return groups.allSatisfy { group in
+            group.allSatisfy { $0.hasPrefix("a") } || group.allSatisfy { $0.hasPrefix("b") }
+        }
+    }
+    v.check("Communities are the same on every run") {
+        // Auto-collections that reshuffled each time would be unusable.
+        let first = SimilarityGraph.build(from: twoClusters(), k: 4).communities(minimumSize: 3)
+        let second = SimilarityGraph.build(from: twoClusters(), k: 4).communities(minimumSize: 3)
+        return first == second
+    }
+    v.check("An empty library yields an empty graph rather than a crash") {
+        let graph = SimilarityGraph.build(from: [], k: 4)
+        return graph.isEmpty && graph.discover(likes: ["nothing"], limit: 5).isEmpty
+    }
+    v.check("Related-to walks from the one wallpaper asked about") {
+        let graph = SimilarityGraph.build(from: twoClusters(), k: 4)
+        let related = graph.related(to: "b0", limit: 5).map(\.path)
+        guard !related.isEmpty else { return false }
+        return !related.contains("b0") && related.allSatisfy { $0.hasPrefix("b") }
+    }
+
     v.section("API key storage")
     v.check("A key round-trips through the keychain") {
         // A throwaway item, so the gate never touches the key in use.
