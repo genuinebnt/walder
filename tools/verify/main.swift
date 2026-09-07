@@ -782,6 +782,62 @@ func run() async -> Int32 {
         return ImagePrints.print(of: url) == nil
     }
 
+    v.section("Duplicate scan scope")
+    v.check("Each scope covers exactly what it says") {
+        store.libraryWallpapers = [
+            LocalWallpaper(id: "1", folderId: "f", url: URL(filePath: "/tmp/a.png"),
+                           path: "/tmp/a.png", filename: "a.png", fileSize: 1,
+                           isFavorite: false, subpath: "anime"),
+            LocalWallpaper(id: "2", folderId: "f", url: URL(filePath: "/tmp/b.png"),
+                           path: "/tmp/b.png", filename: "b.png", fileSize: 1,
+                           isFavorite: false, subpath: "anime/girls"),
+            LocalWallpaper(id: "3", folderId: "f", url: URL(filePath: "/tmp/c.png"),
+                           path: "/tmp/c.png", filename: "c.png", fileSize: 1,
+                           isFavorite: false, subpath: "nature")
+        ]
+        store.selectedFolder = "f"
+        store.browse(to: "anime")
+
+        store.duplicateScope = .thisFolder
+        let here = store.duplicateCandidates.map(\.filename)
+
+        store.duplicateScope = .includingNested
+        let nested = store.duplicateCandidates.map(\.filename).sorted()
+
+        store.duplicateScope = .everything
+        let all = store.duplicateCandidates.count
+
+        store.libraryWallpapers = []
+        store.selectedFolder = nil
+        store.browse(to: "")
+        store.duplicateScope = .includingNested
+
+        // "anime" alone, then anime plus anime/girls, then the lot.
+        return here == ["a.png"]
+            && nested == ["a.png", "b.png"]
+            && all == 3
+    }
+    v.check("A sibling folder is never pulled in by the nested scope") {
+        // anime/girls must not sweep in nature just because both are nested.
+        store.libraryWallpapers = [
+            LocalWallpaper(id: "1", folderId: "f", url: URL(filePath: "/tmp/a.png"),
+                           path: "/tmp/a.png", filename: "a.png", fileSize: 1,
+                           isFavorite: false, subpath: "anime"),
+            LocalWallpaper(id: "2", folderId: "f", url: URL(filePath: "/tmp/c.png"),
+                           path: "/tmp/c.png", filename: "c.png", fileSize: 1,
+                           isFavorite: false, subpath: "animals")
+        ]
+        store.selectedFolder = "f"
+        store.browse(to: "anime")
+        store.duplicateScope = .includingNested
+        // "animals" starts with "anima" but is not inside "anime".
+        let scoped = store.duplicateCandidates.map(\.filename)
+        store.libraryWallpapers = []
+        store.selectedFolder = nil
+        store.browse(to: "")
+        return scoped == ["a.png"]
+    }
+
     v.section("System accent matching")
     v.check("A strong colour maps to the accent a person would name") {
         SystemAccent.nearest(toHex: "0066cc") == .blue

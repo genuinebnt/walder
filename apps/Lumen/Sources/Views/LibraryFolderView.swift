@@ -70,14 +70,26 @@ struct LibraryFolderView: View {
                     .controlSize(.mini)
                     .font(.system(size: 11.5))
 
-                Button {
-                    Task { await store.findDuplicates() }
+                Menu {
+                    // A nested import legitimately holds the same picture in a
+                    // parent and a child, so what counts is the user's call.
+                    Picker("Scan", selection: Binding(
+                        get: { store.duplicateScope },
+                        set: { store.duplicateScope = $0 })) {
+                        ForEach(Store.DuplicateScope.allCases) { Text($0.label).tag($0) }
+                    }
+                    .pickerStyle(.inline)
                 } label: {
                     Label("Find Duplicates", systemImage: "square.on.square")
+                } primaryAction: {
+                    Task { await store.findDuplicates() }
                 }
-                .disabled(store.libraryWallpapers.isEmpty || store.isIndexingPrints)
-                .help("Finds the same picture at another resolution or re-encoded, "
-                      + "which a file comparison would miss")
+                .menuStyle(.button)
+                .fixedSize()
+                .disabled(store.duplicateCandidates.isEmpty || store.isIndexingPrints)
+                .help("Scans \(store.duplicateScope.label.lowercased()). Finds the same "
+                      + "picture at another resolution or re-encoded, which a file "
+                      + "comparison would miss.")
 
                 if !store.duplicateGroups.isEmpty || !store.similarToSelection.isEmpty {
                     Button("Clear") { store.clearSimilarity() }
@@ -238,7 +250,7 @@ struct LibraryFolderView: View {
     /// Groups of files that look like the same picture.
     private var duplicates: some View {
         VStack(alignment: .leading, spacing: Tokens.s4) {
-            Text("\(store.duplicateGroups.count) SETS OF DUPLICATES")
+            Text("\(store.duplicateGroups.count) SETS OF DUPLICATES · \(store.duplicateScope.label.uppercased())")
                 .font(.sectionLabel).foregroundStyle(.secondary)
             ForEach(Array(store.duplicateGroups.enumerated()), id: \.offset) { _, group in
                 VStack(alignment: .leading, spacing: Tokens.s2) {

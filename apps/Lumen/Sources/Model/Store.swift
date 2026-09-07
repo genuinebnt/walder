@@ -572,10 +572,44 @@ final class Store {
     // same wallpaper at another resolution, and "more like this one" among
     // files you already have.
 
+    /// What a duplicate scan looks at.
+    enum DuplicateScope: String, CaseIterable, Identifiable {
+        case thisFolder, includingNested, everything
+        var id: String { rawValue }
+        var label: String {
+            switch self {
+            case .thisFolder: "This folder"
+            case .includingNested: "With nested"
+            case .everything: "Everything"
+            }
+        }
+    }
+
+    var duplicateScope: DuplicateScope = .includingNested
     var isIndexingPrints = false
     var indexProgress: (done: Int, total: Int) = (0, 0)
     var duplicateGroups: [[LocalWallpaper]] = []
     var similarToSelection: [LocalWallpaper] = []
+
+    /// The files a duplicate scan would consider, given the current scope.
+    ///
+    /// Scope matters because a nested import legitimately holds the same
+    /// picture in a parent and a child folder, and whether that counts is the
+    /// user's call, not ours.
+    var duplicateCandidates: [LocalWallpaper] {
+        switch duplicateScope {
+        case .everything:
+            libraryWallpapers
+        case .includingNested:
+            // This level and everything beneath it.
+            libraryWallpapers.filter {
+                browsePath.isEmpty || $0.subpath == browsePath
+                    || $0.subpath.hasPrefix(browsePath + "/")
+            }
+        case .thisFolder:
+            libraryWallpapers.filter { $0.subpath == browsePath }
+        }
+    }
 
     /// How many library files still have no print.
     var unindexedCount: Int {
@@ -588,14 +622,14 @@ final class Store {
     /// Off the main actor, in batches, so a large folder does not freeze the
     /// UI or hold every print in memory at once.
     @MainActor
-    func indexLibrary() async {
+    func indexLibrary(_ scope: [LocalWallpaper]? = nil) async {
         guard coreReady, !isIndexingPrints else { return }
         isIndexingPrints = true
         defer { isIndexingPrints = false; indexProgress = (0, 0) }
 
         LumenCore.shared.prunePrints()
         let known = LumenCore.shared.printedPaths()
-        let pending = libraryWallpapers.filter { !known.contains($0.path) }
+        let pending = (scope ?? libraryWallpapers).filter { !known.contains($0.path) }
         guard !pending.isEmpty else { return }
         indexProgress = (0, pending.count)
 
@@ -630,18 +664,22 @@ final class Store {
     @MainActor
     func findDuplicates() async {
         guard coreReady else { return }
-        await indexLibrary()
+        let candidates = duplicateCandidates
+        guard !candidates.isEmpty else { return }
+        await indexLibrary(candidates)
         isIndexingPrints = true
         defer { isIndexingPrints = false }
 
-        let prints = await loadedPrints()
+        // Compare only within the chosen scope, not the whole library.
+        let wanted = Set(candidates.map(\.path))
+        let prints = await loadedPrints().filter { wanted.contains($0.path) }
         let groups = await Task.detached(priority: .userInitiated) {
             ImagePrints.duplicateGroups(in: prints)
         }.value
 
         // Map paths back to what the grid renders, dropping anything no longer
         // in the library.
-        let byPath = Dictionary(uniqueKeysWithValues: libraryWallpapers.map { ($0.path, $0) })
+        let byPath = Dictionary(uniqueKeysWithValues: candidates.map { ($0.path, $0) })
         withAnimation(Tokens.normal) {
             duplicateGroups = groups.compactMap { group in
                 let found = group.compactMap { byPath[$0] }
