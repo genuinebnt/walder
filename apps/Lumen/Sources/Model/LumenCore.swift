@@ -129,6 +129,13 @@ final class LumenCore: @unchecked Sendable {
         Set(decodeSync([String].self, Self.takeString(lumen_downloaded_ids())) ?? [])
     }
 
+    /// Records Lumen already holds for these wallpapers, skipping any it does not.
+    func cachedWallpapers(ids: [String]) -> [Wallpaper] {
+        guard !ids.isEmpty else { return [] }
+        return decodeSync([Wallpaper].self,
+                          Self.takeString(lumen_wallpapers_cached(Self.json(["ids": ids])))) ?? []
+    }
+
     // MARK: Image feature prints
 
     struct StoredPrint: Decodable {

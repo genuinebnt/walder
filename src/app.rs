@@ -5,16 +5,16 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 // Removed unused tracing imports
 
-use wallsetter_core::*;
-use wallsetter_db::Database;
-use wallsetter_downloader::DownloadManager;
-use wallsetter_provider::WallhavenClient;
-use wallsetter_scheduler::Scheduler;
-use wallsetter_setter::DesktopWallpaperSetter;
+use lumen_core::*;
+use lumen_db::Database;
+use lumen_downloader::DownloadManager;
+use lumen_provider::WallhavenClient;
+use lumen_scheduler::Scheduler;
+use lumen_setter::DesktopWallpaperSetter;
 
 use crate::theme::active_theme;
 
-pub struct WallsetterApp {
+pub struct LumenApp {
     // Core state
     db: Arc<Database>,
     provider: Arc<WallhavenClient>,
@@ -262,7 +262,7 @@ pub enum DownloadViewTab {
 
 pub const SEARCH_SCROLL_ID: &str = "search_results_scroll";
 
-impl WallsetterApp {
+impl LumenApp {
     const GRID_COLUMN_PRESETS: [u32; 3] = [3, 4, 6];
 
     fn normalize_grid_columns(cols: u32) -> u32 {
@@ -3353,24 +3353,24 @@ pub fn resolve_download_dir(raw: &str) -> std::path::PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use super::WallsetterApp;
+    use super::LumenApp;
 
     #[test]
     fn normalize_search_query_supports_author_aliases() {
         assert_eq!(
-            WallsetterApp::normalize_search_query_for_api("@tomthecom"),
+            LumenApp::normalize_search_query_for_api("@tomthecom"),
             Some("@tomthecom".to_string())
         );
         assert_eq!(
-            WallsetterApp::normalize_search_query_for_api("author:tomthecom"),
+            LumenApp::normalize_search_query_for_api("author:tomthecom"),
             Some("@tomthecom".to_string())
         );
         assert_eq!(
-            WallsetterApp::normalize_search_query_for_api("Author:@tomthecom"),
+            LumenApp::normalize_search_query_for_api("Author:@tomthecom"),
             Some("@tomthecom".to_string())
         );
         assert_eq!(
-            WallsetterApp::normalize_search_query_for_api("author: tomthecom"),
+            LumenApp::normalize_search_query_for_api("author: tomthecom"),
             Some("@tomthecom".to_string())
         );
     }
@@ -3379,18 +3379,18 @@ mod tests {
     fn normalize_search_query_supports_tag_aliases() {
         // #tag syntax preserves # so Wallhaven does a proper tag search (%23tag)
         assert_eq!(
-            WallsetterApp::normalize_search_query_for_api("#nature"),
+            LumenApp::normalize_search_query_for_api("#nature"),
             Some("#nature".to_string())
         );
         // tag: prefix strips the keyword but not the hash (tag: is a UI alias, not sent to API)
         assert_eq!(
-            WallsetterApp::normalize_search_query_for_api("tag:nature"),
+            LumenApp::normalize_search_query_for_api("tag:nature"),
             Some("nature".to_string())
         );
         // tag: prefix strips the tag name as-is; # in rest is also stripped
         // +#mountain preserves # since it uses # syntax directly
         assert_eq!(
-            WallsetterApp::normalize_search_query_for_api("Tag:#nature +#mountain -tag:city"),
+            LumenApp::normalize_search_query_for_api("Tag:#nature +#mountain -tag:city"),
             Some("nature +#mountain -city".to_string())
         );
     }
@@ -3398,24 +3398,24 @@ mod tests {
     #[test]
     fn parse_primary_tag_query_supports_hash_and_tag_prefix() {
         assert_eq!(
-            WallsetterApp::parse_primary_tag_query("#nature +#mountain"),
+            LumenApp::parse_primary_tag_query("#nature +#mountain"),
             Some("nature".to_string())
         );
         assert_eq!(
-            WallsetterApp::parse_primary_tag_query("tag:nature +tag:mountain"),
+            LumenApp::parse_primary_tag_query("tag:nature +tag:mountain"),
             Some("nature".to_string())
         );
         assert_eq!(
-            WallsetterApp::parse_primary_tag_query("-#nature #mountain"),
+            LumenApp::parse_primary_tag_query("-#nature #mountain"),
             Some("mountain".to_string())
         );
-        assert_eq!(WallsetterApp::parse_primary_tag_query("-tag:nature"), None);
+        assert_eq!(LumenApp::parse_primary_tag_query("-tag:nature"), None);
     }
 
     #[test]
     fn parse_ratio_filters_supports_keywords() {
         assert_eq!(
-            WallsetterApp::parse_ratio_filters("landscape, portrait, 16x9"),
+            LumenApp::parse_ratio_filters("landscape, portrait, 16x9"),
             vec![
                 "landscape".to_string(),
                 "portrait".to_string(),

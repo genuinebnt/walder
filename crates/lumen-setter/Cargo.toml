@@ -1,0 +1,11 @@
+[package]
+name = "lumen-setter"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+lumen-core.workspace = true
+wallpaper.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true
+tracing.workspace = true

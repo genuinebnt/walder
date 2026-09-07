@@ -8,10 +8,10 @@ name = "lumen_ffi"
 crate-type = ["staticlib", "rlib"]
 
 [dependencies]
-wallsetter-core.workspace = true
-wallsetter-provider.workspace = true
-wallsetter-downloader.workspace = true
-wallsetter-db.workspace = true
+lumen-core.workspace = true
+lumen-provider.workspace = true
+lumen-downloader.workspace = true
+lumen-db.workspace = true
 
 tokio.workspace = true
 serde.workspace = true

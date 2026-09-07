@@ -74,6 +74,12 @@ struct RootView: View {
             }
             if id == nil { store.collectionPreview = [] }
         }
+        // A pane can ask the shell to move to another one.
+        .onChange(of: store.requestedSection) { _, wanted in
+            guard let wanted, let pane = Section(rawValue: wanted) else { return }
+            withAnimation(Tokens.normal) { section = pane }
+            store.requestedSection = nil
+        }
         // A pane can ask for the preview to open on something specific.
         .onChange(of: store.previewSelection?.id) { _, _ in
             guard let wanted = store.previewSelection else { return }

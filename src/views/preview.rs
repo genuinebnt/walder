@@ -1,11 +1,11 @@
 use iced::widget::{button, column, container, image, responsive, row, scrollable, text};
 use iced::{Alignment, Element, Length};
 
-use wallsetter_core::Wallpaper;
+use lumen_core::Wallpaper;
 
-use crate::app::{Message, WallsetterApp};
+use crate::app::{Message, LumenApp};
 
-pub fn view<'a>(app: &'a WallsetterApp, wp: &'a Wallpaper) -> Element<'a, Message> {
+pub fn view<'a>(app: &'a LumenApp, wp: &'a Wallpaper) -> Element<'a, Message> {
     responsive(move |size| {
         let total_width = if size.width <= 0.0 {
             1100.0

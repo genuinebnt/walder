@@ -1,11 +1,11 @@
 use iced::widget::{button, column, container, image, mouse_area, progress_bar, row, scrollable, text, text_input};
 use iced::{Alignment, Element, Length, Theme};
 
-use wallsetter_core::DownloadStatus;
+use lumen_core::DownloadStatus;
 
-use crate::app::{DownloadViewTab, Message, WallsetterApp};
+use crate::app::{DownloadViewTab, Message, LumenApp};
 
-pub fn view<'a>(app: &'a WallsetterApp) -> Element<'a, Message> {
+pub fn view<'a>(app: &'a LumenApp) -> Element<'a, Message> {
     let download_folders = app.download_folders();
     let current_tab = app.download_view_tab();
 
@@ -125,7 +125,7 @@ pub fn view<'a>(app: &'a WallsetterApp) -> Element<'a, Message> {
     .into()
 }
 
-fn queue_view<'a>(app: &'a WallsetterApp) -> Element<'a, Message> {
+fn queue_view<'a>(app: &'a LumenApp) -> Element<'a, Message> {
     let tasks = app.download_tasks();
 
     let queued_count = tasks.iter().filter(|t| t.status == DownloadStatus::Queued).count();
@@ -262,7 +262,7 @@ fn queue_view<'a>(app: &'a WallsetterApp) -> Element<'a, Message> {
         .into()
 }
 
-fn library_view<'a>(app: &'a WallsetterApp) -> Element<'a, Message> {
+fn library_view<'a>(app: &'a LumenApp) -> Element<'a, Message> {
     let all_items = app.local_wallpapers_for_display();
     let download_folders = app.download_folders();
 

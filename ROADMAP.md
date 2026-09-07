@@ -153,7 +153,7 @@ thumbnails — not Wallhaven's whole catalogue.
   Text queries embed instantly.
 - Storage: 512–768 floats per image. At a few thousand wallpapers a flat cosine
   scan in memory beats any index — **no vector database.** Persist as a BLOB in
-  `wallsetter-db`, keyed by wallpaper id; embed on download, lazily for browsed
+  `lumen-db`, keyed by wallpaper id; embed on download, lazily for browsed
   thumbnails. Quantise to int8 if the library grows: 10k × 512 int8 is 5 MB.
 
 **Cost** — app size, a one-time model download, an embedding backfill pass, and a

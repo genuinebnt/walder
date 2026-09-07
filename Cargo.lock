@@ -2765,11 +2765,86 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "234cf4f4a04dc1f57e24b96cc0cd600cf2af460d4161ac5ecdd0af8e1f3b2a38"
 
 [[package]]
+name = "lumen-cli"
+version = "1.0.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "clap",
+ "directories",
+ "futures",
+ "indicatif",
+ "lumen-core",
+ "lumen-db",
+ "lumen-downloader",
+ "lumen-provider",
+ "lumen-scheduler",
+ "lumen-setter",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "lumen-core"
+version = "1.0.0"
+dependencies = [
+ "chrono",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "url",
+ "uuid",
+]
+
+[[package]]
+name = "lumen-db"
+version = "1.0.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "directories",
+ "lumen-core",
+ "r2d2",
+ "r2d2_sqlite",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "lumen-downloader"
+version = "1.0.0"
+dependencies = [
+ "anyhow",
+ "bytes",
+ "chrono",
+ "futures",
+ "lumen-core",
+ "reqwest",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "lumen-ffi"
 version = "1.0.0"
 dependencies = [
  "chrono",
  "directories",
+ "lumen-core",
+ "lumen-db",
+ "lumen-downloader",
+ "lumen-provider",
  "reqwest",
  "serde",
  "serde_json",
@@ -2777,10 +2852,50 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uuid",
- "wallsetter-core",
- "wallsetter-db",
- "wallsetter-downloader",
- "wallsetter-provider",
+]
+
+[[package]]
+name = "lumen-provider"
+version = "1.0.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "futures",
+ "lumen-core",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "url",
+]
+
+[[package]]
+name = "lumen-scheduler"
+version = "1.0.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "lumen-core",
+ "lumen-db",
+ "lumen-setter",
+ "rand 0.8.5",
+ "serde",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "lumen-setter"
+version = "1.0.0"
+dependencies = [
+ "anyhow",
+ "lumen-core",
+ "thiserror 2.0.18",
+ "tracing",
+ "wallpaper",
 ]
 
 [[package]]
@@ -5415,6 +5530,12 @@ dependencies = [
  "futures",
  "iced",
  "image 0.25.9",
+ "lumen-core",
+ "lumen-db",
+ "lumen-downloader",
+ "lumen-provider",
+ "lumen-scheduler",
+ "lumen-setter",
  "reqwest",
  "serde",
  "serde_json",
@@ -5422,12 +5543,6 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uuid",
- "wallsetter-core",
- "wallsetter-db",
- "wallsetter-downloader",
- "wallsetter-provider",
- "wallsetter-scheduler",
- "wallsetter-setter",
 ]
 
 [[package]]
@@ -5451,121 +5566,6 @@ dependencies = [
  "rust-ini 0.12.2",
  "winapi",
  "winreg 0.9.0",
-]
-
-[[package]]
-name = "wallsetter-cli"
-version = "1.0.0"
-dependencies = [
- "anyhow",
- "chrono",
- "clap",
- "directories",
- "futures",
- "indicatif",
- "serde",
- "serde_json",
- "tokio",
- "tracing",
- "tracing-subscriber",
- "wallsetter-core",
- "wallsetter-db",
- "wallsetter-downloader",
- "wallsetter-provider",
- "wallsetter-scheduler",
- "wallsetter-setter",
-]
-
-[[package]]
-name = "wallsetter-core"
-version = "1.0.0"
-dependencies = [
- "chrono",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
- "url",
- "uuid",
-]
-
-[[package]]
-name = "wallsetter-db"
-version = "1.0.0"
-dependencies = [
- "anyhow",
- "chrono",
- "directories",
- "r2d2",
- "r2d2_sqlite",
- "rusqlite",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 2.0.18",
- "tracing",
- "uuid",
- "wallsetter-core",
-]
-
-[[package]]
-name = "wallsetter-downloader"
-version = "1.0.0"
-dependencies = [
- "anyhow",
- "bytes",
- "chrono",
- "futures",
- "reqwest",
- "tempfile",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
- "uuid",
- "wallsetter-core",
-]
-
-[[package]]
-name = "wallsetter-provider"
-version = "1.0.0"
-dependencies = [
- "anyhow",
- "chrono",
- "futures",
- "reqwest",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
- "url",
- "wallsetter-core",
-]
-
-[[package]]
-name = "wallsetter-scheduler"
-version = "1.0.0"
-dependencies = [
- "anyhow",
- "chrono",
- "rand 0.8.5",
- "serde",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
- "wallsetter-core",
- "wallsetter-db",
- "wallsetter-setter",
-]
-
-[[package]]
-name = "wallsetter-setter"
-version = "1.0.0"
-dependencies = [
- "anyhow",
- "thiserror 2.0.18",
- "tracing",
- "wallpaper",
- "wallsetter-core",
 ]
 
 [[package]]

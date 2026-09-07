@@ -1,12 +1,12 @@
 [workspace]
 members = [
-    "crates/wallsetter-core",
-    "crates/wallsetter-provider",
-    "crates/wallsetter-downloader",
-    "crates/wallsetter-setter",
-    "crates/wallsetter-db",
-    "crates/wallsetter-scheduler",
-    "crates/wallsetter-cli",
+    "crates/lumen-core",
+    "crates/lumen-provider",
+    "crates/lumen-downloader",
+    "crates/lumen-setter",
+    "crates/lumen-db",
+    "crates/lumen-scheduler",
+    "crates/lumen-cli",
     "crates/lumen-ffi",
 ]
 resolver = "3"
@@ -63,12 +63,12 @@ bytes = "1"
 indicatif = "0.17"
 
 # Internal crates
-wallsetter-core = { path = "crates/wallsetter-core" }
-wallsetter-provider = { path = "crates/wallsetter-provider" }
-wallsetter-downloader = { path = "crates/wallsetter-downloader" }
-wallsetter-setter = { path = "crates/wallsetter-setter" }
-wallsetter-db = { path = "crates/wallsetter-db" }
-wallsetter-scheduler = { path = "crates/wallsetter-scheduler" }
+lumen-core = { path = "crates/lumen-core" }
+lumen-provider = { path = "crates/lumen-provider" }
+lumen-downloader = { path = "crates/lumen-downloader" }
+lumen-setter = { path = "crates/lumen-setter" }
+lumen-db = { path = "crates/lumen-db" }
+lumen-scheduler = { path = "crates/lumen-scheduler" }
 
 [package]
 name = "walder"
@@ -76,12 +76,12 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
-wallsetter-core.workspace = true
-wallsetter-provider.workspace = true
-wallsetter-downloader.workspace = true
-wallsetter-setter.workspace = true
-wallsetter-db.workspace = true
-wallsetter-scheduler.workspace = true
+lumen-core.workspace = true
+lumen-provider.workspace = true
+lumen-downloader.workspace = true
+lumen-setter.workspace = true
+lumen-db.workspace = true
+lumen-scheduler.workspace = true
 
 iced = { version = "0.13", features = ["tokio", "image", "lazy"] }
 tokio.workspace = true

@@ -20,9 +20,10 @@ struct BrowseView: View {
                 // interpolate; the tiles themselves cross-fade instead.
                 Group {
                     if theme == .masonry {
-                        MasonryLayout(columnWidth: theme.minTileWidth, spacing: theme.spacing) {
-                            ForEach(items) { tile($0) }
-                        }
+                        MasonryGrid(items: items,
+                                    aspect: { $0.ratio > 0 ? $0.ratio : 16.0 / 10 },
+                                    columnWidth: theme.minTileWidth,
+                                    spacing: theme.spacing) { tile($0) }
                     } else {
                         LazyVGrid(columns: [GridItem(.adaptive(minimum: theme.minTileWidth),
                                                      spacing: theme.spacing)],
@@ -173,7 +174,7 @@ struct WallpaperTile: View {
             Rectangle().fill(.quaternary)
                 .overlay { Image(systemName: "photo").foregroundStyle(.tertiary) }
         }
-        .aspectRatio(aspect, contentMode: .fill)
+        .aspectRatio(theme == .masonry ? nil : aspect, contentMode: .fill)
         .frame(maxWidth: .infinity)
         .clipped()
         .overlay { hoverLayer }

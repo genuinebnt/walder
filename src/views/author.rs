@@ -3,10 +3,10 @@ use iced::widget::{
 };
 use iced::{Alignment, Element, Length};
 
-use crate::app::{Message, View, WallsetterApp};
-use wallsetter_core::Purity;
+use crate::app::{Message, View, LumenApp};
+use lumen_core::Purity;
 
-pub fn view<'a>(app: &'a WallsetterApp) -> Element<'a, Message> {
+pub fn view<'a>(app: &'a LumenApp) -> Element<'a, Message> {
     responsive(move |size| {
         let username = app.author_username().unwrap_or("unknown");
         let results = app.author_results();

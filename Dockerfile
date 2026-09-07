@@ -8,13 +8,13 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Set the working directory
-WORKDIR /usr/src/wallsetter
+WORKDIR /usr/src/lumen
 
 # Copy the entire workspace
 COPY . .
 
 # Build only the CLI tool in release mode
-RUN cargo build --release -p wallsetter-cli
+RUN cargo build --release -p lumen-cli
 
 # Use a minimal runtime image
 FROM debian:bookworm-slim
@@ -28,13 +28,13 @@ RUN apt-get update && apt-get install -y \
 WORKDIR /app
 
 # Copy the compiled CLI binary from the builder stage
-COPY --from=builder /usr/src/wallsetter/target/release/wallsetter-cli /usr/local/bin/wallsetter-cli
+COPY --from=builder /usr/src/lumen/target/release/lumen-cli /usr/local/bin/lumen-cli
 
 # Create a volume for storing downloaded wallpapers
 VOLUME ["/wallpapers"]
 
 # Set the default executable
-ENTRYPOINT ["wallsetter-cli"]
+ENTRYPOINT ["lumen-cli"]
 
 # Default command (can be overridden)
 CMD ["--help"]

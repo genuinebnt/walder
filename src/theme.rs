@@ -1,7 +1,7 @@
 use iced::widget::{button, container, scrollable, text_input};
 use iced::{Background, Border, Color, Shadow, Theme as IcedTheme, Vector, border, theme::Palette};
 
-use wallsetter_core::Theme;
+use lumen_core::Theme;
 
 pub fn active_theme(theme: Theme) -> IcedTheme {
     match theme {

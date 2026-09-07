@@ -6,7 +6,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::path::Path;
-use wallsetter_core::*;
+use lumen_core::*;
 
 /// Renders a filesystem path as a `file://` URL, which is what the Swift side
 /// decodes these fields into. A bare path yields a scheme-less URL that

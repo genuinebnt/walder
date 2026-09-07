@@ -4,17 +4,17 @@ use std::sync::Arc;
 use tracing::{Level, info};
 use tracing_subscriber::FmtSubscriber;
 
-use wallsetter_db::Database;
-use wallsetter_downloader::DownloadManager;
-use wallsetter_provider::WallhavenClient;
-use wallsetter_scheduler::Scheduler;
-use wallsetter_setter::DesktopWallpaperSetter;
+use lumen_db::Database;
+use lumen_downloader::DownloadManager;
+use lumen_provider::WallhavenClient;
+use lumen_scheduler::Scheduler;
+use lumen_setter::DesktopWallpaperSetter;
 
 mod app;
 mod theme;
 mod views;
 
-use app::WallsetterApp;
+use app::LumenApp;
 
 fn build_app_icon() -> Option<window::Icon> {
     const SIZE: u32 = 64;
@@ -133,19 +133,19 @@ fn main() -> iced::Result {
     // At that point we are still in plain synchronous code, so dropping `rt`
     // afterwards (not from within an async context) is safe.
     let result = iced::application(
-        WallsetterApp::title,
-        WallsetterApp::update,
-        WallsetterApp::view,
+        LumenApp::title,
+        LumenApp::update,
+        LumenApp::view,
     )
-    .subscription(WallsetterApp::subscription)
-    .theme(WallsetterApp::theme)
+    .subscription(LumenApp::subscription)
+    .theme(LumenApp::theme)
     .window(window::Settings {
         size: Size::new(1024.0, 768.0),
         min_size: Some(Size::new(800.0, 600.0)),
         icon: build_app_icon(),
         ..Default::default()
     })
-    .run_with(move || WallsetterApp::new(db, provider, downloader, setter, scheduler));
+    .run_with(move || LumenApp::new(db, provider, downloader, setter, scheduler));
 
     // Exit the runtime context before dropping the runtime.
     drop(_rt_guard);

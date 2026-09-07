@@ -19,10 +19,10 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock, RwLock};
 use tokio::runtime::Runtime;
-use wallsetter_core::*;
-use wallsetter_db::Database;
-use wallsetter_downloader::DownloadManager;
-use wallsetter_provider::wallhaven::WallhavenClient;
+use lumen_core::*;
+use lumen_db::Database;
+use lumen_downloader::DownloadManager;
+use lumen_provider::wallhaven::WallhavenClient;
 
 // ── callback plumbing ─────────────────────────────────────────────────────
 
@@ -159,12 +159,12 @@ pub unsafe extern "C" fn lumen_init(config_json: *const c_char) -> *mut c_char {
         return to_c(serde_json::json!({ "ok": true, "kind": "init", "data": "reconfigured" }).to_string());
     }
 
-    let built = (|| -> wallsetter_core::Result<Core> {
+    let built = (|| -> lumen_core::Result<Core> {
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .worker_threads(4)
             .build()
-            .map_err(|e| WallsetterError::Other(format!("runtime: {e}")))?;
+            .map_err(|e| LumenError::Other(format!("runtime: {e}")))?;
 
         let data_dir = directories::ProjectDirs::from("cc", "lumen", "Lumen")
             .map(|d| d.data_dir().to_path_buf())
@@ -551,10 +551,10 @@ pub unsafe extern "C" fn lumen_ensure_local(json: *const c_char) -> u64 {
         let fetched = async {
             let response = reqwest::get(&url)
                 .await
-                .map_err(|e| WallsetterError::Http(e.to_string()))?;
+                .map_err(|e| LumenError::Http(e.to_string()))?;
             let status = response.status();
             if !status.is_success() {
-                return Err(WallsetterError::Api {
+                return Err(LumenError::Api {
                     status: status.as_u16(),
                     message: format!("could not fetch {url}"),
                 });
@@ -562,7 +562,7 @@ pub unsafe extern "C" fn lumen_ensure_local(json: *const c_char) -> u64 {
             let bytes = response
                 .bytes()
                 .await
-                .map_err(|e| WallsetterError::Http(e.to_string()))?;
+                .map_err(|e| LumenError::Http(e.to_string()))?;
 
             // Write to a unique temporary file and rename, so a reader never
             // sees a half-written image and two concurrent sets cannot
@@ -575,7 +575,7 @@ pub unsafe extern "C" fn lumen_ensure_local(json: *const c_char) -> u64 {
                 let _ = std::fs::remove_file(&staging);
                 return Err(e.into());
             }
-            Ok::<_, WallsetterError>(file_url(&target))
+            Ok::<_, LumenError>(file_url(&target))
         }
         .await;
 
@@ -625,7 +625,7 @@ pub unsafe extern "C" fn lumen_favorite_toggle(wallpaper_json: *const c_char) ->
         return to_c(err_json("favorite", "id is required"));
     }
 
-    let toggled = (|| -> wallsetter_core::Result<bool> {
+    let toggled = (|| -> lumen_core::Result<bool> {
         if core.db.is_bookmarked(&wallpaper_id)? {
             let marks = core.db.get_bookmarks(None)?;
             if let Some(mark) = marks.iter().find(|m| m.wallpaper_id == wallpaper_id) {
@@ -637,7 +637,7 @@ pub unsafe extern "C" fn lumen_favorite_toggle(wallpaper_json: *const c_char) ->
         let cached = core.db.get_cached_wallpaper(&wallpaper_id)?;
         let wallpaper = match cached {
             Some(w) => w,
-            None => return Err(WallsetterError::NotFound(wallpaper_id.clone())),
+            None => return Err(LumenError::NotFound(wallpaper_id.clone())),
         };
         core.db.add_bookmark(&Bookmark::new(&wallpaper, None))?;
         Ok(true)
@@ -763,7 +763,7 @@ pub unsafe extern "C" fn lumen_collection_set_member(json: *const c_char) -> *mu
     let result = if member {
         match core.db.get_cached_wallpaper(&wallpaper_id) {
             Ok(Some(_)) => core.db.add_to_collection(collection_id, &wallpaper_id),
-            Ok(None) => Err(WallsetterError::NotFound(wallpaper_id.clone())),
+            Ok(None) => Err(LumenError::NotFound(wallpaper_id.clone())),
             Err(e) => Err(e),
         }
     } else {
@@ -777,6 +777,30 @@ pub unsafe extern "C" fn lumen_collection_set_member(json: *const c_char) -> *mu
         ),
         Err(e) => to_c(err_json("collection", e)),
     }
+}
+
+/// Cached records for a list of wallpaper ids, skipping any not held.
+///
+/// `json`: `{ "ids": [String] }`. Caller frees with [`lumen_string_free`].
+///
+/// # Safety
+/// `json` must be NUL-terminated UTF-8, or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn lumen_wallpapers_cached(json: *const c_char) -> *mut c_char {
+    let raw = unsafe { str_from(json) };
+    let Some(core) = core() else {
+        return to_c(err_json("cached", "core not initialised"));
+    };
+    let value: serde_json::Value = serde_json::from_str(&raw).unwrap_or(serde_json::Value::Null);
+    let ids = ids_from(&value);
+
+    let mut found = Vec::new();
+    for id in ids {
+        if let Ok(Some(wallpaper)) = core.db.get_cached_wallpaper(&id) {
+            found.push(WallpaperDto::from(&wallpaper));
+        }
+    }
+    to_c(serde_json::to_string(&Envelope::ok("cached", found)).unwrap_or_default())
 }
 
 // ── crop rectangles ───────────────────────────────────────────────────────

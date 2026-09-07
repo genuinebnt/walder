@@ -187,6 +187,7 @@ final class Store {
         reloadHistory()
         reloadSubscriptions()
         rearmRadar()
+        Task { await backfillSidecars() }
         rearmRotation()
     }
 
@@ -266,7 +267,65 @@ final class Store {
                                 source: wallpaper.path,
                                 pageURL: wallpaper.url,
                                 to: file)
+        // The full record too, so the file can still say what it is once it has
+        // left this database — or this machine.
+        var recorded = wallpaper
+        recorded.localFile = file
+        WallpaperMetadata.writeSidecar(recorded, for: file)
     }
+
+    /// Writes records beside downloads that predate sidecars.
+    ///
+    /// A file downloaded by an earlier build has nothing to read, and its id is
+    /// recoverable from the name Lumen gave it — so the record can be restored
+    /// from the cache rather than re-fetched.
+    @MainActor
+    func backfillSidecars() async {
+        let downloads = libraryWallpapers.filter {
+            $0.filename.hasPrefix("wallhaven-")
+                && WallpaperMetadata.sidecar(for: $0.url) == nil
+        }
+        guard !downloads.isEmpty else { return }
+
+        let byID = Dictionary(grouping: downloads) { local in
+            local.filename
+                .replacingOccurrences(of: "wallhaven-", with: "")
+                .split(separator: ".").first.map(String.init) ?? ""
+        }
+        let records = LumenCore.shared.cachedWallpapers(ids: Array(byID.keys).filter { !$0.isEmpty })
+        guard !records.isEmpty else { return }
+
+        await Task.detached(priority: .utility) {
+            for record in records {
+                for local in byID[record.id] ?? [] {
+                    var stamped = record
+                    stamped.localFile = local.url
+                    WallpaperMetadata.writeSidecar(stamped, for: local.url)
+                }
+            }
+        }.value
+    }
+
+    /// Wallhaven's record for a local file, when it was downloaded by Lumen.
+    func origin(of wallpaper: LocalWallpaper) -> Wallpaper? {
+        WallpaperMetadata.sidecar(for: wallpaper.url)
+    }
+
+    /// Searches from a local file's recorded metadata, switching to Browse.
+    @MainActor
+    func searchFromLocal(_ query: String) {
+        localPreview = nil
+        var next = SearchFilters()
+        next.categories = filters.categories
+        next.purity = filters.purity
+        next.query = query
+        filters = next
+        requestedSection = "browse"
+        Task { await search() }
+    }
+
+    /// A pane asking the shell to switch panes.
+    var requestedSection: String?
 
     /// The wallpaper behind a download row, if the session has seen it.
     func wallpaper(for task: DownloadTask) -> Wallpaper? { known[task.wallpaperId] }
@@ -908,6 +967,7 @@ final class Store {
         }
         reloadSubscriptions()
         rearmRadar()
+        Task { await backfillSidecars() }
     }
 
     @MainActor

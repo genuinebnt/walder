@@ -15,7 +15,7 @@ apps/Lumen/            SwiftUI app
   Sources/Views/       one file per screen
   include/lumen.h      bridging header for the Rust core
 crates/lumen-ffi/      C ABI over the crates below
-crates/wallsetter-*/   provider, downloader, database, setter, scheduler, core
+crates/lumen-*/        provider, downloader, database, setter, scheduler, core
 tools/uidiff/          design → implementation gate
 tools/verify/          runtime control gate
 tools/icon/            generates AppIcon.icns
@@ -43,7 +43,7 @@ request id immediately and its JSON envelope arrives later carrying that id;
 pushes — currently download progress.
 
 Every payload is a JSON envelope (`{ ok, kind, data?, error? }`), so the wire
-format is decoupled from both `wallsetter-core`'s model shapes and SwiftUI's.
+format is decoupled from both `lumen-core`'s model shapes and SwiftUI's.
 Strings the Rust side allocates are freed through `lumen_string_free`.
 
 Adding a call means: a function in `crates/lumen-ffi/src/lib.rs`, its DTO in

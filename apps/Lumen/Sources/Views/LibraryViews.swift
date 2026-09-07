@@ -187,9 +187,10 @@ struct CollectionsView: View {
             } else {
                 Group {
                     if theme == .masonry {
-                        MasonryLayout(columnWidth: theme.minTileWidth, spacing: theme.spacing) {
-                            ForEach(collection.wallpapers) { tile($0, in: collection) }
-                        }
+                        MasonryGrid(items: collection.wallpapers,
+                                    aspect: { $0.ratio > 0 ? $0.ratio : 16.0 / 10 },
+                                    columnWidth: theme.minTileWidth,
+                                    spacing: theme.spacing) { tile($0, in: collection) }
                     } else {
                         LazyVGrid(columns: [GridItem(.adaptive(minimum: theme.minTileWidth),
                                                      spacing: theme.spacing)],

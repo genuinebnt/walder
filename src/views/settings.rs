@@ -1,11 +1,11 @@
 use iced::widget::{button, checkbox, column, container, row, scrollable, text, text_input};
 use iced::{Alignment, Element, Length};
 
-use wallsetter_core::SchedulerSource;
+use lumen_core::SchedulerSource;
 
-use crate::app::{Message, SettingsMessage, WallsetterApp};
+use crate::app::{Message, SettingsMessage, LumenApp};
 
-pub fn view<'a>(app: &'a WallsetterApp) -> Element<'a, Message> {
+pub fn view<'a>(app: &'a LumenApp) -> Element<'a, Message> {
     let prefs = app.preferences();
 
     let api_key_input = row![

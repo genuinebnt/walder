@@ -294,9 +294,10 @@ struct LibraryFolderView: View {
             if theme == .masonry {
                 // Masonry keeps each image's real shape, which is the layout
                 // that never crops.
-                MasonryLayout(columnWidth: theme.minTileWidth, spacing: theme.spacing) {
-                    ForEach(shown) { tile($0) }
-                }
+                MasonryGrid(items: shown,
+                            aspect: { store.aspectRatio(of: $0) },
+                            columnWidth: theme.minTileWidth,
+                            spacing: theme.spacing) { tile($0) }
             } else {
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: theme.minTileWidth),
                                              spacing: theme.spacing)],
@@ -337,7 +338,9 @@ struct LibraryFolderView: View {
                 .overlay { Image(systemName: "photo").foregroundStyle(.tertiary) }
         }
         .frame(maxWidth: .infinity)
-        .aspectRatio(tileAspect(for: wallpaper), contentMode: .fit)
+        // Masonry sizes the tile from its shape, so only the fixed layouts
+        // impose one here.
+        .aspectRatio(theme == .masonry ? nil : tileAspect(for: wallpaper), contentMode: .fit)
         // A letterboxed tile needs something behind it.
         .background(theme == .masonry ? Color.clear : Color.black.opacity(0.35))
         .clipped()
@@ -459,6 +462,8 @@ struct LocalPreview: View {
     @State private var index: Int
     @State private var zoomed = false
     @FocusState private var focused: Bool
+    /// Wallhaven's record, when Lumen downloaded this file.
+    @State private var origin: Wallpaper?
 
     init(items: [LocalWallpaper], selected: LocalWallpaper, close: @escaping () -> Void) {
         self.items = items
@@ -512,6 +517,7 @@ struct LocalPreview: View {
                 .filter { items.indices.contains($0) }
                 .map { items[$0].url }
             ImageCache.shared.prefetch(neighbours, maxPixels: ImageDetail.preview)
+            origin = store.origin(of: wallpaper)
         }
     }
 
@@ -592,6 +598,7 @@ struct LocalPreview: View {
 
                 actions
                 fitReport
+                wallhavenRecord
                 metadata
                 displays
             }
@@ -668,6 +675,79 @@ struct LocalPreview: View {
                 .padding(.horizontal, 11).padding(.vertical, 8)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(.quaternary.opacity(0.4), in: .rect(cornerRadius: Tokens.control))
+            }
+        }
+    }
+
+    /// What Wallhaven knew about this file when Lumen downloaded it.
+    ///
+    /// Read from the record written beside the image, so it works for a file
+    /// this install never downloaded — a copied folder, or a restored backup.
+    @ViewBuilder
+    private var wallhavenRecord: some View {
+        if let origin {
+            VStack(alignment: .leading, spacing: Tokens.s3) {
+                HStack(spacing: Tokens.s2) {
+                    Text("FROM WALLHAVEN").font(.sectionLabel).foregroundStyle(.secondary)
+                    Spacer()
+                    if let url = origin.url {
+                        Link("Open", destination: url).font(.system(size: 11))
+                    }
+                }
+
+                HStack(spacing: Tokens.s3) {
+                    Label(origin.views.formatted(), systemImage: "eye")
+                    Label(origin.favorites.formatted(), systemImage: "heart")
+                    Spacer()
+                    Text(origin.createdAt).font(.caption2Mono)
+                }
+                .font(.system(size: 11.5))
+                .foregroundStyle(.secondary)
+
+                if let uploader = origin.uploader {
+                    Button {
+                        store.searchFromLocal("@\(uploader)")
+                    } label: {
+                        HStack(spacing: Tokens.s2) {
+                            Image(systemName: "person.crop.circle").foregroundStyle(.secondary)
+                            Text(uploader).font(.system(size: 12))
+                            Spacer()
+                            Image(systemName: "arrow.right.circle").foregroundStyle(.tertiary)
+                        }
+                        .padding(.horizontal, 11).padding(.vertical, 7)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(.quaternary.opacity(0.4), in: .rect(cornerRadius: Tokens.control))
+                        .contentShape(.rect)
+                    }
+                    .buttonStyle(.plain)
+                }
+
+                if !origin.colors.isEmpty {
+                    HStack(spacing: 5) {
+                        ForEach(origin.colors, id: \.self) { hex in
+                            RoundedRectangle(cornerRadius: 5)
+                                .fill(Color(hex: hex))
+                                .frame(height: 22)
+                                .overlay {
+                                    RoundedRectangle(cornerRadius: 5)
+                                        .strokeBorder(.separator, lineWidth: 0.5)
+                                }
+                        }
+                    }
+                }
+
+                if !origin.tags.isEmpty {
+                    FlowLayout(spacing: 6) {
+                        ForEach(origin.tags, id: \.self) { tag in
+                            Button(tag) { store.searchFromLocal("#\(tag)") }
+                                .buttonStyle(.plain)
+                                .font(.system(size: 11.5))
+                                .padding(.horizontal, 9).padding(.vertical, 4)
+                                .background(.quaternary.opacity(0.5), in: .capsule)
+                                .contentShape(.capsule)
+                        }
+                    }
+                }
             }
         }
     }

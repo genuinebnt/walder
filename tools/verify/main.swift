@@ -966,6 +966,84 @@ func run() async -> Int32 {
             to: URL(filePath: "/tmp/not-here-\(UUID().uuidString).png")) == false
     }
 
+    v.section("Masonry layout")
+    v.check("Columns balance by shape rather than by count") {
+        // A Layout measures every subview before placing any, which is what
+        // hung a two-thousand-file folder. This is arithmetic on known ratios.
+        struct Tile: Identifiable { let id: Int; let ratio: Double }
+        // Three wide tiles and three tall ones: an even split by count would
+        // pile all the tall ones into one column.
+        let tiles = (0..<6).map { Tile(id: $0, ratio: $0 < 3 ? 2.0 : 0.5) }
+        let grid = MasonryGrid(items: tiles, aspect: \.ratio,
+                               columnWidth: 100, spacing: 8) { _ in EmptyView() }
+        let columns = grid.columnsForVerification(width: 320)   // three columns
+
+        guard columns.count == 3 else { return false }
+        // Every tile placed exactly once, and no column left empty.
+        let placed = columns.flatMap { $0 }.map(\.id).sorted()
+        return placed == [0, 1, 2, 3, 4, 5] && columns.allSatisfy { !$0.isEmpty }
+    }
+    v.check("A single narrow column keeps the original order") {
+        struct Tile: Identifiable { let id: Int; let ratio: Double }
+        let tiles = (0..<4).map { Tile(id: $0, ratio: 1.5) }
+        let grid = MasonryGrid(items: tiles, aspect: \.ratio,
+                               columnWidth: 300, spacing: 8) { _ in EmptyView() }
+        let columns = grid.columnsForVerification(width: 320)
+        return columns.count == 1 && columns[0].map(\.id) == [0, 1, 2, 3]
+    }
+    v.check("A degenerate ratio does not divide by zero") {
+        struct Tile: Identifiable { let id: Int; let ratio: Double }
+        let tiles = [Tile(id: 0, ratio: 0), Tile(id: 1, ratio: -1)]
+        let grid = MasonryGrid(items: tiles, aspect: \.ratio,
+                               columnWidth: 100, spacing: 8) { _ in EmptyView() }
+        return grid.columnsForVerification(width: 320).flatMap { $0 }.count == 2
+    }
+
+    v.section("Download metadata sidecar")
+    v.check("A record written beside a file reads back whole") {
+        let url = FileManager.default.temporaryDirectory
+            .appending(path: "wallhaven-verify-\(UUID().uuidString).png")
+        defer {
+            try? FileManager.default.removeItem(at: url)
+            WallpaperMetadata.removeSidecar(for: url)
+        }
+        guard let rep = NSBitmapImageRep(
+            bitmapDataPlanes: nil, pixelsWide: 8, pixelsHigh: 8,
+            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+            colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0),
+              let png = rep.representation(using: .png, properties: [:]),
+              (try? png.write(to: url)) != nil,
+              let sample = store.wallpapers.first else { return false }
+
+        var record = sample
+        record.tags = ["forest", "mist"]
+        record.uploader = "someone"
+        record.colors = ["336600"]
+        guard WallpaperMetadata.writeSidecar(record, for: url) else { return false }
+
+        guard let read = WallpaperMetadata.sidecar(for: url) else { return false }
+        return read.id == sample.id
+            && read.tags == ["forest", "mist"]
+            && read.uploader == "someone"
+            && read.colors == ["336600"]
+    }
+    v.check("The record is hidden, so the folder scan never indexes it") {
+        // A visible sidecar would be picked up as a file in every folder.
+        let url = URL(filePath: "/tmp/wallhaven-abc.jpg")
+        return WallpaperMetadata.sidecarURL(for: url).lastPathComponent.hasPrefix(".")
+    }
+    v.check("A missing file is declined rather than leaving an orphan record") {
+        let url = URL(filePath: "/tmp/not-here-\(UUID().uuidString).png")
+        let refused = WallpaperMetadata.writeSidecar(
+            store.wallpapers.first ?? Wallpaper(
+                id: "x", url: nil, path: URL(filePath: "/tmp/x"),
+                thumb: URL(filePath: "/tmp/x"), resolution: "1x1", ratio: 1,
+                views: 0, favorites: 0, category: "general", purity: .sfw,
+                fileSize: 0, fileType: "image/png", createdAt: ""),
+            for: url) == false
+        return refused && WallpaperMetadata.sidecar(for: url) == nil
+    }
+
     v.section("Wallpaper history")
     await v.checkAsync("Setting a wallpaper records it, and undo puts the last one back") {
         // Two local files, so this does not depend on the network.

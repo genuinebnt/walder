@@ -1,0 +1,16 @@
+[package]
+name = "lumen-scheduler"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+lumen-core.workspace = true
+lumen-setter.workspace = true
+lumen-db.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true
+chrono.workspace = true
+serde.workspace = true
+rand = "0.8"

@@ -6,9 +6,9 @@ use iced::widget::{
 use crate::app::SEARCH_SCROLL_ID;
 use iced::{Alignment, Element, Length};
 
-use crate::app::{Message, ResolutionMode, WallsetterApp};
+use crate::app::{Message, ResolutionMode, LumenApp};
 
-use wallsetter_core::{Category, Purity, Resolution, SortOrder, Sorting, ToplistRange};
+use lumen_core::{Category, Purity, Resolution, SortOrder, Sorting, ToplistRange};
 
 const COLOR_PRESETS: [&str; 29] = [
     "660000", "990000", "cc0000", "cc3333", "ea4c88", "993399", "663399", "333399", "0066cc",
@@ -17,7 +17,7 @@ const COLOR_PRESETS: [&str; 29] = [
     "ffffff", "424153",
 ];
 
-pub fn view<'a>(app: &'a WallsetterApp) -> Element<'a, Message> {
+pub fn view<'a>(app: &'a LumenApp) -> Element<'a, Message> {
     let filters = app.active_filters();
     let has_results = app
         .search_results()

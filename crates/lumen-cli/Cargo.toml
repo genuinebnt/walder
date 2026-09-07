@@ -1,0 +1,28 @@
+[package]
+name = "lumen-cli"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "lumen-cli"
+path = "src/main.rs"
+
+[dependencies]
+lumen-core.workspace = true
+lumen-provider.workspace = true
+lumen-downloader.workspace = true
+lumen-setter.workspace = true
+lumen-db.workspace = true
+lumen-scheduler.workspace = true
+
+clap.workspace = true
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+anyhow.workspace = true
+directories.workspace = true
+indicatif.workspace = true
+chrono.workspace = true
+futures.workspace = true

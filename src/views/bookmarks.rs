@@ -1,9 +1,9 @@
 use iced::widget::{button, column, container, image, responsive, row, scrollable, text, text_input};
 use iced::{Alignment, Element, Length};
 
-use crate::app::{Message, WallsetterApp};
+use crate::app::{Message, LumenApp};
 
-pub fn view<'a>(app: &'a WallsetterApp) -> Element<'a, Message> {
+pub fn view<'a>(app: &'a LumenApp) -> Element<'a, Message> {
     let bookmarks = app.bookmarks_for_display();
     let all_folders = app.bookmark_folders();
     let selected_folder = app.selected_folder();
