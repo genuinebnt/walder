@@ -84,7 +84,12 @@ struct PreviewPane: View {
         .focusable()
         .focusEffectDisabled()
         .focused($focused)
-        .onAppear { focused = true }
+        .onAppear {
+            focused = true
+            // The Spaces list is only useful if it reflects what is on them
+            // now — they change while the app is open.
+            store.reloadSpaces()
+        }
         // Arrow keys page through the list; Escape closes; Space toggles zoom.
         .onKeyPress(.leftArrow) { step(-1); return .handled }
         .onKeyPress(.rightArrow) { step(1); return .handled }
@@ -249,6 +254,7 @@ struct PreviewPane: View {
                 palette
                 tags
                 displays
+                spaces
             }
             .padding(Tokens.s4)
         }
@@ -630,6 +636,58 @@ struct PreviewPane: View {
             return wallpaper.tagRefs.map { ($0.name, $0) }
         }
         return wallpaper.tags.map { ($0, nil) }
+    }
+
+    /// Assigns this wallpaper to one Space, leaving the others alone.
+    ///
+    /// The Displays list above sends it to a whole screen; this sends it to one
+    /// desktop on that screen, which is what macOS's own Spaces are for and
+    /// what System Settings does not offer.
+    @ViewBuilder
+    private var spaces: some View {
+        if SpacesWallpaper.isAvailable, !store.spaces.isEmpty {
+            VStack(alignment: .leading, spacing: Tokens.s2) {
+                Text("SEND TO A SPACE").font(.sectionLabel).foregroundStyle(.secondary)
+                ForEach(store.spaces) { space in
+                    Button {
+                        store.setWallpaper(wallpaper, onSpace: space)
+                        confirmSet()
+                    } label: {
+                        HStack(spacing: Tokens.s2) {
+                            // The Space's own wallpaper, so the row is
+                            // recognisable without counting desktops.
+                            Group {
+                                if let url = store.wallpaper(onSpace: space) {
+                                    CachedImage(url: url) { image in
+                                        image.resizable().aspectRatio(contentMode: .fill)
+                                    } placeholder: {
+                                        Rectangle().fill(.quaternary)
+                                    } failure: {
+                                        Rectangle().fill(.quaternary)
+                                    }
+                                } else {
+                                    Rectangle().fill(.quaternary)
+                                }
+                            }
+                            .frame(width: 34, height: 21)
+                            .clipShape(RoundedRectangle(cornerRadius: 3))
+
+                            Text(space.label).lineLimit(1)
+                            if space.isCurrent {
+                                Text("current").font(.caption2Mono).foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Image(systemName: "arrow.right.circle").foregroundStyle(.tertiary)
+                        }
+                        .font(.system(size: 12))
+                        .padding(.horizontal, 11).padding(.vertical, 6)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(.quaternary.opacity(0.4), in: .rect(cornerRadius: Tokens.control))
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
     }
 
     private var displays: some View {

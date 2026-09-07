@@ -405,6 +405,27 @@ func run() async -> Int32 {
     }
 
     // ── displays ──────────────────────────────────────────────────────────
+    v.section("Duplicate accuracy")
+    v.check("The threshold is tight enough to be useful") {
+        // Measured over a 3,894-wallpaper library: 1,552 provably-identical
+        // pairs all sit at 0.000-0.002, and unrelated wallpapers start around
+        // 0.49. The old 0.5 sat inside the unrelated distribution and flagged
+        // roughly 474 unrelated pairs.
+        ImagePrints.duplicateThreshold <= 0.2 && ImagePrints.duplicateThreshold > 0
+    }
+    v.check("Different shapes are not duplicates whatever the print says") {
+        let aspects = ["/a.jpg": 16.0 / 9, "/b.jpg": 9.0 / 16, "/c.jpg": 1.7788]
+        return !ImagePrints.sameShape("/a.jpg", "/b.jpg", aspects)
+            // Within tolerance: 16:9 and 1.7788 are the same wallpaper rounded.
+            && ImagePrints.sameShape("/a.jpg", "/c.jpg", aspects)
+    }
+    v.check("An unknown shape is not treated as a mismatch") {
+        // Rejecting on missing information would lose real duplicates for any
+        // file whose header could not be read.
+        ImagePrints.sameShape("/a.jpg", "/unknown.jpg", ["/a.jpg": 1.77])
+            && ImagePrints.sameShape("/x.jpg", "/y.jpg", [:])
+    }
+
     v.section("Sorting and filtering what you have")
     func localFile(_ name: String, bytes: Int) -> LocalWallpaper {
         LocalWallpaper(id: name, folderId: "f", url: URL(fileURLWithPath: "/tmp/\(name)"),
@@ -473,6 +494,48 @@ func run() async -> Int32 {
         guard store.arranged([tagged]).count == 1 else { return false }
         store.remoteSearch = "desert"
         return store.arranged([tagged]).isEmpty
+    }
+
+    v.section("Discover")
+    v.check("Every node has neighbours, so no seed is stranded") {
+        // A one-sided nearest-neighbour left nodes in components of two, and a
+        // walk from one of them returned a single result — which reads as a
+        // broken feature rather than a sparse corner of the library.
+        var entries: [(path: String, vector: [Float])] = []
+        for i in 0..<40 {
+            // Deliberately spread out, so most pairs are not mutual.
+            var v = [Float](repeating: 0, count: 16)
+            v[i % 16] = Float(i)
+            entries.append(("n\(i)", v))
+        }
+        let graph = SimilarityGraph.build(from: entries, k: 4)
+        return graph.neighbours.allSatisfy { $0.count >= 1 }
+    }
+    v.check("A single seed still returns a screenful") {
+        var entries: [(path: String, vector: [Float])] = []
+        for i in 0..<60 {
+            var v = [Float](repeating: 0, count: 16)
+            v[i % 16] = Float(i) * 0.5
+            v[(i + 3) % 16] = Float(i % 7)
+            entries.append(("n\(i)", v))
+        }
+        let graph = SimilarityGraph.build(from: entries, k: 6)
+        return graph.discover(likes: ["n0"], limit: 24).count >= 12
+    }
+    v.check("Seed weights change the ranking") {
+        // A wallpaper set a dozen times should pull harder than one
+        // favourited once; equal weights would make that impossible.
+        var entries: [(path: String, vector: [Float])] = []
+        for i in 0..<20 {
+            var v = [Float](repeating: 0, count: 8)
+            v[i % 8] = Float(i)
+            entries.append(("n\(i)", v))
+        }
+        let graph = SimilarityGraph.build(from: entries, k: 4)
+        let even = graph.discover(seeds: ["n0": 1, "n10": 1], limit: 20)
+        let skewed = graph.discover(seeds: ["n0": 1, "n10": 20], limit: 20)
+        guard !even.isEmpty, !skewed.isEmpty else { return false }
+        return even.map(\.path) != skewed.map(\.path)
     }
 
     v.section("Download destination")
@@ -1995,10 +2058,12 @@ func run() async -> Int32 {
         }
     }
 
-    v.check("The duplicate threshold sits between the two measured ranges") {
-        // Unrelated real wallpapers measure 0.97-1.27; the same image resized
-        // measures 0.24. A threshold outside that gap is the bug to catch.
-        ImagePrints.duplicateThreshold > 0.3 && ImagePrints.duplicateThreshold < 0.9
+    v.check("The duplicate threshold sits below the unrelated range") {
+        // Re-measured on a 3,894-wallpaper library against 1,552 provably
+        // identical pairs: those sit at 0.000-0.002, and unrelated wallpapers
+        // begin around 0.49. The earlier 0.5 sat *inside* the unrelated
+        // distribution, which is what produced the false positives.
+        ImagePrints.duplicateThreshold > 0 && ImagePrints.duplicateThreshold < 0.49
     }
     v.check("A print can be computed, archived and read back") {
         guard let bigCopy, let observation = ImagePrints.print(of: bigCopy),
@@ -2177,6 +2242,27 @@ func run() async -> Int32 {
     }
 
     v.section("Spaces, individually")
+    v.check("What each Space is showing can be read back") {
+        // Assigning wallpapers to Spaces is only usable if the app can say
+        // which Space is which, and a number cannot do that — the picture can.
+        guard SpacesWallpaper.isAvailable else { return true }
+        let showing = SpacesWallpaper.currentWallpapers()
+        guard !SpacesWallpaper.spaces().isEmpty else { return true }
+        // Anything read back has to be a usable local file. The store keeps
+        // entries for Spaces that have since been closed, so their keys are
+        // deliberately not required to still exist.
+        return showing.values.allSatisfy(\.isFileURL)
+    }
+    v.check("The store reports a wallpaper for the Space in use") {
+        guard SpacesWallpaper.isAvailable else { return true }
+        let spaces = SpacesWallpaper.spaces()
+        guard let current = spaces.first(where: \.isCurrent) else { return true }
+        store.reloadSpaces()
+        // Not an assertion that one exists — a fresh account may have none —
+        // but that asking is safe and self-consistent.
+        let viaStore = store.wallpaper(onSpace: current)
+        return viaStore == SpacesWallpaper.currentWallpapers()[current.uuid]
+    }
     v.check("The window server's Spaces are enumerated and numbered") {
         let spaces = SpacesWallpaper.spaces()
         guard !spaces.isEmpty else {

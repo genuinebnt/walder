@@ -741,7 +741,10 @@ struct LocalPreview: View {
         .focusable()
         .focusEffectDisabled()
         .focused($focused)
-        .onAppear { focused = true }
+        .onAppear {
+            focused = true
+            store.reloadSpaces()
+        }
         .onKeyPress(.leftArrow) { step(-1); return .handled }
         .onKeyPress(.rightArrow) { step(1); return .handled }
         .onKeyPress(.escape) { close(); return .handled }
@@ -849,6 +852,7 @@ struct LocalPreview: View {
                 wallhavenRecord
                 metadata
                 displays
+                spaces
             }
             .padding(Tokens.s4)
         }
@@ -856,6 +860,52 @@ struct LocalPreview: View {
         .scrollContentBackground(.hidden)
         .background(.regularMaterial)
         .background(Color(nsColor: .windowBackgroundColor))
+    }
+
+    /// The same per-Space assignment the Wallhaven preview offers, for a file
+    /// you already have.
+    @ViewBuilder
+    private var spaces: some View {
+        if SpacesWallpaper.isAvailable, !store.spaces.isEmpty {
+            VStack(alignment: .leading, spacing: Tokens.s2) {
+                Text("SEND TO A SPACE").font(.sectionLabel).foregroundStyle(.secondary)
+                ForEach(store.spaces) { space in
+                    Button {
+                        store.setLocalWallpaper(wallpaper, onSpace: space)
+                    } label: {
+                        HStack(spacing: Tokens.s2) {
+                            Group {
+                                if let url = store.wallpaper(onSpace: space) {
+                                    CachedImage(url: url) { image in
+                                        image.resizable().aspectRatio(contentMode: .fill)
+                                    } placeholder: {
+                                        Rectangle().fill(.quaternary)
+                                    } failure: {
+                                        Rectangle().fill(.quaternary)
+                                    }
+                                } else {
+                                    Rectangle().fill(.quaternary)
+                                }
+                            }
+                            .frame(width: 34, height: 21)
+                            .clipShape(RoundedRectangle(cornerRadius: 3))
+
+                            Text(space.label).lineLimit(1)
+                            if space.isCurrent {
+                                Text("current").font(.caption2Mono).foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Image(systemName: "arrow.right.circle").foregroundStyle(.tertiary)
+                        }
+                        .font(.system(size: 12))
+                        .padding(.horizontal, 11).padding(.vertical, 6)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(.quaternary.opacity(0.4), in: .rect(cornerRadius: Tokens.control))
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
     }
 
     private var actions: some View {

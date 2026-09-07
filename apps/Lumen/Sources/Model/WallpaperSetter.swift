@@ -303,6 +303,58 @@ enum SpacesWallpaper {
     /// Replaces the image choice under every `Desktop` node, wherever it sits.
     /// Walking rather than addressing fixed paths survives Apple adding a
     /// level, and leaves screen-saver and idle entries alone.
+    /// What each Space is showing, keyed by the Space's uuid.
+    ///
+    /// The store holds this the same way it takes it: a `Configuration` blob
+    /// that is itself a binary plist, nested somewhere under the Space's
+    /// `Desktop` node. Reading it back is what lets the app show a Space by its
+    /// picture rather than as "Desktop 3" — which is the difference between
+    /// assigning wallpapers to Spaces and guessing which Space is which.
+    static func currentWallpapers() -> [String: URL] {
+        guard isAvailable,
+              let data = try? Data(contentsOf: storeURL),
+              let root = try? PropertyListSerialization.propertyList(
+                from: data, options: [], format: nil) as? [String: Any],
+              let spaces = root["Spaces"] as? [String: Any]
+        else { return [:] }
+
+        var found: [String: URL] = [:]
+        for (uuid, value) in spaces {
+            guard let entry = value as? [String: Any] else { continue }
+            if let url = firstImageURL(in: entry) {
+                found[uuid] = url
+            }
+        }
+        return found
+    }
+
+    /// Walks a Space's entry for the first image choice it holds.
+    private static func firstImageURL(in node: [String: Any]) -> URL? {
+        for (key, value) in node {
+            if key == "Choices", let choices = value as? [[String: Any]] {
+                for choice in choices {
+                    guard let configuration = choice["Configuration"] as? Data,
+                          let nested = try? PropertyListSerialization.propertyList(
+                            from: configuration, options: [], format: nil) as? [String: Any],
+                          let url = nested["url"] as? [String: Any],
+                          let relative = url["relative"] as? String,
+                          let parsed = URL(string: relative)
+                    else { continue }
+                    return parsed
+                }
+            }
+            if let child = value as? [String: Any], let found = firstImageURL(in: child) {
+                return found
+            }
+            if let children = value as? [[String: Any]] {
+                for child in children {
+                    if let found = firstImageURL(in: child) { return found }
+                }
+            }
+        }
+        return nil
+    }
+
     private static func rewriteDesktops(in node: [String: Any],
                                         configuration: Data,
                                         count: inout Int) -> [String: Any] {

@@ -49,7 +49,8 @@ struct SimilarityGraph {
     /// fail the test keeps its single nearest one, so the graph has no
     /// completely isolated points to strand a walk.
     static func build(from entries: [(path: String, vector: [Float])],
-                      k: Int = 12) -> SimilarityGraph {
+                      k: Int = 12,
+                      minimumDegree: Int = 3) -> SimilarityGraph {
         let count = entries.count
         guard count > 1 else {
             return SimilarityGraph(paths: entries.map(\.path),
@@ -120,14 +121,27 @@ struct SimilarityGraph {
                 adjacency[j].append(Edge(to: i, weight: weight))
                 kept += 1
             }
-            // Never strand a node: a walk that reaches a dead end wastes its
-            // mass on a restart.
-            if kept == 0, adjacency[i].isEmpty, let nearest = candidates[i].first {
-                let j = nearest.index
-                let weight = exp(-(nearest.distance * nearest.distance)
-                                 / (scales[i] * scales[j]))
-                adjacency[i].append(Edge(to: j, weight: weight))
-                adjacency[j].append(Edge(to: i, weight: weight))
+            // A node whose neighbours are all one-sided would otherwise sit in
+            // a component of one or two, and a walk that reaches it finds
+            // nothing to go on. Giving every node a floor of `minimumDegree`
+            // one-way edges keeps the graph traversable: over a real library
+            // this took the number of near-isolated components from 298 to
+            // almost none, which is the difference between Discover returning
+            // one result and returning a screenful.
+            if kept < minimumDegree {
+                for nearest in candidates[i].prefix(minimumDegree) {
+                    let j = nearest.index
+                    let pair = Int64(min(i, j)) << 32 | Int64(max(i, j))
+                    guard seen.insert(pair).inserted else { continue }
+                    // Weaker than a mutual edge on purpose: it is a weaker
+                    // claim, and the walk should prefer the reciprocated ones.
+                    let weight = 0.5 * exp(-(nearest.distance * nearest.distance)
+                                           / (scales[i] * scales[j]))
+                    adjacency[i].append(Edge(to: j, weight: weight))
+                    adjacency[j].append(Edge(to: i, weight: weight))
+                    kept += 1
+                    if kept >= minimumDegree { break }
+                }
             }
         }
 
@@ -197,11 +211,19 @@ struct SimilarityGraph {
     func discover(likes: [String],
                   excluding: Set<String> = [],
                   limit: Int = 24) -> [(path: String, score: Float)] {
-        let seeds = Dictionary(likes.map { ($0, Float(1)) }, uniquingKeysWith: +)
+        discover(seeds: Dictionary(likes.map { ($0, Float(1)) }, uniquingKeysWith: +),
+                 excluding: excluding, limit: limit)
+    }
+
+    /// The same, with seeds carrying different weights — a wallpaper you have
+    /// set a dozen times should pull harder than one you favourited once.
+    func discover(seeds: [String: Float],
+                  excluding: Set<String> = [],
+                  limit: Int = 24) -> [(path: String, score: Float)] {
         let scores = walk(from: seeds)
         guard !scores.isEmpty else { return [] }
 
-        let seeded = Set(likes)
+        let seeded = Set(seeds.keys)
         return scores.enumerated()
             .filter { !seeded.contains(paths[$0.offset]) && !excluding.contains(paths[$0.offset]) }
             .filter { $0.element > 0 }

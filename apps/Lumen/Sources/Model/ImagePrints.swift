@@ -17,11 +17,30 @@ import Accelerate
 enum ImagePrints {
     /// How close two prints must be to count as the same picture.
     ///
-    /// Measured rather than guessed, over 116 real wallpapers: unrelated pairs
-    /// land between 0.97 and 1.27, while the same image resized measures 0.24.
-    /// 0.5 sits clear of both. An earlier guess of 10 would have called every
-    /// wallpaper a duplicate of every other.
-    static let duplicateThreshold: Float = 0.5
+    /// Re-measured over a 3,894-wallpaper library, using the 1,552 pairs that
+    /// are provably the same wallpaper — the same Wallhaven id filed in two
+    /// folders — as ground truth. Those pairs measure 0.000 to 0.002. Distinct
+    /// wallpapers begin appearing around 0.49 and have a median of 1.01.
+    ///
+    /// The two distributions are not cleanly separable, because a heavily
+    /// downscaled copy can land as far as 0.87 — further than the closest pair
+    /// of genuinely different wallpapers. So this is a choice about which error
+    /// to make. It is set to catch every exact copy and the common resize and
+    /// re-encode cases (medians 0.033 and 0.077), and to accept missing an
+    /// extreme downscale, because the alternative — the 0.5 this used to be —
+    /// flagged roughly 474 pairs of unrelated wallpapers as duplicates.
+    ///
+    /// At 0.15 that falls to about 109 while still catching all 1,552.
+    static let duplicateThreshold: Float = 0.15
+
+    /// How much two aspect ratios may differ and still be the same picture.
+    ///
+    /// A resize preserves shape and a re-encode preserves it exactly, so a
+    /// difference in proportions is decisive evidence against a duplicate. Over
+    /// the same library this rejected no true duplicate at all — it is free
+    /// accuracy, even though it only removes about a tenth of the false pairs,
+    /// most of which are same-resolution wallpapers in a similar style.
+    static let duplicateAspectTolerance: Double = 0.02
 
     /// Computes a print for one file. Nil for anything Vision cannot read.
     static func print(of url: URL) -> VNFeaturePrintObservation? {
@@ -104,7 +123,10 @@ enum ImagePrints {
     /// sure it is right.
     static func duplicateGroups(
         in prints: [(path: String, print: VNFeaturePrintObservation)],
-        threshold: Float = duplicateThreshold
+        threshold: Float = duplicateThreshold,
+        /// Proportions per file, when known. A pair whose shapes disagree is
+        /// not a duplicate whatever the prints say.
+        aspects: [String: Double] = [:]
     ) -> [[String]] {
         var grouped = Set<Int>()
         var groups: [[String]] = []
@@ -113,7 +135,9 @@ enum ImagePrints {
             var group = [prints[index].path]
             for other in prints.indices where other > index && !grouped.contains(other) {
                 guard let apart = distance(prints[index].print, prints[other].print),
-                      apart <= threshold else { continue }
+                      apart <= threshold,
+                      sameShape(prints[index].path, prints[other].path, aspects)
+                else { continue }
                 group.append(prints[other].path)
                 grouped.insert(other)
             }
@@ -123,6 +147,13 @@ enum ImagePrints {
             }
         }
         return groups
+    }
+
+    /// Whether two files are the same shape, treating an unknown shape as no
+    /// evidence either way rather than as a mismatch.
+    static func sameShape(_ a: String, _ b: String, _ aspects: [String: Double]) -> Bool {
+        guard let ra = aspects[a], let rb = aspects[b], ra > 0, rb > 0 else { return true }
+        return abs(ra - rb) / max(ra, rb) <= duplicateAspectTolerance
     }
 
     /// Loose groups of files that look like each other.

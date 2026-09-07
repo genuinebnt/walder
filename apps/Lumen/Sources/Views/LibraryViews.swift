@@ -395,26 +395,18 @@ struct DisplaysView: View {
                  + "to any of them.")
                 .font(.system(size: 11.5)).foregroundStyle(.secondary)
 
-            FlowLayout(spacing: 6) {
+            // Shown as thumbnails of what each Space is actually displaying:
+            // "Desktop 3" means nothing on its own, but the picture is
+            // recognisable at a glance.
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 132), spacing: Tokens.s3)],
+                      spacing: Tokens.s3) {
                 ForEach(store.spaces) { space in
                     Button {
                         if let current = store.current {
                             store.setWallpaper(current, onSpace: space)
                         }
                     } label: {
-                        HStack(spacing: 6) {
-                            Image(systemName: space.isCurrent
-                                  ? "square.on.square.dashed" : "square")
-                                .font(.system(size: 11))
-                            Text(space.label)
-                            if space.isCurrent {
-                                Text("current").font(.caption2Mono).foregroundStyle(.secondary)
-                            }
-                        }
-                        .font(.system(size: 12))
-                        .padding(.horizontal, 10).padding(.vertical, 6)
-                        .background(.quaternary.opacity(0.45), in: .capsule)
-                        .contentShape(.capsule)
+                        spaceCard(space)
                     }
                     .buttonStyle(.plain)
                     .disabled(store.current == nil)
@@ -427,6 +419,55 @@ struct DisplaysView: View {
         .padding(Tokens.s3)
         .frame(maxWidth: .infinity, alignment: .leading)
         .card()
+    }
+
+    /// One Space, shown as its own wallpaper.
+    ///
+    /// A separate function because the type-checker could not handle it inline
+    /// inside the grid's button label.
+    private func spaceCard(_ space: SpacesWallpaper.Space) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            spaceThumbnail(space)
+                .frame(height: 76)
+                .frame(maxWidth: .infinity)
+                .clipShape(RoundedRectangle(cornerRadius: Tokens.control))
+                .overlay {
+                    RoundedRectangle(cornerRadius: Tokens.control)
+                        .strokeBorder(space.isCurrent ? Tokens.accent : Color.clear,
+                                      lineWidth: 2)
+                }
+
+            HStack(spacing: 5) {
+                Text(space.label).font(.system(size: 12, weight: .medium))
+                if space.isCurrent {
+                    Text("current").font(.caption2Mono).foregroundStyle(.secondary)
+                }
+            }
+        }
+        .contentShape(.rect)
+    }
+
+    @ViewBuilder
+    private func spaceThumbnail(_ space: SpacesWallpaper.Space) -> some View {
+        if let url = store.wallpaper(onSpace: space) {
+            CachedImage(url: url) { image in
+                image.resizable().aspectRatio(contentMode: .fill)
+            } placeholder: {
+                Rectangle().fill(.quaternary.opacity(0.4))
+            } failure: {
+                // A wallpaper Lumen cannot read — a dynamic one, or a file
+                // that has moved since it was set.
+                ZStack {
+                    Rectangle().fill(.quaternary.opacity(0.4))
+                    Image(systemName: "photo").foregroundStyle(.secondary)
+                }
+            }
+        } else {
+            ZStack {
+                Rectangle().fill(.quaternary.opacity(0.4))
+                Image(systemName: "questionmark").foregroundStyle(.tertiary)
+            }
+        }
     }
 
     private var displayGrid: some View {

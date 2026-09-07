@@ -914,8 +914,14 @@ final class Store {
         // Compare only within the chosen scope, not the whole library.
         let wanted = Set(candidates.map(\.path))
         let prints = await loadedPrints().filter { wanted.contains($0.path) }
+        // Shapes come from the file headers the grid already reads, so the
+        // confirming check costs nothing extra.
+        let aspects = candidates.reduce(into: [String: Double]()) { out, file in
+            guard let size = file.pixelSize, size.height > 0 else { return }
+            out[file.path] = size.width / size.height
+        }
         let groups = await Task.detached(priority: .userInitiated) {
-            ImagePrints.duplicateGroups(in: prints)
+            ImagePrints.duplicateGroups(in: prints, aspects: aspects)
         }.value
 
         // Map paths back to what the grid renders, dropping anything no longer
@@ -1122,15 +1128,35 @@ final class Store {
     ///
     /// Recently-set wallpapers are held back, because the answer to "show me
     /// something" should not be what was on the screen yesterday.
+    /// What Discover follows, strongest signal first.
+    ///
+    /// Favourites alone are too thin to walk from: one heart is one seed, and a
+    /// seed in a sparse corner of the graph reaches almost nothing. Wallpapers
+    /// you have actually put on the desktop are the better evidence anyway —
+    /// choosing something repeatedly says more than clicking a heart once.
+    private func discoverySeeds() -> [String: Float] {
+        var seeds: [String: Float] = [:]
+        let known = Set(libraryWallpapers.map(\.path))
+
+        for file in libraryWallpapers where file.isFavorite {
+            seeds[file.path, default: 0] += 3
+        }
+        // Repeats add up, so a wallpaper set again and again weighs more.
+        for entry in history.prefix(60) where known.contains(entry.url.path) {
+            seeds[entry.url.path, default: 0] += 1
+        }
+        return seeds
+    }
+
     @MainActor
     func discover() async {
         guard coreReady else { return }
         await indexLibrary()
 
-        let liked = libraryWallpapers.filter(\.isFavorite).map(\.path)
-        guard !liked.isEmpty else {
-            errorMessage = "Favourite a few of your own wallpapers first — "
-                + "that is what Discover follows."
+        let seeds = discoverySeeds()
+        guard !seeds.isEmpty else {
+            errorMessage = "Favourite a few of your own wallpapers, or set some, "
+                + "so Discover has something to follow."
             return
         }
         guard let graph = await libraryGraph() else { return }
@@ -1138,14 +1164,45 @@ final class Store {
         isDiscovering = true
         defer { isDiscovering = false }
 
-        let recent = Set(history.prefix(20).map(\.url.path))
-        let picks = await Task.detached(priority: .userInitiated) {
-            graph.discover(likes: liked, excluding: recent, limit: 24)
+        let recent = Set(history.prefix(8).map(\.url.path))
+        let vectors = await libraryVectors()
+        let picks = await Task.detached(priority: .userInitiated) { () -> [String] in
+            var found = graph.discover(seeds: seeds, excluding: recent, limit: 24)
+                .map(\.path)
+
+            // The graph is not one connected piece — a seed in a small
+            // component genuinely has few neighbours to reach, and returning
+            // one result reads as a broken feature rather than a sparse corner.
+            // Topping up by plain distance to the seeds is the honest fallback.
+            if found.count < 12 {
+                let taken = Set(found).union(seeds.keys).union(recent)
+                let byPath = Dictionary(vectors.map { ($0.path, $0.vector) },
+                                        uniquingKeysWith: { first, _ in first })
+                let references = seeds.keys.compactMap { byPath[$0] }
+                if !references.isEmpty {
+                    let extra = vectors
+                        .filter { !taken.contains($0.path) }
+                        .map { entry -> (String, Float) in
+                            let best = references
+                                .map { ImagePrints.distance(entry.vector, $0) }
+                                .min() ?? .greatestFiniteMagnitude
+                            return (entry.path, best)
+                        }
+                        .sorted { $0.1 < $1.1 }
+                        .prefix(24 - found.count)
+                        .map(\.0)
+                    found.append(contentsOf: extra)
+                }
+            }
+            return found
         }.value
 
         let byPath = Dictionary(uniqueKeysWithValues: libraryWallpapers.map { ($0.path, $0) })
         withAnimation(Tokens.normal) {
-            discoveries = picks.compactMap { byPath[$0.path] }
+            discoveries = picks.compactMap { byPath[$0] }
+        }
+        if discoveries.isEmpty {
+            errorMessage = "Nothing to suggest yet — index the library first."
         }
     }
 
@@ -1244,10 +1301,19 @@ final class Store {
     // MARK: Spaces
 
     var spaces: [SpacesWallpaper.Space] = []
+    /// What each Space is showing now, so the list can be read by picture
+    /// rather than by number.
+    var spaceWallpapers: [String: URL] = [:]
 
     @MainActor
     func reloadSpaces() {
         spaces = SpacesWallpaper.spaces()
+        spaceWallpapers = SpacesWallpaper.currentWallpapers()
+    }
+
+    /// The file a Space is showing, if Lumen can tell.
+    func wallpaper(onSpace space: SpacesWallpaper.Space) -> URL? {
+        spaceWallpapers[space.uuid]
     }
 
     /// Sets a wallpaper on one Space, leaving every other alone.
@@ -1261,6 +1327,7 @@ final class Store {
                 try SpacesWallpaper.apply(fileURL: local, toSpace: space.uuid)
                 recordHistory(local, id: wallpaper.id,
                               label: "wallhaven-\(wallpaper.id) (\(space.label))")
+                reloadSpaces()
                 errorMessage = nil
             } catch {
                 errorMessage = error.localizedDescription
@@ -1278,6 +1345,7 @@ final class Store {
             try SpacesWallpaper.apply(fileURL: wallpaper.url, toSpace: space.uuid)
             recordHistory(wallpaper.url, id: nil,
                           label: "\(wallpaper.filename) (\(space.label))")
+            reloadSpaces()
             errorMessage = nil
         } catch {
             errorMessage = error.localizedDescription
