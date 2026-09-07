@@ -22,11 +22,20 @@ struct DownloadsView: View {
                 }
 
                 if store.downloads.isEmpty {
-                    ContentUnavailableView("No downloads yet",
-                                           systemImage: "arrow.down.circle",
-                                           description: Text("Hover a wallpaper and choose Download."))
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, Tokens.s6)
+                    ContentUnavailableView {
+                        Label("No downloads in progress", systemImage: "arrow.down.circle")
+                    } description: {
+                        // This pane is transfers, which do not outlive the app.
+                        // Everything already on disk lives in Folders.
+                        Text("This list shows transfers. Wallpapers you have already "
+                             + "downloaded are in Folders, under Lumen downloads.")
+                    } actions: {
+                        Button("Open Folders") {
+                            NotificationCenter.default.post(name: .lumenShowFolders, object: nil)
+                        }
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, Tokens.s6)
                 }
             }
             .padding(Tokens.s4)

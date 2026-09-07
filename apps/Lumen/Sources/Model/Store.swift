@@ -12,6 +12,8 @@ final class Store {
     var wallpapers: [Wallpaper] = []
     var page = 1
     var lastPage = 1
+    /// What Wallhaven says the search matches in total.
+    var totalResults = 0
     var isLoading = false
     var errorMessage: String?
 
@@ -201,6 +203,9 @@ final class Store {
             downloadedIDs.insert(task.wallpaperId)
             if isNew { Task { await tagOnDisk(task.wallpaperId, at: local) } }
         }
+        // A finished download should be browsable in Folders straight away,
+        // not only after a relaunch.
+        if tasks.contains(where: { $0.state == .done }) { scheduleDownloadRefresh() }
     }
 
     private func attachLocalFile(_ local: URL, to wallpaperId: String) {
@@ -211,6 +216,21 @@ final class Store {
             favorites[index].localFile = local
         }
         known[wallpaperId]?.localFile = local
+    }
+
+    @ObservationIgnored private var downloadRefresh: Task<Void, Never>?
+
+    /// Re-indexes the download folder shortly after downloads settle, rather
+    /// than once per finished file in a batch.
+    @MainActor
+    private func scheduleDownloadRefresh() {
+        downloadRefresh?.cancel()
+        downloadRefresh = Task {
+            try? await Task.sleep(for: .seconds(2))
+            guard !Task.isCancelled else { return }
+            try? await LumenCore.shared.refreshDownloads()
+            reloadLibrary()
+        }
     }
 
     /// Re-reads what is on disk. Cheap: one directory listing.
@@ -265,6 +285,7 @@ final class Store {
         do {
             let result = try await LumenCore.shared.search(filters, page: page, seed: searchSeed)
             lastPage = max(result.lastPage, 1)
+            totalResults = result.total
             if let seed = result.seed, !seed.isEmpty { searchSeed = seed }
             wallpapers = reset ? result.wallpapers : wallpapers + result.wallpapers
             remember(result.wallpapers)
@@ -1258,6 +1279,59 @@ final class Store {
     func selectAll(_ wallpapers: [Wallpaper]) {
         remember(wallpapers)
         withAnimation(Tokens.quick) { selected = Set(wallpapers.map(\.id)) }
+    }
+
+    /// True while pages are being fetched to satisfy a bulk selection.
+    var isSelectingAhead = false
+
+    /// The most that could be selected: what Wallhaven says exists, or what is
+    /// loaded when it says nothing.
+    var selectableTotal: Int { max(lastPage > 0 ? totalResults : 0, wallpapers.count) }
+
+    /// Selects the first `count` results, fetching more pages if needed.
+    ///
+    /// Capped at what actually exists, so asking for 500 from a search with 90
+    /// selects 90 rather than paging forever.
+    @MainActor
+    func selectFirst(_ count: Int, in list: [Wallpaper]) async {
+        guard coreReady, count > 0 else { return }
+        // Favourites and focus panes are already fully loaded lists.
+        guard list.count == wallpapers.count else {
+            selectAll(Array(list.prefix(count)))
+            return
+        }
+
+        isSelectingAhead = true
+        defer { isSelectingAhead = false }
+
+        let target = min(count, selectableTotal)
+        while wallpapers.count < target && page < lastPage && !isLoading {
+            page += 1
+            await search(reset: false)
+            if errorMessage != nil { break }
+        }
+        selectAll(Array(wallpapers.prefix(target)))
+    }
+
+    /// Selects everything across the first `pages` pages, capped at the last.
+    @MainActor
+    func selectPages(_ pages: Int, in list: [Wallpaper]) async {
+        guard coreReady, pages > 0 else { return }
+        guard list.count == wallpapers.count else {
+            selectAll(list)
+            return
+        }
+
+        isSelectingAhead = true
+        defer { isSelectingAhead = false }
+
+        let wanted = min(pages, max(lastPage, 1))
+        while page < wanted && !isLoading {
+            page += 1
+            await search(reset: false)
+            if errorMessage != nil { break }
+        }
+        selectAll(wallpapers)
     }
 
     @MainActor

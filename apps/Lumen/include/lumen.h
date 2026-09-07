@@ -71,6 +71,7 @@ char *lumen_history_drop_latest(void);
 // Imported folders
 uint64_t lumen_library_import(const char *path);
 uint64_t lumen_library_rescan(void);
+uint64_t lumen_library_refresh_downloads(void);
 char    *lumen_library_folders(void);
 char    *lumen_library_wallpapers(const char *folder_id, bool favorites_only);
 char    *lumen_library_forget(const char *folder_id);

@@ -52,6 +52,12 @@ const WAIVED = new Map([
   // The canvas wins: Wallhaven only does a tag search when the query is
   // prefixed with "#", so the hint has to show it.
   ['Search wallpapers or tag', 'canvas draws "#tag"; that is the form the API needs'],
+  // The Downloads pane lists transfers, which do not survive a relaunch. The
+  // design's wording implied it was where downloaded files live, and people
+  // looked there for them; it now says so and points at Folders.
+  ['No downloads yet', 'replaced by "No downloads in progress", which is what the pane shows'],
+  ['Hover a wallpaper and choose Download.',
+   'replaced by text saying downloaded files live in Folders'],
 ]);
 
 const read = (p) => (fs.existsSync(p) ? fs.readFileSync(p, 'utf8') : '');

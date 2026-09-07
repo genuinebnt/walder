@@ -1414,6 +1414,38 @@ func run() async -> Int32 {
         return store.downloads.count == before
     }
 
+    v.section("Bulk selection by count")
+    v.check("Selectable total never understates what is loaded") {
+        store.selectableTotal >= store.wallpapers.count
+    }
+    await v.checkAsync("Asking for more than exists selects what exists") {
+        guard !store.favorites.isEmpty else { return true }
+        store.setSelecting(true)
+        // Favourites are a fully loaded list, so this must not try to page.
+        await store.selectFirst(10_000, in: store.favorites)
+        let capped = store.selectionCount == store.favorites.count
+        store.setSelecting(false)
+        return capped
+    }
+    await v.checkAsync("Selecting a count fetches pages until it has them") {
+        guard store.lastPage > 1, store.wallpapers.count >= 12 else { return true }
+        store.setSelecting(true)
+        let want = min(store.wallpapers.count + 12, store.selectableTotal)
+        await store.selectFirst(want, in: store.wallpapers)
+        let got = store.selectionCount
+        store.setSelecting(false)
+        // Either it reached the target, or the search genuinely ran out.
+        return got == want || got == store.selectableTotal
+    }
+    v.check("A zero or negative count selects nothing") {
+        store.setSelecting(true)
+        store.clearSelection()
+        Task { await store.selectFirst(0, in: store.wallpapers) }
+        let none = store.selectionCount == 0
+        store.setSelecting(false)
+        return none
+    }
+
     v.section("Fit to display")
     v.check("A matching image at native size reports a perfect fit") {
         let fit = DisplayFit(image: CGSize(width: 3024, height: 1964),

@@ -217,6 +217,12 @@ final class LumenCore: @unchecked Sendable {
         try await call(ImportedFolder.self) { path.withCString { lumen_library_import($0) } }
     }
 
+    /// Re-indexes only the download directory, which is cheap enough to run
+    /// each time a download finishes.
+    func refreshDownloads() async throws {
+        _ = try await call(String?.self) { lumen_library_refresh_downloads() }
+    }
+
     @discardableResult
     func rescanLibrary() async throws -> Int {
         struct Counted: Decodable { let count: Int }

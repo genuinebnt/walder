@@ -195,6 +195,7 @@ pub unsafe extern "C" fn lumen_init(config_json: *const c_char) -> *mut c_char {
             // A library imported before subpaths existed would otherwise stay
             // flat until the user thought to rescan.
             let _ = core.db.backfill_subpaths();
+            ensure_downloads_indexed(core);
             spawn_download_watch(core);
             to_c(serde_json::json!({ "ok": true, "kind": "init", "data": "started" }).to_string())
         }
@@ -1234,6 +1235,26 @@ pub extern "C" fn lumen_history_drop_latest() -> *mut c_char {
 /// pictures you would put on a desktop, not every file macOS can decode.
 const IMAGE_EXTENSIONS: [&str; 7] = ["jpg", "jpeg", "png", "heic", "webp", "tif", "tiff"];
 
+/// Registers the download directory as an imported folder and indexes it.
+///
+/// The Downloads pane lists transfers, which live only as long as the process.
+/// Without this, a wallpaper downloaded yesterday is on disk but nowhere in the
+/// app — so the folder Lumen downloads into is always part of the library.
+fn ensure_downloads_indexed(core: &'static Core) {
+    let dir = core.download_dir.read().unwrap().clone();
+    if !dir.is_dir() {
+        return;
+    }
+    let Ok(folder_id) = core
+        .db
+        .import_folder(&dir.to_string_lossy(), "Lumen downloads")
+    else {
+        return;
+    };
+    let files = scan_images(&dir);
+    let _ = core.db.sync_imported_wallpapers(folder_id, &files);
+}
+
 /// Walks a folder for images. Recurses, because wallpaper folders are usually
 /// organised into subfolders, but skips hidden entries and Lumen's own `.part`
 /// files.
@@ -1336,6 +1357,22 @@ pub unsafe extern "C" fn lumen_library_import(path: *const c_char) -> u64 {
             }
             Err(e) => emit(id, err_json("library", e)),
         }
+    });
+    id
+}
+
+/// Re-indexes just the download directory. Cheap enough to run whenever a
+/// download finishes, unlike a full rescan of every imported folder.
+#[unsafe(no_mangle)]
+pub extern "C" fn lumen_library_refresh_downloads() -> u64 {
+    let id = next_id();
+    let Some(core) = core() else {
+        emit(id, err_json("library", "core not initialised"));
+        return id;
+    };
+    core.runtime.spawn(async move {
+        ensure_downloads_indexed(core);
+        emit(id, serde_json::json!({ "ok": true, "kind": "library" }).to_string());
     });
     id
 }
@@ -1683,7 +1720,12 @@ pub unsafe extern "C" fn lumen_set_preferences(json: *const c_char) -> *mut c_ch
     if let Some(dir) = value.get("downloadDir").and_then(|v| v.as_str()) {
         let resolved = resolve_dir(dir);
         let _ = std::fs::create_dir_all(&resolved);
+        let changed = *core.download_dir.read().unwrap() != resolved;
         *core.download_dir.write().unwrap() = resolved;
+        // A new download directory becomes the browsable one.
+        if changed {
+            ensure_downloads_indexed(core);
+        }
     }
     if let Some(limit) = value.get("maxParallel").and_then(|v| v.as_u64()) {
         core.downloads.set_max_concurrent(limit.clamp(1, 12) as usize);

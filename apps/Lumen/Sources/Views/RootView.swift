@@ -106,6 +106,9 @@ struct RootView: View {
         .onReceive(NotificationCenter.default.publisher(for: .lumenUndo)) { _ in
             store.undoWallpaper()
         }
+        .onReceive(NotificationCenter.default.publisher(for: .lumenShowFolders)) { _ in
+            withAnimation(Tokens.normal) { section = .folders }
+        }
         .onReceive(NotificationCenter.default.publisher(for: .lumenBack)) { _ in
             guard let previous = store.goBack(from: here) else { return }
             apply(previous)
@@ -325,12 +328,43 @@ struct RootView: View {
         HStack(spacing: Tokens.s2) {
             Text(store.selectionCount == 0
                  ? "Select wallpapers"
-                 : "\(store.selectionCount) selected")
+                 : "\(store.selectionCount) of \(store.selectableTotal) selected")
                 .font(.system(size: 12, weight: .medium))
-                .frame(minWidth: 96, alignment: .leading)
+                .frame(minWidth: 132, alignment: .leading)
 
-            Button("Select All") { store.selectAll(viewerItems) }
-                .keyboardShortcut("a", modifiers: .command)
+            Menu {
+                Button("Everything loaded (\(viewerItems.count))") {
+                    store.selectAll(viewerItems)
+                }
+                Divider()
+                // Capped at what the search actually matches, so asking for
+                // more than exists selects what exists.
+                ForEach([50, 100, 250, 500], id: \.self) { count in
+                    let capped = min(count, store.selectableTotal)
+                    Button("First \(capped) wallpapers") {
+                        Task { await store.selectFirst(count, in: viewerItems) }
+                    }
+                    .disabled(capped == 0)
+                }
+                Divider()
+                ForEach([2, 5, 10], id: \.self) { pages in
+                    let capped = min(pages, max(store.lastPage, 1))
+                    Button("First \(capped) page\(capped == 1 ? "" : "s")") {
+                        Task { await store.selectPages(pages, in: viewerItems) }
+                    }
+                    .disabled(store.lastPage <= 1)
+                }
+            } label: {
+                Text("Select…")
+            } primaryAction: {
+                store.selectAll(viewerItems)
+            }
+            .menuStyle(.button)
+            .fixedSize()
+            .keyboardShortcut("a", modifiers: .command)
+            .disabled(store.isSelectingAhead)
+
+            if store.isSelectingAhead { ProgressView().controlSize(.small) }
             Button("Deselect") { store.clearSelection() }
                 .disabled(store.selectionCount == 0)
 

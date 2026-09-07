@@ -72,4 +72,5 @@ extension Notification.Name {
     static let lumenUndo = Notification.Name("lumen.undo")
     static let lumenBack = Notification.Name("lumen.back")
     static let lumenForward = Notification.Name("lumen.forward")
+    static let lumenShowFolders = Notification.Name("lumen.showFolders")
 }
