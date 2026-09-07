@@ -112,6 +112,14 @@ was accepted with:
 - **Quick Look** — space bar in Folders.
 - **Colour search** — the local library filtered by dominant colour, using the
   same seven-name vocabulary as the accent matcher.
+- **Shortcuts actions** — Shuffle Wallpaper, Set Random Favorite and Undo Last
+  Wallpaper, as App Intents in the main binary. No extension turned out to be
+  needed.
+- **A real CLI** — `lumen-cli` over the same database as the app: search,
+  details, tags, uploaders, downloads with Spotlight metadata, favourites,
+  collections, imported folders, history and undo, radar, preferences. Rotation
+  from `cron` is `lumen-cli random --source ... --set`. What needs a window
+  (crop, legibility, accent, feature prints) stays in the app.
 
 ---
 
@@ -130,7 +138,6 @@ These are what would separate Lumen from every other Wallhaven downloader.
 | Feature | Why it stands out | Cost |
 | --- | --- | --- |
 | **Per-Space wallpapers, individually** | "All Spaces" ships, but assigning a *different* wallpaper to each Space does not. The store models it; the missing piece is knowing which Space is which. | Medium now the store's shape is understood. |
-| **Shortcuts actions** | "Set random wallpaper from Favorites", and a Focus-mode trigger. | Medium — App Intents, which needs the app to expose an intent extension. |
 | **Live preview on the desktop** | Set on hover, revert on Escape. | Low mechanically, but it writes the real desktop picture — needs a reliable revert path or it strands the user's wallpaper. |
 
 ## Phase 3 — vector embeddings
