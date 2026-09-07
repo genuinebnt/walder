@@ -17,6 +17,12 @@ struct LibraryFolderView: View {
 
     /// What was last described, kept so the results header can quote it.
     @State private var described = ""
+    /// Whether the description field has the keyboard.
+    ///
+    /// The pane binds the space bar to Quick Look, which is muscle memory in a
+    /// file browser — and which swallowed every space typed into the field
+    /// below, because the container sees the key first.
+    @FocusState private var isDescribing: Bool
 
     var body: some View {
         ScrollView {
@@ -65,6 +71,8 @@ struct LibraryFolderView: View {
         .task(id: store.libraryWallpapers.count) { await store.indexSearchTerms() }
         // Space bar in a file browser is muscle memory.
         .onKeyPress(.space) {
+            // Unless a space is being typed, in which case it is a space.
+            guard !isDescribing else { return .ignored }
             let files = visibleItems
             guard !files.isEmpty else { return .ignored }
             let start = hovered.flatMap { id in files.firstIndex { $0.id == id } } ?? 0
@@ -79,7 +87,11 @@ struct LibraryFolderView: View {
 
     private var folders: some View {
         VStack(alignment: .leading, spacing: Tokens.s2) {
-            HStack(spacing: Tokens.s2) {
+            // Wraps rather than overflowing. There are a dozen controls here
+            // and on a narrow window an HStack pushed the last of them —
+            // including the one that gets you back out of a result set — off
+            // the right edge where they could not be reached.
+            FlowLayout(spacing: Tokens.s2) {
                 Button {
                     chooseFolder()
                 } label: {
@@ -142,13 +154,8 @@ struct LibraryFolderView: View {
                 .help("Walks out from your favourites through the library, so what "
                       + "comes back is related to them rather than a copy of them.")
 
-                if !store.duplicateGroups.isEmpty || !store.similarToSelection.isEmpty
-                    || !store.proposals.isEmpty || !store.discoveries.isEmpty {
-                    Button("Clear") {
-                        store.clearSimilarity()
-                        store.clearProposals()
-                        store.clearDiscoveries()
-                    }
+                if isShowingResults {
+                    Button("Clear") { clearResults() }
                 }
 
                 sortPicker
@@ -156,10 +163,9 @@ struct LibraryFolderView: View {
                 colourPicker
 
                 if store.isScanningLibrary || store.isIndexingPrints || store.isClustering
-                    || store.isDiscovering {
+                    || store.isDiscovering || store.isSemanticIndexing {
                     ProgressView().controlSize(.small)
                 }
-                Spacer()
                 if store.indexProgress.total > 0 {
                     Text("indexing \(store.indexProgress.done) of \(store.indexProgress.total)")
                         .font(.caption2Mono).foregroundStyle(.secondary)
@@ -424,6 +430,25 @@ struct LibraryFolderView: View {
         }
     }
 
+    /// Whether the pane is showing a result set rather than the folder.
+    private var isShowingResults: Bool {
+        !store.duplicateGroups.isEmpty || !store.similarToSelection.isEmpty
+            || !store.proposals.isEmpty || !store.discoveries.isEmpty
+            || !store.semanticResults.isEmpty
+    }
+
+    /// Back to the folder, whatever was being shown.
+    ///
+    /// One function rather than the same four calls in two places: the Clear
+    /// button and the header had already drifted apart, and a describe search
+    /// could not be dismissed from the toolbar because of it.
+    private func clearResults() {
+        store.clearSimilarity()
+        store.clearProposals()
+        store.clearDiscoveries()
+        store.clearSemanticResults()
+    }
+
     /// Says what is being shown instead of the folder, and how to get back.
     ///
     /// Every one of these views replaces the file browser entirely, so without
@@ -431,12 +456,7 @@ struct LibraryFolderView: View {
     /// overflows on a narrow window — which is no way out at all.
     private func resultsHeader(_ title: String) -> some View {
         HStack(spacing: Tokens.s3) {
-            Button {
-                store.clearSimilarity()
-                store.clearProposals()
-                store.clearDiscoveries()
-                store.clearSemanticResults()
-            } label: {
+            Button { clearResults() } label: {
                 Label("All Wallpapers", systemImage: "chevron.left")
                     .font(.system(size: 12, weight: .medium))
             }
@@ -462,7 +482,10 @@ struct LibraryFolderView: View {
                     .foregroundStyle(.secondary).font(.system(size: 11))
                 TextField("Describe it…", text: $described)
                     .textFieldStyle(.plain)
-                    .frame(width: 150)
+                    // Compact until wanted: a phrase needs the room, but the
+                    // row is crowded and the field is idle most of the time.
+                    .frame(width: isDescribing || !described.isEmpty ? 280 : 130)
+                    .focused($isDescribing)
                     .onSubmit {
                         Task { await store.searchSemantically(described) }
                     }
@@ -482,6 +505,7 @@ struct LibraryFolderView: View {
             }
             .padding(.horizontal, 8).padding(.vertical, 3)
             .background(.quaternary.opacity(0.35), in: .capsule)
+            .animation(Tokens.quick, value: isDescribing)
         }
     }
 

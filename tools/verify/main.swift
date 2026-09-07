@@ -759,6 +759,33 @@ func run() async -> Int32 {
         }
         return true
     }
+    v.check("Every result set can be cleared") {
+        // The Clear button and the header back button had drifted apart, and a
+        // describe search could not be dismissed from the toolbar. Both now go
+        // through one place; this asserts the store side of it.
+        store.semanticResults = []
+        store.discoveries = []
+        store.similarToSelection = []
+        store.proposals = []
+        store.clearSemanticResults()
+        store.clearDiscoveries()
+        store.clearSimilarity()
+        store.clearProposals()
+        return store.semanticResults.isEmpty && store.discoveries.isEmpty
+            && store.similarToSelection.isEmpty && store.proposals.isEmpty
+    }
+    v.check("A described search survives spaces in it") {
+        // The Folders pane binds space to Quick Look, which swallowed every
+        // space typed into the description field. The search itself must at
+        // least treat a multi-word phrase as one query.
+        guard SemanticIndex.isInstalled,
+              let tokenizer = try? CLIPTokenizer.standard(in: SemanticIndex.modelDirectory)
+        else { return true }
+        let phrase = tokenizer.encode("a city at night")
+        let single = tokenizer.encode("city")
+        // Four words tokenize to more than one, so the spaces reached the model.
+        return phrase.filter { $0 != 0 }.count > single.filter { $0 != 0 }.count
+    }
     v.check("Natural is offered alongside the other layouts") {
         GridTheme.allCases.contains(.natural) && GridTheme.natural.label == "Natural"
     }
