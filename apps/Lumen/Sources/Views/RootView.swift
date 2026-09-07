@@ -30,6 +30,18 @@ struct RootView: View {
     @State private var columnVisibility: NavigationSplitViewVisibility = .automatic
 
     var body: some View {
+        // The overlays are pinned to the window's real size rather than left to
+        // negotiate their own. Without this the pane laid out wider than the
+        // window — clipping the metadata inspector off the right edge — and
+        // sat below the toolbar's reserved strip, leaving the grid visible
+        // above it.
+        GeometryReader { proxy in
+            overlays(in: proxy.size)
+        }
+        .ignoresSafeArea()
+    }
+
+    private func overlays(in window: CGSize) -> some View {
         ZStack {
             splitView
 
@@ -44,6 +56,7 @@ struct RootView: View {
                            onSave: { store.saveCrop($0) },
                            onCancel: { store.cropTarget = nil })
                     .environment(store)
+                    .frame(width: window.width, height: window.height)
                     .clipped()
                     .transition(.opacity)
                     .zIndex(3)
@@ -55,6 +68,7 @@ struct RootView: View {
                     withAnimation(Tokens.normal) { store.localPreview = nil }
                 }
                 .environment(store)
+                .frame(width: window.width, height: window.height)
                 .clipped()
                 .transition(.opacity)
                 .zIndex(2)
@@ -65,10 +79,9 @@ struct RootView: View {
                     withAnimation(Tokens.normal) { selection = nil }
                 }
                 .environment(store)
-                // No ignoresSafeArea here: it let the pane lay out against the
-                // screen rather than the window, so the inspector ran off the
-                // right edge and the chrome off the left. The title bar area is
-                // handled by hiding the toolbar instead.
+                // Exactly the window, measured — not ignoresSafeArea, which
+                // laid out against the screen and overflowed on both edges.
+                .frame(width: window.width, height: window.height)
                 .clipped()
                 .transition(.opacity)
                 .zIndex(1)

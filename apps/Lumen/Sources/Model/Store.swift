@@ -1940,6 +1940,41 @@ final class Store {
     var previewZoomed = false
     /// Inspector column is showing.
     var previewShowsInspector = true
+    /// True when the fit rule below hid the inspector rather than the user
+    /// doing it, which is what lets it come back on its own.
+    var previewInspectorAutoHidden = false
+
+    /// Width of the inspector column, which is fixed.
+    static let inspectorWidth: CGFloat = 316
+    /// What the image column needs to still read as a preview.
+    static let minimumPreviewWidth: CGFloat = 520
+    /// What it needs once the image is expanded — expanding says the image is
+    /// the point, so a squeezed column defeats it.
+    static let expandedPreviewWidth: CGFloat = 900
+
+    /// Whether the window is wide enough for both columns.
+    static func inspectorFits(windowWidth: CGFloat, expanded: Bool) -> Bool {
+        let needed = expanded ? expandedPreviewWidth : minimumPreviewWidth
+        return windowWidth - inspectorWidth >= needed
+    }
+
+    /// Hides the inspector when there is no room for it beside the image, and
+    /// brings it back when there is again.
+    ///
+    /// Only what this rule hid is restored: an inspector the user closed by
+    /// hand stays closed.
+    @MainActor
+    func reconcilePreviewInspector(windowWidth: CGFloat, expanded: Bool) {
+        guard windowWidth > 0 else { return }
+        let fits = Store.inspectorFits(windowWidth: windowWidth, expanded: expanded)
+        if !fits, previewShowsInspector {
+            withAnimation(Tokens.normal) { previewShowsInspector = false }
+            previewInspectorAutoHidden = true
+        } else if fits, previewInspectorAutoHidden {
+            withAnimation(Tokens.normal) { previewShowsInspector = true }
+            previewInspectorAutoHidden = false
+        }
+    }
 
     @MainActor
     func togglePreviewZoom() {
@@ -1949,6 +1984,9 @@ final class Store {
     @MainActor
     func togglePreviewInspector() {
         withAnimation(Tokens.normal) { previewShowsInspector.toggle() }
+        // A deliberate choice outranks the fit rule until the window or the
+        // zoom changes again.
+        previewInspectorAutoHidden = false
     }
 
     // MARK: Selection

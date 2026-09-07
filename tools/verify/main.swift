@@ -1268,6 +1268,38 @@ func run() async -> Int32 {
         store.togglePreviewInspector()
         return kept
     }
+    v.check("A narrow window hides the inspector, a wide one brings it back") {
+        store.previewShowsInspector = true
+        store.previewInspectorAutoHidden = false
+        store.previewZoomed = false
+        // 700pt leaves 384 for the image beside a 316pt inspector: too little.
+        store.reconcilePreviewInspector(windowWidth: 700, expanded: false)
+        guard !store.previewShowsInspector, store.previewInspectorAutoHidden else { return false }
+        store.reconcilePreviewInspector(windowWidth: 1400, expanded: false)
+        return store.previewShowsInspector && !store.previewInspectorAutoHidden
+    }
+    v.check("Expanding asks for more room than fitting does") {
+        // The same window that comfortably holds both when the image is
+        // letterboxed does not once the image is expanded.
+        guard Store.inspectorFits(windowWidth: 1000, expanded: false),
+              !Store.inspectorFits(windowWidth: 1000, expanded: true) else { return false }
+        store.previewShowsInspector = true
+        store.previewInspectorAutoHidden = false
+        store.reconcilePreviewInspector(windowWidth: 1000, expanded: true)
+        guard !store.previewShowsInspector else { return false }
+        store.reconcilePreviewInspector(windowWidth: 1000, expanded: false)
+        return store.previewShowsInspector
+    }
+    v.check("An inspector closed by hand is not reopened by the rule") {
+        store.previewShowsInspector = true
+        store.previewInspectorAutoHidden = false
+        store.togglePreviewInspector()
+        guard !store.previewShowsInspector, !store.previewInspectorAutoHidden else { return false }
+        store.reconcilePreviewInspector(windowWidth: 1600, expanded: false)
+        let stayedClosed = !store.previewShowsInspector
+        store.togglePreviewInspector()
+        return stayedClosed && store.previewShowsInspector
+    }
     v.check("Both modes toggle back") {
         let zoom = store.previewZoomed
         store.togglePreviewZoom()

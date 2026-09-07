@@ -62,6 +62,22 @@ struct PreviewPane: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        // The inspector gets out of the way when the window cannot hold both
+        // it and a readable image column — which is most of the time once the
+        // image is expanded.
+        .background {
+            GeometryReader { proxy in
+                Color.clear
+                    .onChange(of: proxy.size.width, initial: true) { _, width in
+                        store.reconcilePreviewInspector(windowWidth: width,
+                                                        expanded: store.previewZoomed)
+                    }
+                    .onChange(of: store.previewZoomed) { _, expanded in
+                        store.reconcilePreviewInspector(windowWidth: proxy.size.width,
+                                                        expanded: expanded)
+                    }
+            }
+        }
         .background(.background)
         .animation(Tokens.normal, value: store.previewShowsInspector)
         // As an overlay rather than a sheet, this has to ask for key focus.

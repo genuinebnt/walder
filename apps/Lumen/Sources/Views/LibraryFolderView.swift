@@ -650,10 +650,28 @@ struct LocalPreview: View {
     var body: some View {
         HStack(spacing: 0) {
             preview
-            Divider()
-            inspector
+            if store.previewShowsInspector {
+                Divider()
+                inspector
+                    .transition(.move(edge: .trailing).combined(with: .opacity))
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        // Same rule as the Wallhaven preview: the inspector yields when the
+        // window cannot hold both it and a readable image column.
+        .background {
+            GeometryReader { proxy in
+                Color.clear
+                    .onChange(of: proxy.size.width, initial: true) { _, width in
+                        store.reconcilePreviewInspector(windowWidth: width, expanded: zoomed)
+                    }
+                    .onChange(of: zoomed) { _, expanded in
+                        store.reconcilePreviewInspector(windowWidth: proxy.size.width,
+                                                        expanded: expanded)
+                    }
+            }
+        }
+        .animation(Tokens.normal, value: store.previewShowsInspector)
         .background(.background)
         .focusable()
         .focusEffectDisabled()
@@ -709,6 +727,16 @@ struct LocalPreview: View {
                         .font(.captionMono)
                         .padding(.horizontal, 9).padding(.vertical, 4)
                         .background(.black.opacity(0.5), in: .rect(cornerRadius: 7))
+                    Button {
+                        store.togglePreviewInspector()
+                    } label: {
+                        Image(systemName: store.previewShowsInspector
+                              ? "sidebar.trailing" : "sidebar.leading")
+                            .frame(width: 26, height: 26)
+                            .background(.black.opacity(0.5), in: .circle)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Show or hide the inspector")
                 }
                 Spacer()
                 HStack {
