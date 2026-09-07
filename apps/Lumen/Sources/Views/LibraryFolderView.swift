@@ -20,7 +20,9 @@ struct LibraryFolderView: View {
             VStack(alignment: .leading, spacing: Tokens.s4) {
                 folders
 
-                if !store.duplicateGroups.isEmpty {
+                if !store.proposals.isEmpty {
+                    proposals
+                } else if !store.duplicateGroups.isEmpty {
                     duplicates
                 } else if !store.similarToSelection.isEmpty {
                     similar
@@ -91,13 +93,26 @@ struct LibraryFolderView: View {
                       + "picture at another resolution or re-encoded, which a file "
                       + "comparison would miss.")
 
-                if !store.duplicateGroups.isEmpty || !store.similarToSelection.isEmpty {
-                    Button("Clear") { store.clearSimilarity() }
+                Button {
+                    Task { await store.proposeCollections() }
+                } label: {
+                    Label("Suggest Collections", systemImage: "wand.and.stars")
+                }
+                .disabled(store.duplicateCandidates.isEmpty || store.isClustering)
+                .help("Groups the library by what things look like. Names are a "
+                      + "guess from the folder — a print knows appearance, not subject.")
+
+                if !store.duplicateGroups.isEmpty || !store.similarToSelection.isEmpty
+                    || !store.proposals.isEmpty {
+                    Button("Clear") {
+                        store.clearSimilarity()
+                        store.clearProposals()
+                    }
                 }
 
                 layoutPicker
 
-                if store.isScanningLibrary || store.isIndexingPrints {
+                if store.isScanningLibrary || store.isIndexingPrints || store.isClustering {
                     ProgressView().controlSize(.small)
                 }
                 Spacer()
@@ -291,6 +306,23 @@ struct LibraryFolderView: View {
                     .contentShape(.rect)
                 }
                 .buttonStyle(.plain)
+            }
+        }
+    }
+
+    // MARK: Proposed collections
+
+    private var proposals: some View {
+        VStack(alignment: .leading, spacing: Tokens.s4) {
+            Text("\(store.proposals.count) SUGGESTED COLLECTIONS")
+                .font(.sectionLabel).foregroundStyle(.secondary)
+            Text("Grouped by what these look like. The names are a guess — a "
+                 + "feature print knows appearance, not subject.")
+                .font(.system(size: 11.5)).foregroundStyle(.secondary)
+
+            ForEach(store.proposals) { proposal in
+                ProposalCard(proposal: proposal)
+                    .environment(store)
             }
         }
     }
@@ -857,5 +889,50 @@ struct LocalPreview: View {
                 .buttonStyle(.plain)
             }
         }
+    }
+}
+
+/// One proposed collection, with its name editable before accepting.
+///
+/// Naming is left to the user on purpose: the grouping is evidence that these
+/// look alike, which is not the same as knowing what they are.
+struct ProposalCard: View {
+    @Environment(Store.self) private var store
+    let proposal: Store.ProposedCollection
+
+    @State private var name: String = ""
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Tokens.s2) {
+            HStack(spacing: Tokens.s2) {
+                TextField("Name this collection", text: $name)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(maxWidth: 260)
+                Text("\(proposal.wallpapers.count) wallpapers")
+                    .font(.caption2Mono).foregroundStyle(.secondary)
+                Spacer()
+                Button("Accept") { store.acceptProposal(proposal, named: name) }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty)
+                Button("Skip") { store.dismissProposal(proposal) }
+            }
+            .controlSize(.small)
+
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 130), spacing: Tokens.s2)],
+                      spacing: Tokens.s2) {
+                ForEach(proposal.wallpapers.prefix(12)) { wallpaper in
+                    CachedImage(url: wallpaper.url) { image in
+                        image.resizable().aspectRatio(contentMode: .fill)
+                    } placeholder: {
+                        Rectangle().fill(.quaternary)
+                    }
+                    .frame(height: 82)
+                    .clipShape(.rect(cornerRadius: 7))
+                }
+            }
+        }
+        .padding(Tokens.s3)
+        .card()
+        .onAppear { if name.isEmpty { name = proposal.suggestedName } }
     }
 }

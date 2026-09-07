@@ -966,6 +966,66 @@ func run() async -> Int32 {
             to: URL(filePath: "/tmp/not-here-\(UUID().uuidString).png")) == false
     }
 
+    v.section("Auto-collections and taste")
+    v.check("Clustering groups by look and drops groups that are too small") {
+        struct Entry { let path: String }
+        // Build three prints from two genuinely different pictures.
+        guard let a = writePattern(width: 400, height: 250),
+              let b = writePattern(width: 200, height: 125),
+              let c = writePattern(width: 400, height: 250, shifted: true)
+        else { return false }
+        defer {
+            for url in [a, b, c] { try? FileManager.default.removeItem(at: url) }
+        }
+        guard let pa = ImagePrints.print(of: a),
+              let pb = ImagePrints.print(of: b),
+              let pc = ImagePrints.print(of: c) else { return false }
+
+        // A minimum of two: the pair clusters, the odd one out does not.
+        let groups = ImagePrints.cluster(
+            [(a.path, pa), (b.path, pb), (c.path, pc)],
+            threshold: 0.8, minimumSize: 2)
+        guard groups.count == 1 else {
+            print("        got \(groups.count) groups")
+            return false
+        }
+        return groups[0].count == 2 && !groups[0].contains(c.path)
+    }
+    v.check("A minimum size larger than anything found yields nothing") {
+        guard let a = writePattern(width: 400, height: 250),
+              let b = writePattern(width: 200, height: 125) else { return false }
+        defer {
+            try? FileManager.default.removeItem(at: a)
+            try? FileManager.default.removeItem(at: b)
+        }
+        guard let pa = ImagePrints.print(of: a), let pb = ImagePrints.print(of: b)
+        else { return false }
+        return ImagePrints.cluster([(a.path, pa), (b.path, pb)], minimumSize: 6).isEmpty
+    }
+    v.check("Affinity is the mean distance, and declines an empty reference set") {
+        guard let a = writePattern(width: 400, height: 250),
+              let b = writePattern(width: 200, height: 125),
+              let c = writePattern(width: 400, height: 250, shifted: true) else { return false }
+        defer {
+            for url in [a, b, c] { try? FileManager.default.removeItem(at: url) }
+        }
+        guard let pa = ImagePrints.print(of: a),
+              let pb = ImagePrints.print(of: b),
+              let pc = ImagePrints.print(of: c) else { return false }
+
+        // The resized copy sits closer to the original than the unrelated one.
+        guard let near = ImagePrints.affinity(of: pb, to: [pa]),
+              let far = ImagePrints.affinity(of: pc, to: [pa]) else { return false }
+        return near < far && ImagePrints.affinity(of: pa, to: []) == nil
+    }
+    v.check("Taste ranking says what it needs rather than doing nothing") {
+        // With no favourites there is nothing to measure against, and silence
+        // would read as the button being broken.
+        let empty = Store(defaults: UserDefaults(suiteName: "cc.lumen.verify.taste")!)
+        defer { UserDefaults.standard.removePersistentDomain(forName: "cc.lumen.verify.taste") }
+        return empty.favorites.isEmpty && empty.tasteRanked == false
+    }
+
     v.section("Resolution rule")
     v.check("Off by default, and hides nothing when off") {
         store.hideBelowDisplay = false

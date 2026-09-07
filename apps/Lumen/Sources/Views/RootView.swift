@@ -299,6 +299,19 @@ struct RootView: View {
             }
             ToolbarItem {
                 Button {
+                    Task { await store.rankByTaste() }
+                } label: {
+                    Label("My Taste", systemImage: store.tasteRanked
+                          ? "sparkles.rectangle.stack.fill" : "sparkles.rectangle.stack")
+                }
+                .disabled(store.isRankingByTaste || store.favorites.isEmpty)
+                .help(store.favorites.isEmpty
+                      ? "Favourite a few wallpapers first — that is what taste is measured against"
+                      : "Re-orders the results you have by closeness to your favourites. "
+                        + "It cannot ask Wallhaven for this, so it works within the loaded pages.")
+            }
+            ToolbarItem {
+                Button {
                     store.setSelecting(!store.isSelecting)
                 } label: {
                     Label("Select", systemImage: store.isSelecting

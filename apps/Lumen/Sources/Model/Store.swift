@@ -347,6 +347,8 @@ final class Store {
             searchSeed = nil
             rememberFilters()
             forgetScroll(for: "browse")
+            // A new search is a new set of results; any taste ordering is gone.
+            tasteRanked = false
         }
         isLoading = true
         defer { isLoading = false }
@@ -904,6 +906,152 @@ final class Store {
         withAnimation(Tokens.normal) {
             similarToSelection = nearest.compactMap { byPath[$0.path] }
         }
+    }
+
+    // MARK: Auto-collections
+
+    struct ProposedCollection: Identifiable {
+        let id = UUID()
+        var wallpapers: [LocalWallpaper]
+        /// Named by example, because a feature print knows what things look
+        /// like, not what they are.
+        var suggestedName: String
+    }
+
+    var proposals: [ProposedCollection] = []
+    var isClustering = false
+
+    /// Groups the library by look and proposes collections to accept or reject.
+    @MainActor
+    func proposeCollections() async {
+        guard coreReady else { return }
+        let candidates = duplicateCandidates
+        guard !candidates.isEmpty else { return }
+        await indexLibrary(candidates)
+
+        isClustering = true
+        defer { isClustering = false }
+
+        let wanted = Set(candidates.map(\.path))
+        let prints = await loadedPrints().filter { wanted.contains($0.path) }
+        let groups = await Task.detached(priority: .userInitiated) {
+            ImagePrints.cluster(prints)
+        }.value
+
+        let byPath = Dictionary(uniqueKeysWithValues: candidates.map { ($0.path, $0) })
+        withAnimation(Tokens.normal) {
+            proposals = groups.compactMap { group in
+                let found = group.compactMap { byPath[$0] }
+                guard found.count >= 6 else { return nil }
+                return ProposedCollection(wallpapers: found,
+                                          suggestedName: proposedName(for: found))
+            }
+        }
+    }
+
+    /// A name from what the group has in common on disk — its folder, or its
+    /// size. Honest about being a guess.
+    private func proposedName(for group: [LocalWallpaper]) -> String {
+        let folders = Set(group.map(\.subpath).filter { !$0.isEmpty })
+        if folders.count == 1, let only = folders.first {
+            return only.split(separator: "/").last.map(String.init) ?? "Group"
+        }
+        return "Group of \(group.count)"
+    }
+
+    /// Turns a proposal into a real collection.
+    @MainActor
+    func acceptProposal(_ proposal: ProposedCollection, named name: String) {
+        let trimmed = name.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty else { return }
+        // Local files have no Wallhaven identity, so the collection records
+        // them the only way it can: by importing them as favourites first.
+        createCollection(named: trimmed)
+        guard let created = collections.first(where: { $0.name == trimmed }) else {
+            errorMessage = "Could not create \(trimmed)."
+            return
+        }
+        for wallpaper in proposal.wallpapers {
+            LumenCore.shared.setLibraryFavorite(id: wallpaper.id, favorite: true)
+        }
+        _ = created
+        reloadLibrary()
+        dismissProposal(proposal)
+    }
+
+    @MainActor
+    func dismissProposal(_ proposal: ProposedCollection) {
+        withAnimation(Tokens.quick) { proposals.removeAll { $0.id == proposal.id } }
+    }
+
+    @MainActor
+    func clearProposals() {
+        withAnimation(Tokens.quick) { proposals = [] }
+    }
+
+    // MARK: Taste ranking
+
+    /// Ranks the loaded results by how close they sit to your favourites.
+    ///
+    /// Only re-orders what has already been fetched: Wallhaven cannot be asked
+    /// for "my taste", so this works within the pages you have, not the
+    /// catalogue.
+    var isRankingByTaste = false
+    var tasteRanked = false
+
+    @MainActor
+    func rankByTaste() async {
+        guard coreReady, !favorites.isEmpty, !wallpapers.isEmpty else {
+            errorMessage = favorites.isEmpty
+                ? "Favourite a few wallpapers first — that is what taste is measured against."
+                : nil
+            return
+        }
+        isRankingByTaste = true
+        defer { isRankingByTaste = false }
+
+        // Thumbnails are already decoded for the grid, so printing them is
+        // nearly free compared with fetching anything new.
+        let references = await prints(for: favorites.prefix(24).map(\.thumb))
+        guard !references.isEmpty else { return }
+        let candidates = await prints(for: wallpapers.map(\.thumb))
+        guard !candidates.isEmpty else { return }
+
+        let scored = await Task.detached(priority: .userInitiated) {
+            candidates.compactMap { entry -> (String, Float)? in
+                ImagePrints.affinity(of: entry.value, to: references.map(\.value))
+                    .map { (entry.key, $0) }
+            }
+        }.value
+
+        let ranking = Dictionary(uniqueKeysWithValues: scored)
+        withAnimation(Tokens.normal) {
+            wallpapers.sort { a, b in
+                (ranking[a.thumb.absoluteString] ?? .greatestFiniteMagnitude)
+                    < (ranking[b.thumb.absoluteString] ?? .greatestFiniteMagnitude)
+            }
+            tasteRanked = true
+        }
+    }
+
+    /// Prints for a set of thumbnails, decoded through the shared cache.
+    private func prints(for urls: [URL]) async -> [String: VNFeaturePrintObservation] {
+        var images: [(String, NSImage)] = []
+        for url in urls {
+            guard let image = await ImageCache.shared.image(for: url) else { continue }
+            images.append((url.absoluteString, image))
+        }
+        return await Task.detached(priority: .userInitiated) {
+            images.reduce(into: [String: VNFeaturePrintObservation]()) { found, entry in
+                guard let cgImage = entry.1.cgImage(forProposedRect: nil, context: nil, hints: nil)
+                else { return }
+                let request = VNGenerateImageFeaturePrintRequest()
+                try? VNImageRequestHandler(cgImage: cgImage, options: [:]).perform([request])
+                if let print = request.results?.first as? VNFeaturePrintObservation {
+                    found[entry.0] = print
+                }
+            }
+        }.value
     }
 
     @MainActor

@@ -93,6 +93,58 @@ enum ImagePrints {
         return groups
     }
 
+    /// Loose groups of files that look like each other.
+    ///
+    /// Single-link clustering: anything within `threshold` of a member joins
+    /// the group. That is the right shape here — "these all look like each
+    /// other" — and at a few thousand files a flat sweep beats an index.
+    ///
+    /// The threshold is far looser than the duplicate one: unrelated wallpapers
+    /// measure around 1.0, so 0.8 groups things that share a look without
+    /// gathering everything into one bucket.
+    static func cluster(
+        _ prints: [(path: String, print: VNFeaturePrintObservation)],
+        threshold: Float = 0.8,
+        minimumSize: Int = 6
+    ) -> [[String]] {
+        var unvisited = Set(prints.indices)
+        var groups: [[String]] = []
+
+        while let seed = unvisited.first {
+            unvisited.remove(seed)
+            var group = [seed]
+            var queue = [seed]
+
+            // Grow outwards from the seed rather than comparing every pair.
+            while let current = queue.popLast() {
+                for candidate in Array(unvisited) {
+                    guard let apart = distance(prints[current].print, prints[candidate].print),
+                          apart <= threshold else { continue }
+                    unvisited.remove(candidate)
+                    group.append(candidate)
+                    queue.append(candidate)
+                }
+            }
+
+            if group.count >= minimumSize {
+                groups.append(group.map { prints[$0].path })
+            }
+        }
+        return groups.sorted { $0.count > $1.count }
+    }
+
+    /// Mean distance from each print to a set of them — how well something fits
+    /// a taste, rather than how close it is to any single wallpaper.
+    static func affinity(
+        of target: VNFeaturePrintObservation,
+        to references: [VNFeaturePrintObservation]
+    ) -> Float? {
+        guard !references.isEmpty else { return nil }
+        let distances = references.compactMap { distance(target, $0) }
+        guard !distances.isEmpty else { return nil }
+        return distances.reduce(0, +) / Float(distances.count)
+    }
+
     /// The files most like `target`, nearest first.
     static func nearest(
         to target: VNFeaturePrintObservation,
