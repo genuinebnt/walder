@@ -34,13 +34,16 @@ impl App {
         let prefs = db.get_preferences()?;
 
         // LUMEN_API_KEY wins, so a key can be supplied for one command without
-        // being written anywhere. Otherwise the shared preferences row, which
-        // the app mirrors its own settings into.
+        // being stored at all. Otherwise the keychain item the app writes.
+        //
+        // The first keychain read from a binary that is not the app prompts for
+        // access; "Always Allow" makes it the last one. Declining leaves the
+        // CLI unauthenticated, which is a working state, not an error.
         let api_key = std::env::var("LUMEN_API_KEY")
             .ok()
             .map(|k| k.trim().to_string())
             .filter(|k| !k.is_empty())
-            .or_else(|| prefs.api_key.clone());
+            .or_else(lumen_core::keychain::api_key);
 
         let download_dir = lumen_core::paths::resolve_dir(&prefs.download_dir);
         let concurrency = (prefs.max_parallel_downloads as usize).clamp(1, 12);
@@ -54,6 +57,23 @@ impl App {
             db,
             json,
         })
+    }
+
+    /// Whether a key was found, without saying what it is.
+    pub fn provider_has_key(&self) -> bool {
+        self.api_key_source() != "not set"
+    }
+
+    /// Where the key in use came from — useful when the answer is "nowhere" and
+    /// the user is sure they configured one.
+    pub fn api_key_source(&self) -> &'static str {
+        if std::env::var("LUMEN_API_KEY").is_ok_and(|k| !k.trim().is_empty()) {
+            "set (LUMEN_API_KEY)"
+        } else if lumen_core::keychain::api_key().is_some() {
+            "set (keychain)"
+        } else {
+            "not set"
+        }
     }
 
     /// Where a wallpaper Lumen has never downloaded is staged for setting.

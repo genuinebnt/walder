@@ -25,6 +25,7 @@ swiftc -Onone \
     "$ROOT/apps/Lumen/Sources/Design/Theme.swift" \
     "$ROOT/apps/Lumen/Sources/Model/Models.swift" \
     "$ROOT/apps/Lumen/Sources/Model/LumenCore.swift" \
+    "$ROOT/apps/Lumen/Sources/Model/Keychain.swift" \
     "$ROOT/apps/Lumen/Sources/Model/Store.swift" \
     "$ROOT/apps/Lumen/Sources/Model/WallpaperSetter.swift" \
     "$ROOT/apps/Lumen/Sources/Model/MenuBarLegibility.swift" \

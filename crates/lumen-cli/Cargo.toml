@@ -13,7 +13,6 @@ lumen-provider.workspace = true
 lumen-downloader.workspace = true
 lumen-setter.workspace = true
 lumen-db.workspace = true
-lumen-scheduler.workspace = true
 # For the wire format a downloaded file's sidecar is written in: the app reads
 # that sidecar, so there is one definition of it rather than two.
 lumen-ffi = { path = "../lumen-ffi" }

@@ -1,4 +1,5 @@
 pub mod error;
+pub mod keychain;
 pub mod models;
 pub mod paths;
 pub mod scan;

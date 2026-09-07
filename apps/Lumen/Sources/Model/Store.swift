@@ -49,7 +49,9 @@ final class Store {
 
     @ObservationIgnored private let defaults: UserDefaults
 
-    var apiKey: String { didSet { save(apiKey, "apiKey"); pushPreferences() } }
+    /// Kept in the keychain rather than in `UserDefaults` — see [Keychain].
+    /// The rest of the preferences below are ordinary settings and stay there.
+    var apiKey: String { didSet { Keychain.setAPIKey(apiKey); pushPreferences() } }
     var downloadDirectory: String { didSet { save(downloadDirectory, "downloadDirectory"); pushPreferences() } }
     var maxParallel: Int { didSet { save(maxParallel, "maxParallel"); pushPreferences() } }
     var gridTheme: GridTheme { didSet { save(gridTheme.rawValue, "gridTheme") } }
@@ -72,6 +74,23 @@ final class Store {
     var presets: [FilterPreset] { didSet { saveJSON(presets, "filterPresets") } }
 
     private func save(_ value: Any?, _ key: String) { defaults.set(value, forKey: key) }
+
+    /// The key from the keychain, moving an older plaintext copy there first.
+    ///
+    /// Versions before this kept it in `UserDefaults`. The copy in the plist is
+    /// only removed once the keychain has accepted it, so a failed write — a
+    /// locked keychain, a denied prompt — loses nothing.
+    private static func migratedAPIKey(from defaults: UserDefaults) -> String {
+        if let stored = Keychain.apiKey() {
+            defaults.removeObject(forKey: "apiKey")
+            return stored
+        }
+        guard let legacy = defaults.string(forKey: "apiKey"), !legacy.isEmpty else { return "" }
+        if Keychain.setAPIKey(legacy) {
+            defaults.removeObject(forKey: "apiKey")
+        }
+        return legacy
+    }
 
     private func saveJSON<T: Encodable>(_ value: T, _ key: String) {
         guard let data = try? JSONEncoder().encode(value) else { return }
@@ -96,7 +115,7 @@ final class Store {
             defaults.object(forKey: key) as? Int ?? fallback
         }
 
-        apiKey = defaults.string(forKey: "apiKey") ?? ""
+        apiKey = Store.migratedAPIKey(from: defaults)
         downloadDirectory = defaults.string(forKey: "downloadDirectory") ?? ""
         maxParallel = int("maxParallel", default: 4)
         gridTheme = GridTheme(rawValue: defaults.string(forKey: "gridTheme") ?? "") ?? .comfortable

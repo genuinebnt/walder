@@ -111,6 +111,11 @@ func run() async -> Int32 {
     let suiteName = "cc.lumen.verify"
     UserDefaults.standard.removePersistentDomain(forName: suiteName)
     let defaults = UserDefaults(suiteName: suiteName)!
+    // The store writes its API key to the keychain, and this run deliberately
+    // sets an empty one — which removes the item. Point it at a throwaway
+    // service so the key the app uses is never touched.
+    Keychain.service = suiteName
+    Keychain.removeAPIKey()
     let store = Store(defaults: defaults)
 
     // ── core ──────────────────────────────────────────────────────────────
@@ -400,6 +405,66 @@ func run() async -> Int32 {
     }
 
     // ── displays ──────────────────────────────────────────────────────────
+    v.section("API key storage")
+    v.check("A key round-trips through the keychain") {
+        // A throwaway item, so the gate never touches the key in use.
+        let service = "cc.lumen.verify"
+        let account = "round-trip-\(UUID().uuidString)"
+        defer { Keychain.remove(service: service, account: account) }
+
+        guard Keychain.set("wallhaven-test-value", service: service, account: account) else {
+            return false
+        }
+        guard Keychain.value(service: service, account: account) == "wallhaven-test-value" else {
+            return false
+        }
+        // Writing again replaces rather than failing as a duplicate.
+        guard Keychain.set("second", service: service, account: account),
+              Keychain.value(service: service, account: account) == "second" else { return false }
+
+        guard Keychain.remove(service: service, account: account) else { return false }
+        return Keychain.value(service: service, account: account) == nil
+    }
+    v.check("An empty key removes the item rather than storing an empty one") {
+        let service = "cc.lumen.verify"
+        let account = "empty-\(UUID().uuidString)"
+        defer { Keychain.remove(service: service, account: account) }
+        _ = Keychain.set("something", service: service, account: account)
+        guard Keychain.set("", service: service, account: account) else { return false }
+        return Keychain.value(service: service, account: account) == nil
+    }
+    v.check("The key is no longer written to UserDefaults") {
+        // The whole point of the move: a credential in a plist is readable by
+        // anything running as the user.
+        store.apiKey = "written-only-to-the-keychain"
+        defer { store.apiKey = "" }
+        guard defaults.string(forKey: "apiKey") == nil else { return false }
+        return Keychain.apiKey() == "written-only-to-the-keychain"
+    }
+    v.check("A key left in UserDefaults by an older version is migrated out") {
+        Keychain.removeAPIKey()
+        defaults.set("legacy-plaintext-key", forKey: "apiKey")
+        let relaunched = Store(defaults: defaults)
+        defer { Keychain.removeAPIKey(); defaults.removeObject(forKey: "apiKey") }
+        return relaunched.apiKey == "legacy-plaintext-key"
+            && Keychain.apiKey() == "legacy-plaintext-key"
+            && defaults.string(forKey: "apiKey") == nil
+    }
+    v.check("A key handed to the core does not reach the database") {
+        // lumen-ffi clears this row deliberately; a key there would be
+        // plaintext on disk beside every other preference. Booting with a
+        // recognisable key and then looking for it in the file is the check.
+        let canary = "lumen-canary-\(UUID().uuidString)"
+        store.apiKey = canary
+        store.savePreferences()
+        defer { store.apiKey = "" }
+
+        let path = NSString(string: "~/Library/Application Support/cc.lumen.Lumen/lumen.db")
+            .expandingTildeInPath
+        guard let data = FileManager.default.contents(atPath: path) else { return false }
+        return data.range(of: Data(canary.utf8)) == nil
+    }
+
     v.section("Displays")
     v.check("At least one display is detected") { !store.displays.isEmpty }
     v.check("Fit picker changes that display's fit") {

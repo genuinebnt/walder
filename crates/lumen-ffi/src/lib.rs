@@ -1736,17 +1736,15 @@ pub unsafe extern "C" fn lumen_download_many(json: *const c_char) -> u64 {
 /// Mirrors the settings the app holds into the database.
 ///
 /// The app keeps these in `UserDefaults`, which nothing outside the bundle can
-/// read — so without this the CLI would have no API key and no download folder
-/// even though the user had configured both. The database row is what the two
-/// front ends share.
+/// read — so without this the CLI would have no download folder and no
+/// concurrency even though the user had configured both. The API key is not
+/// among them: it goes to the keychain instead.
 fn persist_preferences(core: &'static Core) {
     let Ok(mut prefs) = core.db.get_preferences() else { return };
-    // An absent key means "this process has none", not "clear the stored one".
-    // Without that distinction the verify harness — which runs against its own
-    // defaults and so starts keyless — would wipe the key the app configured.
-    if let Some(key) = core.provider.read().unwrap().api_key() {
-        prefs.api_key = Some(key);
-    }
+    // Deliberately not the API key: that lives in the keychain, which both
+    // front ends read. A key left in this row by an earlier version is
+    // plaintext on disk, so it is cleared rather than carried forward.
+    prefs.api_key = None;
     prefs.download_dir = core.download_dir.read().unwrap().to_string_lossy().into_owned();
     prefs.max_parallel_downloads = core.downloads.max_concurrent() as u32;
     let _ = core.db.save_preferences(&prefs);

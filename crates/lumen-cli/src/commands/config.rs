@@ -8,9 +8,11 @@ use crate::output;
 
 pub fn show(app: &App) -> anyhow::Result<()> {
     let prefs = &app.prefs;
+    let _ = prefs;
     if app.json {
         return output::json(&serde_json::json!({
-            "apiKey": prefs.api_key.as_ref().map(|_| "set"),
+            "apiKey": app.provider_has_key().then_some("set"),
+            "apiKeySource": app.api_key_source(),
             "downloadDir": app.download_dir.to_string_lossy(),
             "maxParallelDownloads": prefs.max_parallel_downloads,
             "database": lumen_core::paths::db_path().to_string_lossy(),
@@ -19,7 +21,7 @@ pub fn show(app: &App) -> anyhow::Result<()> {
     }
     // The key itself is never printed: it is a credential, and this output is
     // the kind of thing that ends up pasted into an issue.
-    println!("api key            {}", if prefs.api_key.is_some() { "set" } else { "not set" });
+    println!("api key            {}", app.api_key_source());
     println!("download dir       {}", app.download_dir.display());
     println!("concurrency        {}", prefs.max_parallel_downloads);
     println!("database           {}", lumen_core::paths::db_path().display());
@@ -28,10 +30,19 @@ pub fn show(app: &App) -> anyhow::Result<()> {
 }
 
 pub fn set_api_key(app: &App, key: &str) -> anyhow::Result<()> {
-    let mut prefs = app.prefs.clone();
-    prefs.api_key = Some(key.trim().to_string()).filter(|k| !k.is_empty());
-    app.db.save_preferences(&prefs)?;
-    output::note(if prefs.api_key.is_some() { "API key set." } else { "API key cleared." });
+    lumen_core::keychain::set_api_key(key)?;
+
+    // An older version stored it here in plain text; clear that copy out.
+    if app.prefs.api_key.is_some() {
+        let mut prefs = app.prefs.clone();
+        prefs.api_key = None;
+        app.db.save_preferences(&prefs)?;
+    }
+    output::note(if key.trim().is_empty() {
+        "API key cleared."
+    } else {
+        "API key stored in the keychain."
+    });
     Ok(())
 }
 

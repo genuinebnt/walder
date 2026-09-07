@@ -110,11 +110,18 @@ An API key is optional; without one Wallhaven allows 45 requests a minute and
 serves SFW results only. Set it in Settings, along with the download directory
 and download concurrency, which apply immediately rather than at next launch.
 
-The app holds these in `UserDefaults` and mirrors them into the database, which
-is how the CLI sees them — `lumen-cli config show` reports what it is using, and
-`lumen-cli config set-api-key` writes the same row back. `LUMEN_API_KEY`
-overrides both for one command, so a key need not be stored at all. Note that
-the key is at rest in plain text in both places; Keychain would be the fix.
+The key lives in the login keychain, written by the app and read by both front
+ends — `lumen-cli config set-api-key` stores the same item, and
+`lumen-cli config show` says where the key in use came from. `LUMEN_API_KEY`
+overrides it for one command, so a key need not be stored at all. The download
+directory and concurrency are ordinary settings: the app keeps them in
+`UserDefaults` and mirrors them into the database, which is how the CLI sees
+them.
+
+The first keychain read from `lumen-cli` prompts for access, since it is not the
+same code identity as the app; "Always Allow" makes it the last prompt.
+Declining leaves the CLI unauthenticated, which still works — just SFW-only at
+45 requests a minute.
 
 State lives in `~/Library/Application Support/cc.lumen.Lumen` (SQLite) and
 `~/Library/Caches/cc.lumen.Lumen` (images staged for setting). Downloads default
@@ -133,7 +140,7 @@ apps/Lumen/            SwiftUI app
 crates/lumen-ffi/      C ABI over the crates below
 crates/lumen-cli/      the same library from the terminal
 crates/lumen-core/     models, paths, folder scanning — shared by both fronts
-crates/lumen-*/        provider, downloader, database, setter, scheduler
+crates/lumen-*/        provider, downloader, database, setter
 tools/uidiff/          design → implementation gate
 tools/verify/          runtime control gate
 tools/icon/            generates AppIcon.icns

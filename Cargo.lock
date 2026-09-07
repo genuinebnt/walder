@@ -1019,7 +1019,6 @@ dependencies = [
  "lumen-downloader",
  "lumen-ffi",
  "lumen-provider",
- "lumen-scheduler",
  "lumen-setter",
  "rand 0.8.5",
  "reqwest",
@@ -1037,6 +1036,7 @@ version = "1.0.0"
 dependencies = [
  "chrono",
  "directories",
+ "security-framework",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
@@ -1114,22 +1114,6 @@ dependencies = [
  "tokio",
  "tracing",
  "url",
-]
-
-[[package]]
-name = "lumen-scheduler"
-version = "1.0.0"
-dependencies = [
- "anyhow",
- "chrono",
- "lumen-core",
- "lumen-db",
- "lumen-setter",
- "rand 0.8.5",
- "serde",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
 ]
 
 [[package]]

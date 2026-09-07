@@ -5,7 +5,6 @@ members = [
     "crates/lumen-downloader",
     "crates/lumen-setter",
     "crates/lumen-db",
-    "crates/lumen-scheduler",
     "crates/lumen-cli",
     "crates/lumen-ffi",
 ]
@@ -68,4 +67,3 @@ lumen-provider = { path = "crates/lumen-provider" }
 lumen-downloader = { path = "crates/lumen-downloader" }
 lumen-setter = { path = "crates/lumen-setter" }
 lumen-db = { path = "crates/lumen-db" }
-lumen-scheduler = { path = "crates/lumen-scheduler" }
