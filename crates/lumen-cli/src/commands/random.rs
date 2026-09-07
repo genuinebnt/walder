@@ -126,7 +126,7 @@ pub fn local_candidates(app: &App, source: &Source) -> anyhow::Result<Vec<PathBu
             app.db
                 .imported_wallpapers(Some(id), false)?
                 .into_iter()
-                .map(|(_, _, path, _, _, _, _)| PathBuf::from(path))
+                .map(|(_, _, path, ..)| PathBuf::from(path))
                 .collect()
         }
         Source::Collection(name) => {

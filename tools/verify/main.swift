@@ -660,6 +660,45 @@ func run() async -> Int32 {
         return await store.alreadyInLibrary(wallpaper) == nil
     }
 
+    v.section("Shapes are stored, not re-measured")
+    v.check("A scanned file knows its own proportions") {
+        // Reading four thousand file headers takes seven seconds. Doing it at
+        // every launch meant the grid drew at a placeholder shape until they
+        // arrived; the scan stores them once instead.
+        let files = store.libraryWallpapers
+        guard !files.isEmpty else { return true }
+        let known = files.filter { $0.storedRatio != nil }
+        // Not all: a library imported before the columns existed needs a
+        // rescan, and some headers are unreadable. Most is the assertion.
+        guard !known.isEmpty else {
+            print("        no stored dimensions yet — rescan to populate")
+            return true
+        }
+        return known.allSatisfy { $0.width > 0 && $0.height > 0 }
+    }
+    v.check("An unknown shape is nil, not a guess") {
+        // The layouts need to know when they do not know.
+        var file = LocalWallpaper(id: "x", folderId: "f",
+                                  url: URL(fileURLWithPath: "/tmp/x.jpg"), path: "/tmp/x.jpg",
+                                  filename: "x.jpg", fileSize: 1, isFavorite: false)
+        file.width = 0
+        file.height = 0
+        guard file.storedRatio == nil else { return false }
+        file.width = 1000
+        file.height = 1500
+        guard let ratio = file.storedRatio else { return false }
+        return abs(ratio - 2.0 / 3) < 0.000001
+    }
+    v.check("The stored shape is what the grid uses") {
+        var file = LocalWallpaper(id: "x", folderId: "f",
+                                  url: URL(fileURLWithPath: "/tmp/x.jpg"), path: "/tmp/x.jpg",
+                                  filename: "x.jpg", fileSize: 1, isFavorite: false)
+        file.width = 1000
+        file.height = 1500
+        // Portrait, not the 16:10 placeholder that cropped them.
+        return abs(store.aspectRatio(of: file) - 2.0 / 3) < 0.000001
+    }
+
     v.section("Natural layout")
     struct Shaped: Identifiable {
         let id: Int

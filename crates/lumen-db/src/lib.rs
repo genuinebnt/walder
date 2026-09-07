@@ -182,11 +182,14 @@ impl Database {
                 file_size INTEGER NOT NULL DEFAULT 0,
                 favorite INTEGER NOT NULL DEFAULT 0,
                 subpath TEXT NOT NULL DEFAULT '',
+                width INTEGER NOT NULL DEFAULT 0,
+                height INTEGER NOT NULL DEFAULT 0,
                 added_at DATETIME DEFAULT CURRENT_TIMESTAMP
             )",
             [],
         )
         .map_err(|e| LumenError::Database(e.to_string()))?;
+        Self::add_dimension_columns(&conn);
 
         // What has actually been on the desktop, so "what was that one on
         // Tuesday" has an answer and a set can be undone.
@@ -1339,7 +1342,7 @@ impl Database {
     pub fn sync_imported_wallpapers(
         &self,
         folder_id: Uuid,
-        files: &[(String, String, u64, String)],
+        files: &[(String, String, u64, String, u32, u32)],
     ) -> lumen_core::Result<usize> {
         let mut conn = self
             .pool
@@ -1358,7 +1361,7 @@ impl Database {
                 .prepare_cached("SELECT path FROM imported_wallpapers WHERE folder_id = ?1")
                 .map_err(|e| LumenError::Database(e.to_string()))?;
             let on_disk: std::collections::HashSet<&str> =
-                files.iter().map(|(path, _, _, _)| path.as_str()).collect();
+                files.iter().map(|(path, ..)| path.as_str()).collect();
             let stored: Vec<String> = existing
                 .query_map([folder_id.to_string()], |row| row.get::<_, String>(0))
                 .map_err(|e| LumenError::Database(e.to_string()))?
@@ -1373,16 +1376,22 @@ impl Database {
             let mut insert = transaction
                 .prepare_cached(
                     "INSERT INTO imported_wallpapers
-                        (id, folder_id, path, filename, file_size, subpath)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                        (id, folder_id, path, filename, file_size, subpath, width, height)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
                      ON CONFLICT(path) DO UPDATE SET
                         folder_id = excluded.folder_id,
                         filename = excluded.filename,
                         file_size = excluded.file_size,
-                        subpath = excluded.subpath",
+                        subpath = excluded.subpath,
+                        -- A rescan that could not read a header must not erase
+                        -- a size that was read successfully before.
+                        width = CASE WHEN excluded.width > 0
+                                     THEN excluded.width ELSE width END,
+                        height = CASE WHEN excluded.height > 0
+                                      THEN excluded.height ELSE height END",
                 )
                 .map_err(|e| LumenError::Database(e.to_string()))?;
-            for (path, filename, size, subpath) in files {
+            for (path, filename, size, subpath, width, height) in files {
                 insert
                     .execute((
                         Uuid::new_v4().to_string(),
@@ -1391,6 +1400,8 @@ impl Database {
                         filename,
                         *size as i64,
                         subpath,
+                        *width,
+                        *height,
                     ))
                     .map_err(|e| LumenError::Database(e.to_string()))?;
             }
@@ -1407,22 +1418,26 @@ impl Database {
         &self,
         folder_id: Option<Uuid>,
         favorites_only: bool,
-    ) -> lumen_core::Result<Vec<(Uuid, Uuid, String, String, u64, bool, String)>> {
+    ) -> lumen_core::Result<Vec<(Uuid, Uuid, String, String, u64, bool, String, u32, u32)>> {
         let conn = self
             .pool
             .get()
             .map_err(|e| LumenError::Database(e.to_string()))?;
 
         let sql = match (folder_id.is_some(), favorites_only) {
-            (true, true) => "SELECT id, folder_id, path, filename, file_size, favorite, subpath
+            (true, true) => "SELECT id, folder_id, path, filename, file_size, favorite, subpath,
+                                    width, height
                              FROM imported_wallpapers
                              WHERE folder_id = ?1 AND favorite = 1 ORDER BY subpath, filename",
-            (true, false) => "SELECT id, folder_id, path, filename, file_size, favorite, subpath
+            (true, false) => "SELECT id, folder_id, path, filename, file_size, favorite, subpath,
+                                     width, height
                               FROM imported_wallpapers
                               WHERE folder_id = ?1 ORDER BY subpath, filename",
-            (false, true) => "SELECT id, folder_id, path, filename, file_size, favorite, subpath
+            (false, true) => "SELECT id, folder_id, path, filename, file_size, favorite, subpath,
+                                     width, height
                               FROM imported_wallpapers WHERE favorite = 1 ORDER BY subpath, filename",
-            (false, false) => "SELECT id, folder_id, path, filename, file_size, favorite, subpath
+            (false, false) => "SELECT id, folder_id, path, filename, file_size, favorite, subpath,
+                                      width, height
                                FROM imported_wallpapers ORDER BY subpath, filename",
         };
         let mut stmt = conn
@@ -1443,16 +1458,19 @@ impl Database {
                     row.get::<_, i64>(4)?,
                     row.get::<_, i64>(5)? != 0,
                     row.get::<_, String>(6)?,
+                    row.get::<_, u32>(7)?,
+                    row.get::<_, u32>(8)?,
                 ))
             })
             .map_err(|e| LumenError::Database(e.to_string()))?;
 
         let mut found = Vec::new();
         for row in rows {
-            let (id, folder, path, filename, size, favorite, subpath) =
+            let (id, folder, path, filename, size, favorite, subpath, width, height) =
                 row.map_err(|e| LumenError::Database(e.to_string()))?;
             if let (Ok(id), Ok(folder)) = (Uuid::parse_str(&id), Uuid::parse_str(&folder)) {
-                found.push((id, folder, path, filename, size.max(0) as u64, favorite, subpath));
+                found.push((id, folder, path, filename, size.max(0) as u64, favorite, subpath,
+                            width, height));
             }
         }
         Ok(found)
@@ -1463,11 +1481,21 @@ impl Database {
     /// Without this, a library imported by an earlier build stays flat until
     /// the user thinks to rescan — and it is derivable from the path we already
     /// store, so asking them to is unnecessary.
+
     /// Every imported file's name, and nothing else.
     ///
     /// The full rows are large and the caller only wants what the names encode,
     /// so this avoids carrying several hundred kilobytes across the bridge to
     /// read six characters from each.
+    /// Adds the pixel-size columns to a database that predates them.
+    fn add_dimension_columns(conn: &rusqlite::Connection) {
+        // Errors are the expected case on every launch after the first.
+        let _ = conn.execute(
+            "ALTER TABLE imported_wallpapers ADD COLUMN width INTEGER NOT NULL DEFAULT 0", []);
+        let _ = conn.execute(
+            "ALTER TABLE imported_wallpapers ADD COLUMN height INTEGER NOT NULL DEFAULT 0", []);
+    }
+
     pub fn imported_filenames(&self) -> lumen_core::Result<Vec<String>> {
         let conn = self
             .pool
@@ -2257,23 +2285,23 @@ mod tests {
         let folder = db.import_folder("/tmp/walls", "walls").expect("import");
 
         let first = vec![
-            ("/tmp/walls/a.jpg".to_string(), "a.jpg".to_string(), 10, String::new()),
-            ("/tmp/walls/b.jpg".to_string(), "b.jpg".to_string(), 20, "nested".to_string()),
+            ("/tmp/walls/a.jpg".to_string(), "a.jpg".to_string(), 10, String::new(), 1920, 1080),
+            ("/tmp/walls/b.jpg".to_string(), "b.jpg".to_string(), 20, "nested".to_string(), 1920, 1080),
         ];
         db.sync_imported_wallpapers(folder, &first).expect("sync");
         assert_eq!(db.imported_wallpapers(Some(folder), false).expect("read").len(), 2);
 
         // b is gone, c has appeared.
         let second = vec![
-            ("/tmp/walls/a.jpg".to_string(), "a.jpg".to_string(), 10, String::new()),
-            ("/tmp/walls/c.jpg".to_string(), "c.jpg".to_string(), 30, String::new()),
+            ("/tmp/walls/a.jpg".to_string(), "a.jpg".to_string(), 10, String::new(), 1920, 1080),
+            ("/tmp/walls/c.jpg".to_string(), "c.jpg".to_string(), 30, String::new(), 1920, 1080),
         ];
         db.sync_imported_wallpapers(folder, &second).expect("resync");
         let names: Vec<String> = db
             .imported_wallpapers(Some(folder), false)
             .expect("read")
             .into_iter()
-            .map(|(_, _, _, filename, _, _, _)| filename)
+            .map(|(_, _, _, filename, ..)| filename)
             .collect();
         assert_eq!(names, vec!["a.jpg".to_string(), "c.jpg".to_string()]);
     }
@@ -2282,7 +2310,7 @@ mod tests {
     fn a_favourite_survives_a_rescan() {
         let (db, _dir) = temp_db();
         let folder = db.import_folder("/tmp/walls", "walls").expect("import");
-        let files = vec![("/tmp/walls/a.jpg".to_string(), "a.jpg".to_string(), 10, String::new())];
+        let files = vec![("/tmp/walls/a.jpg".to_string(), "a.jpg".to_string(), 10, String::new(), 1920, 1080)];
         db.sync_imported_wallpapers(folder, &files).expect("sync");
 
         let id = db.imported_wallpapers(Some(folder), false).expect("read")[0].0;
@@ -2301,7 +2329,7 @@ mod tests {
         let folder = db.import_folder("/tmp/walls", "walls").expect("import");
         db.sync_imported_wallpapers(
             folder,
-            &[("/tmp/walls/a.jpg".to_string(), "a.jpg".to_string(), 10, String::new())],
+            &[("/tmp/walls/a.jpg".to_string(), "a.jpg".to_string(), 10, String::new(), 1920, 1080)],
         )
         .expect("sync");
 

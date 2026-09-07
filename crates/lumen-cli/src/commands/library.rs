@@ -107,7 +107,7 @@ pub fn wallpapers(app: &App, folder: Option<&str>, favorites_only: bool) -> anyh
     if app.json {
         let listed: Vec<_> = rows
             .iter()
-            .map(|(id, folder_id, path, filename, bytes, favorite, subpath)| {
+            .map(|(id, folder_id, path, filename, bytes, favorite, subpath, width, height)| {
                 serde_json::json!({
                     "id": id.to_string(),
                     "folderId": folder_id.to_string(),
@@ -116,6 +116,8 @@ pub fn wallpapers(app: &App, folder: Option<&str>, favorites_only: bool) -> anyh
                     "bytes": bytes,
                     "favorite": favorite,
                     "subpath": subpath,
+                    "width": width,
+                    "height": height,
                 })
             })
             .collect();
@@ -125,7 +127,7 @@ pub fn wallpapers(app: &App, folder: Option<&str>, favorites_only: bool) -> anyh
         output::note("Nothing indexed here.");
         return Ok(());
     }
-    for (_, _, path, filename, bytes, favorite, subpath) in &rows {
+    for (_, _, path, filename, bytes, favorite, subpath, ..) in &rows {
         let mark = if *favorite { "♥" } else { " " };
         let where_ = if subpath.is_empty() { String::new() } else { format!("{subpath}/") };
         println!(
@@ -146,7 +148,7 @@ pub fn favorite(app: &App, path: &str, on: bool) -> anyhow::Result<()> {
         .db
         .imported_wallpapers(None, false)?
         .into_iter()
-        .find(|(_, _, p, filename, _, _, _)| *p == wanted || filename == path)
+        .find(|(_, _, p, filename, ..)| *p == wanted || filename == path)
         .ok_or_else(|| anyhow::anyhow!("{path} is not in an imported folder"))?;
 
     app.db.set_imported_favorite(row.0, on)?;

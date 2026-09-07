@@ -55,7 +55,7 @@ pub fn plan(app: &App, folder: Option<&str>) -> anyhow::Result<Plan> {
     let mut already_done = 0;
     let mut unrecognised = 0;
 
-    for (_, _, path, filename, _, _, _) in rows {
+    for (_, _, path, filename, ..) in rows {
         let path = PathBuf::from(path);
         if !path.is_file() {
             continue;

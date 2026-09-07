@@ -400,6 +400,12 @@ pub struct LocalWallpaperDto {
     pub is_favorite: bool,
     /// Directory inside the imported root, empty at the top level.
     pub subpath: String,
+    /// Pixel size, read once when the folder was scanned. Zero when the header
+    /// could not be read. Sent so the grid never has to measure: reading four
+    /// thousand headers takes seven seconds, and the layout needs the shapes
+    /// before it can draw a single row correctly.
+    pub width: u32,
+    pub height: u32,
 }
 
 /// One entry in the desktop's history.

@@ -15,6 +15,13 @@ pub struct FoundImage {
     pub path: String,
     pub filename: String,
     pub bytes: u64,
+    /// Pixel size, read from the header. Zero when it could not be read.
+    ///
+    /// Stored so the app never has to measure again: reading the headers of a
+    /// four-thousand-file library takes seven seconds, and doing it at every
+    /// launch is seven seconds of the grid laying out at the wrong shapes.
+    pub width: u32,
+    pub height: u32,
     /// Directory relative to the imported root, empty at the top level. This
     /// is what lets a folder be browsed as a tree rather than one flat list.
     pub subpath: String,
@@ -56,10 +63,13 @@ pub fn scan_images(root: &Path) -> Vec<FoundImage> {
                 .and_then(|parent| parent.strip_prefix(root).ok())
                 .map(|rel| rel.to_string_lossy().into_owned())
                 .unwrap_or_default();
+            let (width, height) = image::image_dimensions(&path).unwrap_or((0, 0));
             out.push(FoundImage {
                 path: path.to_string_lossy().into_owned(),
                 filename: name,
                 bytes: entry.metadata().map(|m| m.len()).unwrap_or(0),
+                width,
+                height,
                 subpath,
             });
         }
@@ -73,10 +83,12 @@ pub fn scan_images(root: &Path) -> Vec<FoundImage> {
 }
 
 /// The tuple shape the database's sync call takes.
-pub fn as_rows(found: &[FoundImage]) -> Vec<(String, String, u64, String)> {
+pub fn as_rows(found: &[FoundImage]) -> Vec<(String, String, u64, String, u32, u32)> {
     found
         .iter()
-        .map(|f| (f.path.clone(), f.filename.clone(), f.bytes, f.subpath.clone()))
+        .map(|f| {
+            (f.path.clone(), f.filename.clone(), f.bytes, f.subpath.clone(), f.width, f.height)
+        })
         .collect()
 }
 
@@ -104,6 +116,9 @@ mod tests {
         assert_eq!(found[0].filename, "top.jpg");
         assert_eq!(found[0].subpath, "");
         assert_eq!(found[0].bytes, 1);
+        // Not a real image, so the header cannot be read; zero says so rather
+        // than guessing a shape.
+        assert_eq!((found[0].width, found[0].height), (0, 0));
         assert_eq!(found[1].filename, "inner.png");
         assert_eq!(found[1].subpath, "anime");
 

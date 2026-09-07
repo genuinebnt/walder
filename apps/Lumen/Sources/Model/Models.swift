@@ -423,6 +423,19 @@ struct LocalWallpaper: Identifiable, Hashable, Decodable {
     var isFavorite: Bool
     /// Directory inside the imported root; empty at the top level.
     var subpath: String = ""
+    /// Pixel size, read once when the folder was scanned. Zero means the
+    /// header could not be read.
+    var width: Int = 0
+    var height: Int = 0
+
+    /// Width over height, from what was stored at scan time.
+    ///
+    /// Nil rather than a guess: the layouts that draw at a wallpaper's own
+    /// shape need to know when they do not know it.
+    var storedRatio: Double? {
+        guard width > 0, height > 0 else { return nil }
+        return Double(width) / Double(height)
+    }
 
     var sizeMB: String { String(format: "%.1f MB", Double(fileSize) / 1_048_576) }
 

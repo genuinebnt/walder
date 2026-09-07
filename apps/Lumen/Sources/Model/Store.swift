@@ -821,13 +821,21 @@ final class Store {
 
     /// Shape of a local wallpaper, 16:10 until its header has been read.
     func aspectRatio(of wallpaper: LocalWallpaper) -> Double {
-        aspectRatios[wallpaper.path] ?? 16.0 / 10
+        // Stored at scan time, so this is right on the first frame. Measuring
+        // it here instead meant reading four thousand file headers — seven
+        // seconds — at every launch, with the grid drawing at a placeholder
+        // shape until they arrived.
+        wallpaper.storedRatio ?? aspectRatios[wallpaper.path] ?? 16.0 / 10
     }
 
     /// Reads the shapes of whatever is on screen, in the background.
     @MainActor
     func loadAspectRatios(for wallpapers: [LocalWallpaper]) async {
-        let missing = wallpapers.filter { aspectRatios[$0.path] == nil }
+        // Only what the scan could not read — a library imported before the
+        // dimensions were stored, or a file whose header is unreadable.
+        let missing = wallpapers.filter {
+            $0.storedRatio == nil && aspectRatios[$0.path] == nil
+        }
         guard !missing.isEmpty else { return }
 
         // Published in batches. Reading four thousand file headers takes long
@@ -1332,19 +1340,22 @@ final class Store {
     /// that is not something to start over after a quit.
     @MainActor
     func buildSemanticIndex() async {
-        await SemanticIndex.shared.load()
-        guard SemanticIndex.shared.isReady else {
-            semanticUnavailable = SemanticIndex.shared.unavailableReason
-            return
-        }
-        semanticUnavailable = nil
-
+        // What is outstanding is a database question, so ask it before loading
+        // a hundred megabytes of model. The background pass runs at every
+        // launch and almost always has nothing to do.
         let known = LumenCore.shared.embeddedPaths(model: SemanticIndex.modelIdentifier)
         let pending = libraryWallpapers.filter { !known.contains($0.path) }
         guard !pending.isEmpty else {
             loadSemanticVectors()
             return
         }
+
+        await SemanticIndex.shared.load()
+        guard SemanticIndex.shared.isReady else {
+            semanticUnavailable = SemanticIndex.shared.unavailableReason
+            return
+        }
+        semanticUnavailable = nil
 
         isSemanticIndexing = true
         semanticProgress = (0, pending.count)

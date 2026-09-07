@@ -1428,7 +1428,7 @@ pub extern "C" fn lumen_history_drop_latest() -> *mut c_char {
 // ── imported folders ──────────────────────────────────────────────────────
 
 /// The scan, in the shape the database's sync call takes.
-fn scan(root: &std::path::Path) -> Vec<(String, String, u64, String)> {
+fn scan(root: &std::path::Path) -> Vec<(String, String, u64, String, u32, u32)> {
     lumen_core::scan::as_rows(&lumen_core::scan::scan_images(root))
 }
 
@@ -1597,7 +1597,8 @@ pub unsafe extern "C" fn lumen_library_wallpapers(
         Ok(found) => {
             let list: Vec<LocalWallpaperDto> = found
                 .into_iter()
-                .map(|(id, folder, path, filename, size, favorite, subpath)| LocalWallpaperDto {
+                .map(|(id, folder, path, filename, size, favorite, subpath, width, height)| {
+                    LocalWallpaperDto {
                     id: id.to_string(),
                     folder_id: folder.to_string(),
                     url: file_url(std::path::Path::new(&path)),
@@ -1606,7 +1607,9 @@ pub unsafe extern "C" fn lumen_library_wallpapers(
                     file_size: size as i64,
                     is_favorite: favorite,
                     subpath,
-                })
+                    width,
+                    height,
+                }})
                 .collect();
             to_c(serde_json::to_string(&Envelope::ok("library", list)).unwrap_or_default())
         }
