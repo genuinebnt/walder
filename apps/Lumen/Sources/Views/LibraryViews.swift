@@ -29,7 +29,7 @@ struct DownloadsView: View {
                 }
             }
             .padding(Tokens.s4)
-            .frame(maxWidth: 900, alignment: .leading)
+            .frame(maxWidth: .infinity, alignment: .leading)
             .animation(Tokens.normal, value: store.downloads.map(\.id))
         }
         .scrollContentBackground(.hidden)
@@ -246,7 +246,7 @@ struct DisplaysView: View {
                 }
             }
             .padding(Tokens.s4)
-            .frame(maxWidth: 1000, alignment: .leading)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
         .scrollContentBackground(.hidden)
         .onAppear { store.displays = mergeLiveDisplays() }

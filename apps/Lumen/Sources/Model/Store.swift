@@ -906,6 +906,8 @@ final class Store {
     var libraryWallpapers: [LocalWallpaper] = []
     /// nil means every folder.
     var selectedFolder: String?
+    /// Directory being browsed inside the selected folder, "" at its root.
+    var browsePath: String = ""
     var libraryFavoritesOnly = false
     var isScanningLibrary = false
 
@@ -957,7 +959,50 @@ final class Store {
     @MainActor
     func selectFolder(_ id: String?) {
         selectedFolder = id
+        browsePath = ""
         reloadLibrary()
+    }
+
+    /// Steps into a subfolder, or back to a level in the breadcrumb.
+    @MainActor
+    func browse(to path: String) {
+        withAnimation(Tokens.quick) { browsePath = path }
+    }
+
+    /// Subdirectories directly inside the level being browsed, with a count of
+    /// everything beneath each.
+    var currentSubfolders: [(name: String, path: String, count: Int)] {
+        let prefix = browsePath.isEmpty ? "" : browsePath + "/"
+        var counts: [String: Int] = [:]
+        for wallpaper in libraryWallpapers {
+            let sub = wallpaper.subpath
+            guard sub.hasPrefix(prefix), sub != browsePath else { continue }
+            let remainder = String(sub.dropFirst(prefix.count))
+            guard !remainder.isEmpty else { continue }
+            // Only the next level down; anything deeper counts towards it.
+            let child = remainder.split(separator: "/").first.map(String.init) ?? remainder
+            counts[child, default: 0] += 1
+        }
+        return counts
+            .map { (name: $0.key, path: prefix + $0.key, count: $0.value) }
+            .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+    }
+
+    /// Wallpapers sitting directly in the level being browsed.
+    var currentFiles: [LocalWallpaper] {
+        libraryWallpapers.filter { $0.subpath == browsePath }
+    }
+
+    /// Breadcrumb trail for the level being browsed.
+    var breadcrumb: [(name: String, path: String)] {
+        guard !browsePath.isEmpty else { return [] }
+        var trail: [(String, String)] = []
+        var built = ""
+        for part in browsePath.split(separator: "/") {
+            built = built.isEmpty ? String(part) : built + "/" + part
+            trail.append((String(part), built))
+        }
+        return trail
     }
 
     @MainActor

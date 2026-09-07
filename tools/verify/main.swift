@@ -1019,6 +1019,49 @@ func run() async -> Int32 {
         let forgotten = !store.libraryFolders.contains { $0.id == folder.id }
         return found && favourited && forgotten
     }
+    v.check("Nested folders browse as a tree rather than one flat list") {
+        // Two levels down, so the "next level only" rule is exercised.
+        let files = [
+            LocalWallpaper(id: "1", folderId: "f", url: URL(filePath: "/tmp/a.png"),
+                           path: "/tmp/a.png", filename: "a.png", fileSize: 1,
+                           isFavorite: false, subpath: ""),
+            LocalWallpaper(id: "2", folderId: "f", url: URL(filePath: "/tmp/n/b.png"),
+                           path: "/tmp/n/b.png", filename: "b.png", fileSize: 1,
+                           isFavorite: false, subpath: "nature"),
+            LocalWallpaper(id: "3", folderId: "f", url: URL(filePath: "/tmp/n/d/c.png"),
+                           path: "/tmp/n/d/c.png", filename: "c.png", fileSize: 1,
+                           isFavorite: false, subpath: "nature/deep")
+        ]
+        store.libraryWallpapers = files
+        store.selectedFolder = "f"
+        store.browse(to: "")
+
+        // At the root: one file, one subfolder counting everything beneath it.
+        guard store.currentFiles.map(\.filename) == ["a.png"],
+              store.currentSubfolders.map(\.name) == ["nature"],
+              store.currentSubfolders.first?.count == 2 else { return false }
+
+        store.browse(to: "nature")
+        guard store.currentFiles.map(\.filename) == ["b.png"],
+              store.currentSubfolders.map(\.name) == ["deep"] else { return false }
+
+        store.browse(to: "nature/deep")
+        let leaf = store.currentFiles.map(\.filename) == ["c.png"]
+            && store.currentSubfolders.isEmpty
+        // The breadcrumb is the way back up.
+        let trail = store.breadcrumb.map(\.name) == ["nature", "deep"]
+            && store.breadcrumb.last?.path == "nature/deep"
+
+        store.libraryWallpapers = []
+        store.selectedFolder = nil
+        store.browse(to: "")
+        return leaf && trail
+    }
+    v.check("Choosing a folder returns to its top level") {
+        store.browse(to: "somewhere/deep")
+        store.selectFolder(nil)
+        return store.browsePath.isEmpty
+    }
     v.check("A local wallpaper reports the size of the file on disk") {
         // Read from the header, not by decoding, so a large folder stays cheap.
         let url = FileManager.default.temporaryDirectory

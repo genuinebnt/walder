@@ -383,6 +383,8 @@ struct LocalWallpaper: Identifiable, Hashable, Decodable {
     let filename: String
     let fileSize: Int
     var isFavorite: Bool
+    /// Directory inside the imported root; empty at the top level.
+    var subpath: String = ""
 
     var sizeMB: String { String(format: "%.1f MB", Double(fileSize) / 1_048_576) }
 

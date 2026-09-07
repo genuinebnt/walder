@@ -28,7 +28,16 @@ struct LibraryFolderView: View {
                 } else if items.isEmpty {
                     emptyState
                 } else {
-                    grid
+                    // A file browser rather than one flat list: subfolders
+                    // first, then the images at this level.
+                    breadcrumb
+                    if !store.currentSubfolders.isEmpty { subfolders }
+                    if store.currentFiles.isEmpty && !store.currentSubfolders.isEmpty {
+                        Text("No images directly in this folder.")
+                            .font(.system(size: 11.5)).foregroundStyle(.secondary)
+                    } else {
+                        grid
+                    }
                 }
             }
             .padding(Tokens.s4)
@@ -147,6 +156,72 @@ struct LibraryFolderView: View {
         }
     }
 
+    // MARK: Browsing
+
+    /// Where you are inside the imported folder, and the way back up.
+    @ViewBuilder
+    private var breadcrumb: some View {
+        if store.selectedFolder != nil {
+            HStack(spacing: 4) {
+                Button {
+                    store.browse(to: "")
+                } label: {
+                    Label(rootName, systemImage: "folder")
+                        .font(.system(size: 12, weight: store.browsePath.isEmpty ? .medium : .regular))
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(store.browsePath.isEmpty ? .primary : Color.accentColor)
+
+                ForEach(store.breadcrumb, id: \.path) { crumb in
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 9)).foregroundStyle(.tertiary)
+                    Button {
+                        store.browse(to: crumb.path)
+                    } label: {
+                        Text(crumb.name)
+                            .font(.system(size: 12,
+                                          weight: crumb.path == store.browsePath ? .medium : .regular))
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(crumb.path == store.browsePath ? .primary : Color.accentColor)
+                }
+                Spacer()
+            }
+        }
+    }
+
+    private var rootName: String {
+        store.libraryFolders.first { $0.id == store.selectedFolder }?.name ?? "All folders"
+    }
+
+    private var subfolders: some View {
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: 170), spacing: Tokens.s3)],
+                  spacing: Tokens.s3) {
+            ForEach(store.currentSubfolders, id: \.path) { folder in
+                Button {
+                    store.browse(to: folder.path)
+                } label: {
+                    HStack(spacing: Tokens.s2) {
+                        Image(systemName: "folder.fill")
+                            .font(.system(size: 17))
+                            .foregroundStyle(Tokens.accent)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(folder.name).font(.system(size: 12.5)).lineLimit(1)
+                            Text("\(folder.count) wallpapers")
+                                .font(.caption2Mono).foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                    }
+                    .padding(Tokens.s3)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .card()
+                    .contentShape(.rect)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+
     // MARK: Similarity
 
     /// Groups of files that look like the same picture.
@@ -183,10 +258,12 @@ struct LibraryFolderView: View {
     // MARK: Grid
 
     private var grid: some View {
-        LazyVGrid(columns: [GridItem(.adaptive(minimum: theme.minTileWidth),
-                                     spacing: theme.spacing)],
-                  spacing: theme.spacing) {
-            ForEach(items) { tile($0) }
+        // Only what is at this level; subfolders are their own tiles above.
+        let shown = store.selectedFolder == nil ? items : store.currentFiles
+        return LazyVGrid(columns: [GridItem(.adaptive(minimum: theme.minTileWidth),
+                                            spacing: theme.spacing)],
+                         spacing: theme.spacing) {
+            ForEach(shown) { tile($0) }
         }
     }
 
@@ -296,16 +373,30 @@ struct LibraryFolderView: View {
     }
 }
 
-/// Full-size look at a local file, with the same actions the grid offers.
+/// Full-size look at a local file, laid out like the Wallhaven preview: image
+/// on the left, everything you can do with it on the right.
 struct LocalPreview: View {
     @Environment(Store.self) private var store
     let wallpaper: LocalWallpaper
     var close: () -> Void
 
+    @State private var zoomed = false
+
     var body: some View {
-        VStack(spacing: 0) {
+        HStack(spacing: 0) {
+            preview
+            Divider()
+            inspector
+        }
+        .frame(minWidth: 880, idealWidth: 1180, minHeight: 540, idealHeight: 720)
+        .background(.regularMaterial)
+    }
+
+    private var preview: some View {
+        ZStack {
+            Color.black
             CachedImage(url: wallpaper.url, maxPixels: ImageDetail.preview) { image in
-                image.resizable().scaledToFit()
+                image.resizable().aspectRatio(contentMode: zoomed ? .fill : .fit)
             } placeholder: {
                 ProgressView().controlSize(.large)
             } failure: {
@@ -313,35 +404,173 @@ struct LocalPreview: View {
                     .foregroundStyle(.secondary)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(.black)
+            .clipped()
 
-            HStack(spacing: Tokens.s3) {
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(wallpaper.filename).font(.rowTitle.weight(.medium)).lineLimit(1)
-                    Text("\(wallpaper.displayResolution) · \(wallpaper.sizeMB)")
-                        .font(.caption2Mono).foregroundStyle(.secondary)
+            VStack {
+                HStack {
+                    Button(action: close) {
+                        Label("Back", systemImage: "chevron.left")
+                            .font(.system(size: 12, weight: .medium))
+                            .padding(.horizontal, 10).padding(.vertical, 5)
+                            .background(.black.opacity(0.5), in: .capsule)
+                    }
+                    .buttonStyle(.plain)
+                    .keyboardShortcut(.cancelAction)
+                    Spacer()
+                    Text(wallpaper.displayResolution)
+                        .font(.captionMono)
+                        .padding(.horizontal, 9).padding(.vertical, 4)
+                        .background(.black.opacity(0.5), in: .rect(cornerRadius: 7))
                 }
                 Spacer()
+            }
+            .foregroundStyle(.white)
+            .padding(Tokens.s3)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .clipped()
+        .contentShape(.rect)
+        .onTapGesture { withAnimation(Tokens.normal) { zoomed.toggle() } }
+    }
+
+    private var inspector: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: Tokens.s4) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(wallpaper.filename)
+                        .font(.system(size: 15, weight: .semibold))
+                        .lineLimit(2)
+                    Text(wallpaper.subpath.isEmpty ? "Top level" : wallpaper.subpath)
+                        .font(.system(size: 11.5)).foregroundStyle(.secondary)
+                }
+
+                actions
+                fitReport
+                metadata
+                displays
+            }
+            .padding(Tokens.s4)
+        }
+        .frame(width: 316)
+        .scrollContentBackground(.hidden)
+        .background(.regularMaterial)
+        .background(Color(nsColor: .windowBackgroundColor))
+    }
+
+    private var actions: some View {
+        VStack(spacing: Tokens.s2) {
+            if SpacesWallpaper.isAvailable {
+                Picker("", selection: Binding(get: { store.wallpaperScope },
+                                              set: { store.wallpaperScope = $0 })) {
+                    ForEach(WallpaperScope.allCases) { Text($0.label).tag($0) }
+                }
+                .pickerStyle(.segmented).labelsHidden().controlSize(.small)
+            }
+
+            Button {
+                store.setLocalWallpaper(wallpaper)
+            } label: {
+                Label("Set as Wallpaper", systemImage: "sparkles").frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
+            .keyboardShortcut(.defaultAction)
+
+            HStack(spacing: Tokens.s2) {
                 Button {
                     store.toggleLibraryFavorite(wallpaper)
                 } label: {
                     Label(wallpaper.isFavorite ? "Saved" : "Favourite",
                           systemImage: wallpaper.isFavorite ? "heart.fill" : "heart")
+                        .frame(maxWidth: .infinity)
                 }
+                .tint(wallpaper.isFavorite ? Tokens.brand : nil)
+
                 Button {
-                    store.setLocalWallpaper(wallpaper)
-                    close()
+                    NSWorkspace.shared.activateFileViewerSelecting([wallpaper.url])
                 } label: {
-                    Label("Set as Wallpaper", systemImage: "sparkles")
+                    Label("Reveal", systemImage: "folder").frame(maxWidth: .infinity)
                 }
-                .buttonStyle(.borderedProminent)
-                .keyboardShortcut(.defaultAction)
-                Button("Close", action: close)
-                    .keyboardShortcut(.cancelAction)
             }
-            .padding(Tokens.s3)
-            .background(.bar)
+            .controlSize(.large)
+
+            Button {
+                close()
+                Task { await store.findSimilarInLibrary(to: wallpaper) }
+            } label: {
+                Label("Find Similar in Library", systemImage: "square.on.square.dashed")
+                    .frame(maxWidth: .infinity)
+            }
+            .controlSize(.large)
         }
-        .frame(minWidth: 820, idealWidth: 1080, minHeight: 520, idealHeight: 700)
+    }
+
+    /// Same question the Wallhaven preview answers: does this suit the screen?
+    @ViewBuilder
+    private var fitReport: some View {
+        if let size = wallpaper.pixelSize {
+            let fit = DisplayFit(image: size, display: WallpaperFitter.mainPixelSize)
+            VStack(alignment: .leading, spacing: Tokens.s2) {
+                Text("ON THIS DISPLAY").font(.sectionLabel).foregroundStyle(.secondary)
+                HStack(spacing: Tokens.s2) {
+                    Image(systemName: fit.isPerfect ? "checkmark.circle.fill"
+                            : fit.isGood ? "checkmark.circle" : "exclamationmark.triangle.fill")
+                        .foregroundStyle(fit.isPerfect || fit.isGood ? Tokens.success : Tokens.warning)
+                    Text(fit.summary).font(.system(size: 12))
+                    Spacer()
+                }
+                .padding(.horizontal, 11).padding(.vertical, 8)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(.quaternary.opacity(0.4), in: .rect(cornerRadius: Tokens.control))
+            }
+        }
+    }
+
+    private var metadata: some View {
+        VStack(spacing: 0) {
+            ForEach(Array(rows.enumerated()), id: \.offset) { index, row in
+                HStack(alignment: .top) {
+                    Text(row.0).foregroundStyle(.secondary)
+                    Spacer()
+                    Text(row.1).font(.captionMono)
+                        .multilineTextAlignment(.trailing)
+                        .lineLimit(3)
+                        .truncationMode(.middle)
+                }
+                .font(.system(size: 12))
+                .padding(.horizontal, 11).padding(.vertical, 8)
+                .rowDivider(index > 0)
+            }
+        }
+        .card(radius: 10)
+    }
+
+    private var rows: [(String, String)] {
+        [("Resolution", wallpaper.displayResolution),
+         ("File", (wallpaper.url.pathExtension.uppercased()) + " · " + wallpaper.sizeMB),
+         ("Folder", wallpaper.subpath.isEmpty ? "—" : wallpaper.subpath),
+         ("Path", wallpaper.url.deletingLastPathComponent().path)]
+    }
+
+    private var displays: some View {
+        VStack(alignment: .leading, spacing: Tokens.s2) {
+            Text("SEND TO DISPLAY").font(.sectionLabel).foregroundStyle(.secondary)
+            ForEach(store.displays) { display in
+                Button {
+                    store.setLocalWallpaper(wallpaper, on: display)
+                } label: {
+                    HStack {
+                        Text(display.name).lineLimit(1)
+                        Spacer()
+                        Image(systemName: "arrow.right.circle").foregroundStyle(.tertiary)
+                    }
+                    .font(.system(size: 12))
+                    .padding(.horizontal, 11).padding(.vertical, 7)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(.quaternary.opacity(0.4), in: .rect(cornerRadius: Tokens.control))
+                }
+                .buttonStyle(.plain)
+            }
+        }
     }
 }

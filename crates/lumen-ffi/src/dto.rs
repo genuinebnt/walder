@@ -388,6 +388,8 @@ pub struct LocalWallpaperDto {
     pub file_size: i64,
     #[serde(rename = "isFavorite")]
     pub is_favorite: bool,
+    /// Directory inside the imported root, empty at the top level.
+    pub subpath: String,
 }
 
 /// One entry in the desktop's history.

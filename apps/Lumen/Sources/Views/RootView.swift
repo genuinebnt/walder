@@ -232,7 +232,10 @@ struct RootView: View {
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                 }
-                .padding(.leading, Tokens.s1)
+                // macOS draws a capsule behind a toolbar item; without this the
+                // text sits hard against its edges.
+                .padding(.horizontal, Tokens.s2)
+                .padding(.vertical, 2)
             }
         }
 

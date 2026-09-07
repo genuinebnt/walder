@@ -181,6 +181,7 @@ impl Database {
                 filename TEXT NOT NULL,
                 file_size INTEGER NOT NULL DEFAULT 0,
                 favorite INTEGER NOT NULL DEFAULT 0,
+                subpath TEXT NOT NULL DEFAULT '',
                 added_at DATETIME DEFAULT CURRENT_TIMESTAMP
             )",
             [],
@@ -232,6 +233,13 @@ impl Database {
             [],
         )
         .map_err(|e| WallsetterError::Database(e.to_string()))?;
+
+        // Added after the table shipped, so existing installs need it too.
+        // A duplicate-column error just means it is already there.
+        let _ = conn.execute(
+            "ALTER TABLE imported_wallpapers ADD COLUMN subpath TEXT NOT NULL DEFAULT ''",
+            [],
+        );
 
         // Indices for the columns the app actually filters and joins on.
         // Without them every favourite check is a full scan of bookmarks.
@@ -1302,7 +1310,7 @@ impl Database {
     pub fn sync_imported_wallpapers(
         &self,
         folder_id: Uuid,
-        files: &[(String, String, u64)],
+        files: &[(String, String, u64, String)],
     ) -> wallsetter_core::Result<usize> {
         let mut conn = self
             .pool
@@ -1321,7 +1329,7 @@ impl Database {
                 .prepare_cached("SELECT path FROM imported_wallpapers WHERE folder_id = ?1")
                 .map_err(|e| WallsetterError::Database(e.to_string()))?;
             let on_disk: std::collections::HashSet<&str> =
-                files.iter().map(|(path, _, _)| path.as_str()).collect();
+                files.iter().map(|(path, _, _, _)| path.as_str()).collect();
             let stored: Vec<String> = existing
                 .query_map([folder_id.to_string()], |row| row.get::<_, String>(0))
                 .map_err(|e| WallsetterError::Database(e.to_string()))?
@@ -1335,15 +1343,17 @@ impl Database {
 
             let mut insert = transaction
                 .prepare_cached(
-                    "INSERT INTO imported_wallpapers (id, folder_id, path, filename, file_size)
-                     VALUES (?1, ?2, ?3, ?4, ?5)
+                    "INSERT INTO imported_wallpapers
+                        (id, folder_id, path, filename, file_size, subpath)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6)
                      ON CONFLICT(path) DO UPDATE SET
                         folder_id = excluded.folder_id,
                         filename = excluded.filename,
-                        file_size = excluded.file_size",
+                        file_size = excluded.file_size,
+                        subpath = excluded.subpath",
                 )
                 .map_err(|e| WallsetterError::Database(e.to_string()))?;
-            for (path, filename, size) in files {
+            for (path, filename, size, subpath) in files {
                 insert
                     .execute((
                         Uuid::new_v4().to_string(),
@@ -1351,6 +1361,7 @@ impl Database {
                         path,
                         filename,
                         *size as i64,
+                        subpath,
                     ))
                     .map_err(|e| WallsetterError::Database(e.to_string()))?;
             }
@@ -1367,23 +1378,23 @@ impl Database {
         &self,
         folder_id: Option<Uuid>,
         favorites_only: bool,
-    ) -> wallsetter_core::Result<Vec<(Uuid, Uuid, String, String, u64, bool)>> {
+    ) -> wallsetter_core::Result<Vec<(Uuid, Uuid, String, String, u64, bool, String)>> {
         let conn = self
             .pool
             .get()
             .map_err(|e| WallsetterError::Database(e.to_string()))?;
 
         let sql = match (folder_id.is_some(), favorites_only) {
-            (true, true) => "SELECT id, folder_id, path, filename, file_size, favorite
+            (true, true) => "SELECT id, folder_id, path, filename, file_size, favorite, subpath
                              FROM imported_wallpapers
-                             WHERE folder_id = ?1 AND favorite = 1 ORDER BY filename",
-            (true, false) => "SELECT id, folder_id, path, filename, file_size, favorite
+                             WHERE folder_id = ?1 AND favorite = 1 ORDER BY subpath, filename",
+            (true, false) => "SELECT id, folder_id, path, filename, file_size, favorite, subpath
                               FROM imported_wallpapers
-                              WHERE folder_id = ?1 ORDER BY filename",
-            (false, true) => "SELECT id, folder_id, path, filename, file_size, favorite
-                              FROM imported_wallpapers WHERE favorite = 1 ORDER BY filename",
-            (false, false) => "SELECT id, folder_id, path, filename, file_size, favorite
-                               FROM imported_wallpapers ORDER BY filename",
+                              WHERE folder_id = ?1 ORDER BY subpath, filename",
+            (false, true) => "SELECT id, folder_id, path, filename, file_size, favorite, subpath
+                              FROM imported_wallpapers WHERE favorite = 1 ORDER BY subpath, filename",
+            (false, false) => "SELECT id, folder_id, path, filename, file_size, favorite, subpath
+                               FROM imported_wallpapers ORDER BY subpath, filename",
         };
         let mut stmt = conn
             .prepare(sql)
@@ -1402,16 +1413,17 @@ impl Database {
                     row.get::<_, String>(3)?,
                     row.get::<_, i64>(4)?,
                     row.get::<_, i64>(5)? != 0,
+                    row.get::<_, String>(6)?,
                 ))
             })
             .map_err(|e| WallsetterError::Database(e.to_string()))?;
 
         let mut found = Vec::new();
         for row in rows {
-            let (id, folder, path, filename, size, favorite) =
+            let (id, folder, path, filename, size, favorite, subpath) =
                 row.map_err(|e| WallsetterError::Database(e.to_string()))?;
             if let (Ok(id), Ok(folder)) = (Uuid::parse_str(&id), Uuid::parse_str(&folder)) {
-                found.push((id, folder, path, filename, size.max(0) as u64, favorite));
+                found.push((id, folder, path, filename, size.max(0) as u64, favorite, subpath));
             }
         }
         Ok(found)
@@ -1967,23 +1979,23 @@ mod tests {
         let folder = db.import_folder("/tmp/walls", "walls").expect("import");
 
         let first = vec![
-            ("/tmp/walls/a.jpg".to_string(), "a.jpg".to_string(), 10),
-            ("/tmp/walls/b.jpg".to_string(), "b.jpg".to_string(), 20),
+            ("/tmp/walls/a.jpg".to_string(), "a.jpg".to_string(), 10, String::new()),
+            ("/tmp/walls/b.jpg".to_string(), "b.jpg".to_string(), 20, "nested".to_string()),
         ];
         db.sync_imported_wallpapers(folder, &first).expect("sync");
         assert_eq!(db.imported_wallpapers(Some(folder), false).expect("read").len(), 2);
 
         // b is gone, c has appeared.
         let second = vec![
-            ("/tmp/walls/a.jpg".to_string(), "a.jpg".to_string(), 10),
-            ("/tmp/walls/c.jpg".to_string(), "c.jpg".to_string(), 30),
+            ("/tmp/walls/a.jpg".to_string(), "a.jpg".to_string(), 10, String::new()),
+            ("/tmp/walls/c.jpg".to_string(), "c.jpg".to_string(), 30, String::new()),
         ];
         db.sync_imported_wallpapers(folder, &second).expect("resync");
         let names: Vec<String> = db
             .imported_wallpapers(Some(folder), false)
             .expect("read")
             .into_iter()
-            .map(|(_, _, _, filename, _, _)| filename)
+            .map(|(_, _, _, filename, _, _, _)| filename)
             .collect();
         assert_eq!(names, vec!["a.jpg".to_string(), "c.jpg".to_string()]);
     }
@@ -1992,7 +2004,7 @@ mod tests {
     fn a_favourite_survives_a_rescan() {
         let (db, _dir) = temp_db();
         let folder = db.import_folder("/tmp/walls", "walls").expect("import");
-        let files = vec![("/tmp/walls/a.jpg".to_string(), "a.jpg".to_string(), 10)];
+        let files = vec![("/tmp/walls/a.jpg".to_string(), "a.jpg".to_string(), 10, String::new())];
         db.sync_imported_wallpapers(folder, &files).expect("sync");
 
         let id = db.imported_wallpapers(Some(folder), false).expect("read")[0].0;
@@ -2011,7 +2023,7 @@ mod tests {
         let folder = db.import_folder("/tmp/walls", "walls").expect("import");
         db.sync_imported_wallpapers(
             folder,
-            &[("/tmp/walls/a.jpg".to_string(), "a.jpg".to_string(), 10)],
+            &[("/tmp/walls/a.jpg".to_string(), "a.jpg".to_string(), 10, String::new())],
         )
         .expect("sync");
 

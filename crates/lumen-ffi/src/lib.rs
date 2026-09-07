@@ -1151,8 +1151,13 @@ const IMAGE_EXTENSIONS: [&str; 7] = ["jpg", "jpeg", "png", "heic", "webp", "tif"
 /// Walks a folder for images. Recurses, because wallpaper folders are usually
 /// organised into subfolders, but skips hidden entries and Lumen's own `.part`
 /// files.
-fn scan_images(root: &std::path::Path) -> Vec<(String, String, u64)> {
-    fn walk(dir: &std::path::Path, depth: u32, out: &mut Vec<(String, String, u64)>) {
+fn scan_images(root: &std::path::Path) -> Vec<(String, String, u64, String)> {
+    fn walk(
+        dir: &std::path::Path,
+        root: &std::path::Path,
+        depth: u32,
+        out: &mut Vec<(String, String, u64, String)>,
+    ) {
         // A guard against a symlink loop, and against indexing a whole home
         // directory by accident.
         if depth > 6 {
@@ -1166,7 +1171,7 @@ fn scan_images(root: &std::path::Path) -> Vec<(String, String, u64)> {
                 continue;
             }
             if path.is_dir() {
-                walk(&path, depth + 1, out);
+                walk(&path, root, depth + 1, out);
                 continue;
             }
             let extension = path
@@ -1177,13 +1182,20 @@ fn scan_images(root: &std::path::Path) -> Vec<(String, String, u64)> {
                 continue;
             }
             let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
-            out.push((path.to_string_lossy().into_owned(), name, size));
+            // Relative directory inside the imported root, so the app can show
+            // the folder structure rather than one flat list.
+            let subpath = path
+                .parent()
+                .and_then(|parent| parent.strip_prefix(root).ok())
+                .map(|rel| rel.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            out.push((path.to_string_lossy().into_owned(), name, size, subpath));
         }
     }
 
     let mut found = Vec::new();
-    walk(root, 0, &mut found);
-    found.sort_by(|a, b| a.1.cmp(&b.1));
+    walk(root, root, 0, &mut found);
+    found.sort_by(|a, b| (a.3.as_str(), a.1.as_str()).cmp(&(b.3.as_str(), b.1.as_str())));
     found
 }
 
@@ -1316,7 +1328,7 @@ pub unsafe extern "C" fn lumen_library_wallpapers(
         Ok(found) => {
             let list: Vec<LocalWallpaperDto> = found
                 .into_iter()
-                .map(|(id, folder, path, filename, size, favorite)| LocalWallpaperDto {
+                .map(|(id, folder, path, filename, size, favorite, subpath)| LocalWallpaperDto {
                     id: id.to_string(),
                     folder_id: folder.to_string(),
                     url: file_url(std::path::Path::new(&path)),
@@ -1324,6 +1336,7 @@ pub unsafe extern "C" fn lumen_library_wallpapers(
                     filename,
                     file_size: size as i64,
                     is_favorite: favorite,
+                    subpath,
                 })
                 .collect();
             to_c(serde_json::to_string(&Envelope::ok("library", list)).unwrap_or_default())
