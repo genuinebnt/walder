@@ -445,6 +445,40 @@ func run() async -> Int32 {
         return store.screenSaverImage == SpacesWallpaper.screenSaverImage()
     }
 
+    v.section("Results without repeats")
+    v.check("The same picture in two folders appears once") {
+        // This library holds over fifteen hundred pairs of the same wallpaper
+        // filed twice, so without collapsing them a page of "similar" is
+        // largely one picture repeated.
+        var entries: [(path: String, vector: [Float])] = []
+        var v0 = [Float](repeating: 0, count: 16); v0[0] = 1
+        // Two folders, identical files.
+        entries.append(("/a/one.jpg", v0))
+        entries.append(("/b/one.jpg", v0))
+        for i in 1..<12 {
+            var v = [Float](repeating: 0, count: 16)
+            v[i % 16] = Float(i) * 2
+            entries.append(("/a/other\(i).jpg", v))
+        }
+        let graph = SimilarityGraph.build(from: entries, k: 4)
+        let ranked = graph.related(to: "/a/one.jpg", limit: 48).map(\.path)
+        // The copy is by definition the nearest thing to it, so an
+        // uncollapsed list leads with it.
+        return ranked.contains("/b/one.jpg")
+    }
+    v.check("Distinct wallpapers are not collapsed together") {
+        // The collapse must not eat the results it is cleaning up.
+        var entries: [(path: String, vector: [Float])] = []
+        for i in 0..<10 {
+            var v = [Float](repeating: 0, count: 16)
+            v[i] = Float(i + 1) * 3
+            entries.append(("/a/d\(i).jpg", v))
+        }
+        let graph = SimilarityGraph.build(from: entries, k: 4)
+        let ranked = graph.related(to: "/a/d0.jpg", limit: 20)
+        return Set(ranked.map(\.path)).count == ranked.count && ranked.count >= 3
+    }
+
     v.section("Duplicate accuracy")
     v.check("The threshold is tight enough to be useful") {
         // Measured over a 3,894-wallpaper library: 1,552 provably-identical
@@ -808,6 +842,22 @@ func run() async -> Int32 {
     if networkChecksEnabled {
     store.filters = SearchFilters()
     await store.search()
+
+    // A rate limit is a transient condition, not a reason to skip half the
+    // gate. Wallhaven says how long to wait and the run can afford to; without
+    // this, anything else using the API at the time — a metadata backfill, say
+    // — silently reduced the run to its offline half.
+    for attempt in 1...3 where store.errorMessage?.contains("Rate limited") == true {
+        let seconds = store.errorMessage?
+            .split(separator: " ")
+            .compactMap { Int($0.filter(\.isNumber)) }
+            .first ?? 5
+        print("      rate limited; waiting \(seconds + attempt)s and retrying")
+        try? await Task.sleep(for: .seconds(seconds + attempt))
+        store.errorMessage = nil
+        await store.search()
+    }
+
     if let message = store.errorMessage {
         v.skip("Search returns results", "core reported: \(message)")
         v.skip("Favorite toggle round-trips through the database", "no wallpapers to act on")

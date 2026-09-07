@@ -983,6 +983,46 @@ final class Store {
         return cachedGraph?.vectors ?? []
     }
 
+    /// Collapses results that are the same picture filed twice.
+    ///
+    /// A library built from several folders holds the same wallpaper more than
+    /// once — this one has over fifteen hundred such pairs — and without this
+    /// a page of "similar" is mostly the same picture repeated. Only the
+    /// best-ranked copy of each survives.
+    ///
+    /// Cheap enough to do unconditionally: a result list is a couple of dozen
+    /// entries, so this is a few hundred vector comparisons, and the filename
+    /// test settles most of them before any arithmetic happens.
+    private func collapsingDuplicates(_ paths: [String], limit: Int) -> [String] {
+        let vectors = cachedGraph?.vectors.reduce(into: [String: [Float]]()) { out, entry in
+            out[entry.path] = entry.vector
+        } ?? [:]
+        let names = libraryWallpapers.reduce(into: [String: String]()) { out, file in
+            out[file.path] = file.filename
+        }
+
+        var kept: [String] = []
+        var keptNames = Set<String>()
+        for path in paths {
+            guard kept.count < limit else { break }
+            // Same filename in another folder is the same wallpaper; for a
+            // library named after Wallhaven ids that settles it outright.
+            if let name = names[path] {
+                guard !keptNames.contains(name) else { continue }
+            }
+            if let vector = vectors[path] {
+                let isCopy = kept.contains { other in
+                    guard let existing = vectors[other] else { return false }
+                    return ImagePrints.distance(vector, existing) <= ImagePrints.duplicateThreshold
+                }
+                guard !isCopy else { continue }
+            }
+            kept.append(path)
+            if let name = names[path] { keptNames.insert(name) }
+        }
+        return kept
+    }
+
     /// Drops the graph, for when the indexed set has changed under it.
     func forgetSimilarityGraph() { cachedGraph = nil }
 
@@ -1001,13 +1041,16 @@ final class Store {
             return
         }
         let path = wallpaper.path
+        // Over-fetch, because collapsing copies removes entries: asking for
+        // twelve and then deduplicating would leave four.
         let nearest = await Task.detached(priority: .userInitiated) {
-            graph.related(to: path)
+            graph.related(to: path, limit: 48).map(\.path)
         }.value
+        let unique = collapsingDuplicates(nearest, limit: 12)
 
         let byPath = Dictionary(uniqueKeysWithValues: libraryWallpapers.map { ($0.path, $0) })
         withAnimation(Tokens.normal) {
-            similarToSelection = nearest.compactMap { byPath[$0.path] }
+            similarToSelection = unique.compactMap { byPath[$0] }
         }
     }
 
@@ -1147,8 +1190,14 @@ final class Store {
         isMatchingLibrary = true
         defer { isMatchingLibrary = false }
         await indexLibrary()
-        let found = await nearestInLibrary(to: wallpaper)
-        withAnimation(Tokens.normal) { libraryMatches = found }
+        let found = await nearestInLibrary(to: wallpaper, limit: 48)
+        // The nearest thing to a wallpaper you have twice is itself, twice.
+        let unique = collapsingDuplicates(found.map(\.file.path), limit: 12)
+        let byPath = Dictionary(found.map { ($0.file.path, $0) },
+                                uniquingKeysWith: { first, _ in first })
+        withAnimation(Tokens.normal) {
+            libraryMatches = unique.compactMap { byPath[$0] }
+        }
     }
 
     @MainActor
@@ -1217,14 +1266,14 @@ final class Store {
         let recent = Set(history.prefix(8).map(\.url.path))
         let vectors = await libraryVectors()
         let picks = await Task.detached(priority: .userInitiated) { () -> [String] in
-            var found = graph.discover(seeds: seeds, excluding: recent, limit: 24)
+            var found = graph.discover(seeds: seeds, excluding: recent, limit: 96)
                 .map(\.path)
 
             // The graph is not one connected piece — a seed in a small
             // component genuinely has few neighbours to reach, and returning
             // one result reads as a broken feature rather than a sparse corner.
             // Topping up by plain distance to the seeds is the honest fallback.
-            if found.count < 12 {
+            if found.count < 24 {
                 let taken = Set(found).union(seeds.keys).union(recent)
                 let byPath = Dictionary(vectors.map { ($0.path, $0.vector) },
                                         uniquingKeysWith: { first, _ in first })
@@ -1239,7 +1288,7 @@ final class Store {
                             return (entry.path, best)
                         }
                         .sorted { $0.1 < $1.1 }
-                        .prefix(24 - found.count)
+                        .prefix(96 - found.count)
                         .map(\.0)
                     found.append(contentsOf: extra)
                 }
@@ -1247,9 +1296,10 @@ final class Store {
             return found
         }.value
 
+        let unique = collapsingDuplicates(picks, limit: 24)
         let byPath = Dictionary(uniqueKeysWithValues: libraryWallpapers.map { ($0.path, $0) })
         withAnimation(Tokens.normal) {
-            discoveries = picks.compactMap { byPath[$0] }
+            discoveries = unique.compactMap { byPath[$0] }
         }
         if discoveries.isEmpty {
             errorMessage = "Nothing to suggest yet — index the library first."
