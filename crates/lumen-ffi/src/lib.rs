@@ -1666,6 +1666,30 @@ pub unsafe extern "C" fn lumen_library_favorite(json: *const c_char) -> *mut c_c
 /// Files are named `wallhaven-<id>.<ext>`, so the directory itself is the
 /// source of truth — it stays right when the user moves or deletes files
 /// behind the app's back, which a database table would not.
+/// The Wallhaven ids already present in the imported library, read from the
+/// filenames.
+///
+/// Answers "do I already have this?" while browsing, for wallpapers collected
+/// before Lumen existed. Derived here rather than in the app because the index
+/// is already in the database: sending the ids is a few tens of kilobytes where
+/// sending the rows they came from would be hundreds.
+#[unsafe(no_mangle)]
+pub extern "C" fn lumen_library_wallhaven_ids() -> *mut c_char {
+    let Some(core) = core() else {
+        return to_c(err_json("libraryIds", "core not initialised"));
+    };
+    match core.db.imported_filenames() {
+        Ok(names) => {
+            let ids: Vec<String> = names
+                .iter()
+                .filter_map(|name| lumen_core::wallhaven::id_from_filename(name))
+                .collect();
+            to_c(serde_json::to_string(&Envelope::ok("libraryIds", ids)).unwrap_or_default())
+        }
+        Err(e) => to_c(err_json("libraryIds", e)),
+    }
+}
+
 /// Caller frees with [`lumen_string_free`].
 #[unsafe(no_mangle)]
 pub extern "C" fn lumen_downloaded_ids() -> *mut c_char {

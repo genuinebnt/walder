@@ -1463,6 +1463,29 @@ impl Database {
     /// Without this, a library imported by an earlier build stays flat until
     /// the user thinks to rescan — and it is derivable from the path we already
     /// store, so asking them to is unnecessary.
+    /// Every imported file's name, and nothing else.
+    ///
+    /// The full rows are large and the caller only wants what the names encode,
+    /// so this avoids carrying several hundred kilobytes across the bridge to
+    /// read six characters from each.
+    pub fn imported_filenames(&self) -> lumen_core::Result<Vec<String>> {
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| LumenError::Database(e.to_string()))?;
+        let mut stmt = conn
+            .prepare("SELECT filename FROM imported_wallpapers")
+            .map_err(|e| LumenError::Database(e.to_string()))?;
+        let rows = stmt
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(|e| LumenError::Database(e.to_string()))?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row.map_err(|e| LumenError::Database(e.to_string()))?);
+        }
+        Ok(out)
+    }
+
     pub fn backfill_subpaths(&self) -> lumen_core::Result<usize> {
         let folders = self.imported_folders()?;
         if folders.is_empty() {

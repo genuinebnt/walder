@@ -89,6 +89,7 @@ char    *lumen_library_favorite(const char *json);
 
 // Library awareness
 char *lumen_downloaded_ids(void);
+char *lumen_library_wallhaven_ids(void);
 
 // Bulk actions
 char    *lumen_favorites_set_many(const char *json);

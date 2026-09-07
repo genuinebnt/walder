@@ -118,6 +118,7 @@ final class Store {
         apiKey = Store.migratedAPIKey(from: defaults)
         focusUsesFilters = bool("focusUsesFilters", default: false)
         focusSorting = Sorting(rawValue: defaults.string(forKey: "focusSorting") ?? "") ?? .dateAdded
+        indexInBackground = bool("indexInBackground", default: true)
         localSort = LocalSort(rawValue: defaults.string(forKey: "localSort") ?? "") ?? .name
         localSortAscending = bool("localSortAscending", default: true)
         remoteSort = RemoteSort(rawValue: defaults.string(forKey: "remoteSort") ?? "") ?? .dateAdded
@@ -215,6 +216,8 @@ final class Store {
         reloadCollections()
         refreshDownloadedIDs()
         reloadLibrary()
+        // Whatever a previous run left unfinished, quietly.
+        startBackgroundIndexing()
         reloadHistory()
         reloadSubscriptions()
         rearmRadar()
@@ -280,7 +283,36 @@ final class Store {
     }
 
     /// True when this wallpaper is already in the download directory.
-    func isDownloaded(_ wallpaper: Wallpaper) -> Bool { downloadedIDs.contains(wallpaper.id) }
+    /// Whether this wallpaper is already on disk.
+    ///
+    /// Not only what Lumen downloaded: a folder of wallpapers collected from
+    /// the site years ago is still a folder you already have, and browsing
+    /// should say so rather than offering them all over again. The names carry
+    /// the ids, so the answer is a set lookup.
+    func isDownloaded(_ wallpaper: Wallpaper) -> Bool {
+        downloadedIDs.contains(wallpaper.id) || libraryWallhavenIDs.contains(wallpaper.id)
+    }
+
+    /// Wallhaven ids present anywhere in the imported library.
+    ///
+    /// Built once from the filenames rather than per tile: it is one pass over
+    /// the library, and every grid tile then costs a hash lookup.
+    private(set) var libraryWallhavenIDs: Set<String> = []
+
+    /// Rebuilds that set. Only the calls that change what is imported need it —
+    /// switching folders does not, which is why it is not in `reloadLibrary`.
+    @MainActor
+    func reloadLibraryIdentities() {
+        libraryWallhavenIDs = LumenCore.shared.libraryWallhavenIDs()
+    }
+
+    /// The file holding a wallpaper, when the library already has it.
+    func libraryFile(for wallpaper: Wallpaper) -> LocalWallpaper? {
+        guard libraryWallhavenIDs.contains(wallpaper.id) else { return nil }
+        return libraryWallpapers.first {
+            Wallpaper.wallhavenID(fromFilename: $0.filename) == wallpaper.id
+        }
+    }
 
     /// Writes the wallpaper's tags and origin into the file, so Spotlight and
     /// Finder can find it without Lumen running.
@@ -1136,6 +1168,8 @@ final class Store {
     @MainActor
     func alreadyInLibrary(_ wallpaper: Wallpaper) async -> LocalWallpaper? {
         guard skipDuplicateDownloads else { return nil }
+        // The name is proof when it is there; no need to look at the picture.
+        if let known = libraryFile(for: wallpaper) { return known }
         let nearest = await nearestInLibrary(to: wallpaper, limit: 1).first
         guard let nearest, nearest.distance <= ImagePrints.duplicateThreshold else { return nil }
         return nearest.file
@@ -2293,6 +2327,69 @@ final class Store {
     var libraryFavoritesOnly = false
     var isScanningLibrary = false
 
+    // MARK: Background indexing
+    //
+    // Importing a folder used to leave every derived thing unbuilt until the
+    // feature that needed it was asked for — so the first duplicate scan, the
+    // first Discover and the first description each paid for the whole library
+    // while the user waited. The work is the same either way; doing it quietly
+    // after an import is what makes those features feel instant later.
+
+    /// Whether importing a folder starts building its indexes.
+    var indexInBackground = true {
+        didSet { save(indexInBackground, "indexInBackground") }
+    }
+
+    /// What the background pass is doing, for the status line.
+    var backgroundIndexStage: String?
+
+    @ObservationIgnored private var indexingTask: Task<Void, Never>?
+
+    /// Builds everything the library needs, in the order it becomes useful.
+    ///
+    /// Shapes first because the grid is drawing right now and needs them;
+    /// feature prints next, which duplicates and Discover rest on; embeddings
+    /// last because they are the slowest and the only stage that can be absent
+    /// entirely. Cancellable, and each stage skips what is already done, so an
+    /// interrupted run costs nothing on the next one.
+    @MainActor
+    func startBackgroundIndexing() {
+        guard indexInBackground, coreReady else { return }
+        indexingTask?.cancel()
+        indexingTask = Task(priority: .utility) { [weak self] in
+            guard let self else { return }
+            defer { self.backgroundIndexStage = nil }
+
+            self.backgroundIndexStage = "shapes"
+            await self.loadAspectRatios(for: self.libraryWallpapers)
+            if Task.isCancelled { return }
+
+            self.backgroundIndexStage = "prints"
+            await self.indexLibrary()
+            if Task.isCancelled { return }
+
+            // Only when the model is installed: it is a large download that
+            // cannot be redistributed, so a fresh checkout will not have it.
+            if SemanticIndex.isInstalled {
+                self.backgroundIndexStage = "descriptions"
+                await self.buildSemanticIndex()
+            }
+        }
+    }
+
+    @MainActor
+    func stopBackgroundIndexing() {
+        indexingTask?.cancel()
+        indexingTask = nil
+        backgroundIndexStage = nil
+    }
+
+    /// Reloads the imported folder list and the files in the selected one.
+    ///
+    /// Also refreshes the id set, which is what browsing consults to know a
+    /// wallpaper is already on disk. It is one query returning short strings,
+    /// so doing it here rather than tracking every path that could change what
+    /// is imported is the cheaper mistake.
     @MainActor
     func reloadLibrary() {
         guard coreReady else { return }
@@ -2304,6 +2401,7 @@ final class Store {
         }
         libraryWallpapers = LumenCore.shared.libraryWallpapers(
             folder: selectedFolder, favoritesOnly: libraryFavoritesOnly)
+        reloadLibraryIdentities()
     }
 
     @MainActor
@@ -2313,6 +2411,7 @@ final class Store {
         do {
             _ = try await LumenCore.shared.importFolder(at: path)
             reloadLibrary()
+            startBackgroundIndexing()
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -2326,6 +2425,7 @@ final class Store {
         do {
             _ = try await LumenCore.shared.rescanLibrary()
             reloadLibrary()
+            startBackgroundIndexing()
         } catch {
             errorMessage = error.localizedDescription
         }

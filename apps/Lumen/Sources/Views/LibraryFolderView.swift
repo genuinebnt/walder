@@ -169,6 +169,13 @@ struct LibraryFolderView: View {
                 if store.indexProgress.total > 0 {
                     Text("indexing \(store.indexProgress.done) of \(store.indexProgress.total)")
                         .font(.caption2Mono).foregroundStyle(.secondary)
+                } else if store.semanticProgress.total > 0 {
+                    Text("describing \(store.semanticProgress.done) of "
+                         + "\(store.semanticProgress.total)")
+                        .font(.caption2Mono).foregroundStyle(.secondary)
+                } else if let stage = store.backgroundIndexStage {
+                    Text("indexing \(stage)…")
+                        .font(.caption2Mono).foregroundStyle(.secondary)
                 }
                 Text("\(items.count) wallpapers")
                     .font(.caption2Mono).foregroundStyle(.secondary)

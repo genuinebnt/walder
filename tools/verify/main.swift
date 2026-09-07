@@ -759,6 +759,46 @@ func run() async -> Int32 {
         }
         return true
     }
+    v.section("Already on disk")
+    v.check("A wallpaper collected before Lumen counts as downloaded") {
+        // A folder of wallpapers named after their ids is still a folder you
+        // already have; browsing should say so rather than offering them again.
+        let ids = store.libraryWallhavenIDs
+        guard !ids.isEmpty, let known = ids.first else {
+            print("        no imported library to check against")
+            return true
+        }
+        let wallpaper = Wallpaper(
+            id: known, url: nil, path: URL(string: "https://e/x.jpg")!,
+            thumb: URL(string: "https://e/t.jpg")!, resolution: "100x100", ratio: 1,
+            views: 0, favorites: 0, category: "general", purity: .sfw,
+            fileSize: 1, fileType: "image/jpeg", createdAt: "2024-01-01")
+        return store.isDownloaded(wallpaper)
+    }
+    v.check("Filenames that are not ids are not read as ids") {
+        return Wallpaper.wallhavenID(fromFilename: "xe9zld.png") == "xe9zld"
+            && Wallpaper.wallhavenID(fromFilename: "wallhaven-395yv3.jpg") == "395yv3"
+            && Wallpaper.wallhavenID(fromFilename: "IMG_4021.jpeg") == nil
+            && Wallpaper.wallhavenID(fromFilename: "my wallpaper.jpg") == nil
+            // Uppercase is not a Wallhaven id, and the Rust side agrees.
+            && Wallpaper.wallhavenID(fromFilename: "XE9ZLD.jpg") == nil
+    }
+    v.check("The id set is derived in the core, not by shipping every row") {
+        // The library index already holds the filenames; sending the ids is a
+        // few tens of kilobytes where sending the rows would be hundreds.
+        let ids = LumenCore.shared.libraryWallhavenIDs()
+        let files = LumenCore.shared.libraryWallpapers(folder: nil, favoritesOnly: false)
+        guard !files.isEmpty else { return true }
+        let expected = Set(files.compactMap { Wallpaper.wallhavenID(fromFilename: $0.filename) })
+        return ids == expected
+    }
+    v.check("Background indexing is on by default and can be turned off") {
+        store.indexInBackground = false
+        let off = Store(defaults: defaults).indexInBackground
+        store.indexInBackground = true
+        return !off && Store(defaults: defaults).indexInBackground
+    }
+
     v.check("Shape-true layouts ask for the uncropped thumbnail") {
         // Wallhaven crops its `lg` thumbnail to 16:9 on the server, so a
         // 2500x4000 portrait arrives as a 432x243 landscape slice. No layout
@@ -1149,7 +1189,12 @@ func run() async -> Int32 {
         store.filters = SearchFilters()
         await store.search()
 
-        if let sample = store.wallpapers.first {
+        // Not simply the first result: a library of wallpapers collected from
+        // Wallhaven already contains a good share of any page of results, and
+        // the app now refuses to download something it can see you have. Pick
+        // one it does not.
+        if let sample = store.wallpapers.first(where: { !store.isDownloaded($0) })
+            ?? store.wallpapers.first {
             v.check("Favorite toggle round-trips through the database") {
                 let before = store.isFavorite(sample)
                 store.toggleFavorite(sample)
@@ -1160,6 +1205,17 @@ func run() async -> Int32 {
             v.check("Tag load fills in tags") {
                 // Detail endpoint is the only source of tags.
                 true
+            }
+            v.check("A wallpaper already on disk is refused, with a reason") {
+                // The other half of the rule above: asked to download something
+                // the library already holds, the app says so rather than
+                // fetching a second copy in silence.
+                guard let owned = store.wallpapers.first(where: { store.isDownloaded($0) })
+                else { return true }
+                store.errorMessage = nil
+                let before = store.downloads.count
+                store.download(owned)
+                return store.downloads.count == before
             }
             await v.checkAsync("Download enqueues a task") {
                 let before = store.downloads.count

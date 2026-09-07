@@ -35,6 +35,21 @@ struct Wallpaper: Identifiable, Hashable, Codable {
     var displayResolution: String { resolution.replacingOccurrences(of: "x", with: " × ") }
     var previewSource: URL { localFile ?? path }
 
+    /// The Wallhaven id a filename carries, if it carries one.
+    ///
+    /// Wallhaven names its downloads after the wallpaper, in one of two forms,
+    /// so a folder of them can be matched back to the site without a database.
+    /// Six characters of lowercase letters and digits is the whole test — it is
+    /// what keeps `sunset.jpg` from being read as an id.
+    static func wallhavenID(fromFilename name: String) -> String? {
+        var stem = (name as NSString).deletingPathExtension
+        if stem.hasPrefix("wallhaven-") { stem = String(stem.dropFirst("wallhaven-".count)) }
+        guard stem.count == 6,
+              stem.allSatisfy({ ($0.isLetter && $0.isLowercase) || $0.isNumber })
+        else { return nil }
+        return stem
+    }
+
     /// Width over height, worked out from the resolution rather than taken
     /// from the API's `ratio`, which is rounded to two decimals — enough drift
     /// to show a sliver of letterboxing in a layout sized to the shape.

@@ -22,19 +22,7 @@ use crate::app::App;
 use crate::commands::download::write_metadata;
 use crate::output;
 
-/// A Wallhaven id: exactly six characters of lowercase letters and digits.
-///
-/// The length check is what keeps this from treating `sunset.jpg` as an id and
-/// burning a request on it.
-fn id_from_filename(name: &str) -> Option<String> {
-    let stem = Path::new(name).file_stem()?.to_str()?;
-    let stem = stem.strip_prefix("wallhaven-").unwrap_or(stem);
-    if stem.len() == 6 && stem.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit()) {
-        Some(stem.to_string())
-    } else {
-        None
-    }
-}
+use lumen_core::wallhaven::id_from_filename;
 
 /// Whether this file already carries the record.
 fn has_sidecar(path: &Path) -> bool {
@@ -198,25 +186,6 @@ pub async fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn both_naming_conventions_are_recognised() {
-        assert_eq!(id_from_filename("wallhaven-395yv3.jpg").as_deref(), Some("395yv3"));
-        assert_eq!(id_from_filename("47m1xy.jpeg").as_deref(), Some("47m1xy"));
-        assert_eq!(id_from_filename("2e8mlx.png").as_deref(), Some("2e8mlx"));
-    }
-
-    #[test]
-    fn anything_that_is_not_an_id_is_left_alone() {
-        // Six characters is the whole test, so a real word of another length
-        // is safe — and one that happens to be six is the reason this only
-        // ever costs one wasted request, not a wrong write.
-        assert_eq!(id_from_filename("sunset.jpg"), Some("sunset".into()));
-        assert_eq!(id_from_filename("my wallpaper.jpg"), None);
-        assert_eq!(id_from_filename("IMG_4021.jpeg"), None);
-        assert_eq!(id_from_filename("photo-2019.png"), None);
-        assert_eq!(id_from_filename("ab12.jpg"), None);
-    }
 
     #[test]
     fn the_sidecar_is_the_one_the_app_reads() {

@@ -241,6 +241,13 @@ final class LumenCore: @unchecked Sendable {
         return decodeSync(Removed.self, reply)?.removed ?? 0
     }
 
+    /// Wallhaven ids already in the imported library, derived in the core from
+    /// the filenames it has already indexed.
+    func libraryWallhavenIDs() -> Set<String> {
+        Set(decodeSync([String].self,
+                       Self.takeString(lumen_library_wallhaven_ids())) ?? [])
+    }
+
     func allPrints() -> [StoredPrint] {
         decodeSync([StoredPrint].self, Self.takeString(lumen_prints_all())) ?? []
     }

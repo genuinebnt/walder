@@ -199,6 +199,15 @@ struct SettingsView: View {
                       + "A collection is a grouping, so the file goes to the download "
                       + "folder and is filed into it.")
 
+                Toggle("Index folders in the background", isOn: Binding(
+                    get: { store.indexInBackground },
+                    set: { store.indexInBackground = $0 }))
+                    .help("After importing, builds the shapes, the visual "
+                          + "fingerprints and — when the model is installed — the "
+                          + "descriptions, so duplicates, Discover and Describe are "
+                          + "ready when you first ask for them rather than making "
+                          + "you wait then.")
+
                 Toggle("Skip wallpapers already in your library", isOn: Binding(
                     get: { store.skipDuplicateDownloads },
                     set: { store.skipDuplicateDownloads = $0 }))
