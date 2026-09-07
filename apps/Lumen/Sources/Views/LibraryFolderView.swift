@@ -21,12 +21,16 @@ struct LibraryFolderView: View {
                 folders
 
                 if !store.proposals.isEmpty {
+                    resultsHeader("Suggested collections")
                     proposals
                 } else if !store.duplicateGroups.isEmpty {
+                    resultsHeader("Possible duplicates")
                     duplicates
                 } else if !store.discoveries.isEmpty {
+                    resultsHeader("Discover")
                     discoveries
                 } else if !store.similarToSelection.isEmpty {
+                    resultsHeader("Similar wallpapers")
                     similar
                 } else if items.isEmpty {
                     emptyState
@@ -409,6 +413,30 @@ struct LibraryFolderView: View {
                 .padding(Tokens.s3)
                 .card()
             }
+        }
+    }
+
+    /// Says what is being shown instead of the folder, and how to get back.
+    ///
+    /// Every one of these views replaces the file browser entirely, so without
+    /// this the only way out is one button among nine in a toolbar that
+    /// overflows on a narrow window — which is no way out at all.
+    private func resultsHeader(_ title: String) -> some View {
+        HStack(spacing: Tokens.s3) {
+            Button {
+                store.clearSimilarity()
+                store.clearProposals()
+                store.clearDiscoveries()
+            } label: {
+                Label("All Wallpapers", systemImage: "chevron.left")
+                    .font(.system(size: 12, weight: .medium))
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(Tokens.accent)
+            .keyboardShortcut(.cancelAction)
+
+            Text(title).font(.system(size: 15, weight: .semibold))
+            Spacer()
         }
     }
 
@@ -926,6 +954,17 @@ struct LocalPreview: View {
             .buttonStyle(.borderedProminent)
             .controlSize(.large)
             .keyboardShortcut(.defaultAction)
+
+            if SpacesWallpaper.isAvailable {
+                Button {
+                    store.setLockScreen(local: wallpaper)
+                } label: {
+                    Label("Set as Lock Screen", systemImage: "lock.display")
+                        .frame(maxWidth: .infinity)
+                }
+                .controlSize(.large)
+                .help("macOS keeps the lock screen separate from the desktop picture")
+            }
 
             HStack(spacing: Tokens.s2) {
                 Button {

@@ -358,11 +358,25 @@ enum SpacesWallpaper {
     private static func rewriteDesktops(in node: [String: Any],
                                         configuration: Data,
                                         count: inout Int) -> [String: Any] {
+        rewrite(in: node, key: "Desktop", configuration: configuration, count: &count)
+    }
+
+    /// Rewrites every node under `key` to show one image.
+    ///
+    /// `Desktop` is the desktop picture and `Idle` is the lock screen — the
+    /// store gives them the same shape, so one rewriter serves both. The lock
+    /// screen normally holds a screen-saver choice rather than an image one;
+    /// replacing the provider is exactly what System Settings does when a still
+    /// picture is chosen there.
+    private static func rewrite(in node: [String: Any],
+                                key wanted: String,
+                                configuration: Data,
+                                count: inout Int) -> [String: Any] {
         var node = node
         for (key, value) in node {
             guard let child = value as? [String: Any] else { continue }
 
-            if key == "Desktop", var content = child["Content"] as? [String: Any] {
+            if key == wanted, var content = child["Content"] as? [String: Any] {
                 var desktop = child
                 content["Choices"] = [[
                     "Provider": "com.apple.wallpaper.choice.image",
@@ -375,10 +389,57 @@ enum SpacesWallpaper {
                 node[key] = desktop
                 count += 1
             } else {
-                node[key] = rewriteDesktops(in: child, configuration: configuration, count: &count)
+                node[key] = rewrite(in: child, key: wanted,
+                                    configuration: configuration, count: &count)
             }
         }
         return node
+    }
+
+    /// Puts `fileURL` on the lock screen.
+    ///
+    /// macOS keeps the lock screen in the same store as the desktop, under
+    /// `Idle`. It is system-wide rather than per-Space, so this rewrites every
+    /// idle node it finds — which is what System Settings does too.
+    static func applyToLockScreen(fileURL: URL) throws {
+        guard isAvailable else { throw Failure.storeMissing }
+
+        let original = try Data(contentsOf: storeURL)
+        var format = PropertyListSerialization.PropertyListFormat.binary
+        guard let root = try? PropertyListSerialization.propertyList(
+            from: original, options: [], format: &format) as? [String: Any] else {
+            throw Failure.unreadable
+        }
+
+        let configuration = try PropertyListSerialization.data(
+            fromPropertyList: ["type": "imageFile",
+                               "url": ["relative": fileURL.absoluteString]],
+            format: .binary, options: 0)
+
+        var rewritten = 0
+        let updated = rewrite(in: root, key: "Idle",
+                              configuration: configuration, count: &rewritten)
+        // Nothing matched means the layout moved. Do not write a guess over it.
+        guard rewritten > 0 else { throw Failure.unrecognisedLayout }
+
+        try backUpOnce(original)
+        let encoded = try PropertyListSerialization.data(
+            fromPropertyList: updated, format: .binary, options: 0)
+        try encoded.write(to: storeURL, options: .atomic)
+        restartAgent()
+    }
+
+    /// What the lock screen is showing, when it is a still image rather than a
+    /// screen saver.
+    static func lockScreenWallpaper() -> URL? {
+        guard isAvailable,
+              let data = try? Data(contentsOf: storeURL),
+              let root = try? PropertyListSerialization.propertyList(
+                from: data, options: [], format: nil) as? [String: Any],
+              let system = root["SystemDefault"] as? [String: Any],
+              let idle = system["Idle"] as? [String: Any]
+        else { return nil }
+        return firstImageURL(in: idle)
     }
 
     /// Keeps the pre-Lumen store, once, so the original stays recoverable.

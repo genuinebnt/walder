@@ -19,6 +19,7 @@ struct FocusView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: Tokens.s4) {
                 header
+                scopeControls
 
                 if let stats = store.uploaderStats { uploaderStats(stats) }
 
@@ -119,6 +120,42 @@ struct FocusView: View {
         case .uploader: "person.crop.circle"
         case .tag: "number"
         case .uploaderCollection: "rectangle.stack"
+        }
+    }
+
+    /// How this page is scoped and ordered.
+    ///
+    /// On the page rather than in Settings: it is only meaningful here, and the
+    /// effect is visible the moment it changes. A collection is somebody else's
+    /// fixed list, so neither control applies to one.
+    @ViewBuilder
+    private var scopeControls: some View {
+        if case .uploaderCollection = store.focus {
+            EmptyView()
+        } else {
+            HStack(spacing: Tokens.s3) {
+                Toggle(isOn: Binding(get: { store.focusUsesFilters },
+                                     set: { store.focusUsesFilters = $0 })) {
+                    Text("Use my filters").font(.system(size: 12))
+                }
+                .toggleStyle(.checkbox)
+                .help("Off shows everything here. On narrows it by the categories "
+                      + "you browse with — which can hide most of what you came to see.")
+
+                Divider().frame(height: 14)
+
+                Picker("", selection: Binding(get: { store.focusSorting },
+                                              set: { store.focusSorting = $0 })) {
+                    ForEach(Sorting.allCases) { Text($0.label).tag($0) }
+                }
+                .labelsHidden()
+                .fixedSize()
+                .help("How this page is ordered")
+
+                Spacer()
+            }
+            .padding(.horizontal, Tokens.s3).padding(.vertical, Tokens.s2)
+            .background(.quaternary.opacity(0.3), in: .rect(cornerRadius: Tokens.control))
         }
     }
 

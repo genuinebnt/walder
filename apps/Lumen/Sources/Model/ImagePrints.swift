@@ -118,11 +118,12 @@ enum ImagePrints {
 
     /// Groups of files that look like the same picture.
     ///
-    /// A simple pass rather than clustering: for a few thousand wallpapers a
-    /// flat comparison is faster than building an index, and it is easy to be
-    /// sure it is right.
+    /// Works on the raw vectors, like the graph does. This used to call Vision
+    /// once per pair, which over a four-thousand-file library is seven and a
+    /// half million calls for a measure that is a subtraction and a dot
+    /// product — four times slower for an identical answer.
     static func duplicateGroups(
-        in prints: [(path: String, print: VNFeaturePrintObservation)],
+        in prints: [(path: String, vector: [Float])],
         threshold: Float = duplicateThreshold,
         /// Proportions per file, when known. A pair whose shapes disagree is
         /// not a duplicate whatever the prints say.
@@ -134,8 +135,7 @@ enum ImagePrints {
         for index in prints.indices where !grouped.contains(index) {
             var group = [prints[index].path]
             for other in prints.indices where other > index && !grouped.contains(other) {
-                guard let apart = distance(prints[index].print, prints[other].print),
-                      apart <= threshold,
+                guard distance(prints[index].vector, prints[other].vector) <= threshold,
                       sameShape(prints[index].path, prints[other].path, aspects)
                 else { continue }
                 group.append(prints[other].path)
@@ -154,74 +154,5 @@ enum ImagePrints {
     static func sameShape(_ a: String, _ b: String, _ aspects: [String: Double]) -> Bool {
         guard let ra = aspects[a], let rb = aspects[b], ra > 0, rb > 0 else { return true }
         return abs(ra - rb) / max(ra, rb) <= duplicateAspectTolerance
-    }
-
-    /// Loose groups of files that look like each other.
-    ///
-    /// Single-link clustering: anything within `threshold` of a member joins
-    /// the group. That is the right shape here — "these all look like each
-    /// other" — and at a few thousand files a flat sweep beats an index.
-    ///
-    /// The threshold is far looser than the duplicate one: unrelated wallpapers
-    /// measure around 1.0, so 0.8 groups things that share a look without
-    /// gathering everything into one bucket.
-    static func cluster(
-        _ prints: [(path: String, print: VNFeaturePrintObservation)],
-        threshold: Float = 0.8,
-        minimumSize: Int = 6
-    ) -> [[String]] {
-        var unvisited = Set(prints.indices)
-        var groups: [[String]] = []
-
-        while let seed = unvisited.first {
-            unvisited.remove(seed)
-            var group = [seed]
-            var queue = [seed]
-
-            // Grow outwards from the seed rather than comparing every pair.
-            while let current = queue.popLast() {
-                for candidate in Array(unvisited) {
-                    guard let apart = distance(prints[current].print, prints[candidate].print),
-                          apart <= threshold else { continue }
-                    unvisited.remove(candidate)
-                    group.append(candidate)
-                    queue.append(candidate)
-                }
-            }
-
-            if group.count >= minimumSize {
-                groups.append(group.map { prints[$0].path })
-            }
-        }
-        return groups.sorted { $0.count > $1.count }
-    }
-
-    /// Mean distance from each print to a set of them — how well something fits
-    /// a taste, rather than how close it is to any single wallpaper.
-    static func affinity(
-        of target: VNFeaturePrintObservation,
-        to references: [VNFeaturePrintObservation]
-    ) -> Float? {
-        guard !references.isEmpty else { return nil }
-        let distances = references.compactMap { distance(target, $0) }
-        guard !distances.isEmpty else { return nil }
-        return distances.reduce(0, +) / Float(distances.count)
-    }
-
-    /// The files most like `target`, nearest first.
-    static func nearest(
-        to target: VNFeaturePrintObservation,
-        in prints: [(path: String, print: VNFeaturePrintObservation)],
-        excluding path: String,
-        limit: Int = 12
-    ) -> [(path: String, distance: Float)] {
-        prints
-            .filter { $0.path != path }
-            .compactMap { entry in
-                distance(target, entry.print).map { (entry.path, $0) }
-            }
-            .sorted { $0.1 < $1.1 }
-            .prefix(limit)
-            .map { ($0.0, $0.1) }
     }
 }

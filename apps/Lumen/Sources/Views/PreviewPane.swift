@@ -253,6 +253,7 @@ struct PreviewPane: View {
                 metadata
                 palette
                 tags
+                inYourLibrary
                 displays
                 spaces
             }
@@ -292,6 +293,8 @@ struct PreviewPane: View {
             .keyboardShortcut(.defaultAction)
             .tint(justSet ? Tokens.success : nil)
             .animation(Tokens.quick, value: justSet)
+
+            lockScreenButton
 
             HStack(spacing: Tokens.s2) {
                 Menu {
@@ -516,7 +519,7 @@ struct PreviewPane: View {
                 Text("UPLOADED BY").font(.sectionLabel).foregroundStyle(.secondary)
                 Button {
                     close()
-                    Task { await store.showUploader(name) }
+                    Task { await store.showUploader(name, from: wallpaper) }
                 } label: {
                     HStack(spacing: Tokens.s2) {
                         Image(systemName: "person.crop.circle")
@@ -612,7 +615,7 @@ struct PreviewPane: View {
                         Button(chip.name) {
                             close()
                             if let ref = chip.ref {
-                                Task { await store.showTag(ref) }
+                                Task { await store.showTag(ref, from: wallpaper) }
                             } else {
                                 store.filters.query = "#\(chip.name)"
                                 Task { await store.search() }
@@ -636,6 +639,96 @@ struct PreviewPane: View {
             return wallpaper.tagRefs.map { ($0.name, $0) }
         }
         return wallpaper.tags.map { ($0, nil) }
+    }
+
+    /// Sets the lock screen instead of the desktop.
+    @ViewBuilder
+    private var lockScreenButton: some View {
+        if SpacesWallpaper.isAvailable {
+            Button {
+                store.setLockScreen(wallpaper)
+                confirmSet()
+            } label: {
+                Label("Set as Lock Screen", systemImage: "lock.display")
+                    .frame(maxWidth: .infinity)
+            }
+            .controlSize(.large)
+            .help("macOS keeps the lock screen separate from the desktop picture")
+        }
+    }
+
+    /// What you already have that looks like this.
+    ///
+    /// Not the same question as "Similar" above, which searches Wallhaven. This
+    /// one is about your own files — worth asking before downloading, and a way
+    /// back to something you had forgotten you kept.
+    @ViewBuilder
+    private var inYourLibrary: some View {
+        VStack(alignment: .leading, spacing: Tokens.s2) {
+            HStack {
+                Text("IN YOUR LIBRARY").font(.sectionLabel).foregroundStyle(.secondary)
+                Spacer()
+                if store.isMatchingLibrary {
+                    ProgressView().controlSize(.small)
+                } else if store.libraryMatches.isEmpty {
+                    Button("Check") {
+                        Task { await store.findInLibrary(like: wallpaper) }
+                    }
+                    .controlSize(.small)
+                } else {
+                    Button("Clear") { store.clearLibraryMatches() }
+                        .controlSize(.small)
+                }
+            }
+
+            if store.libraryMatches.isEmpty, !store.isMatchingLibrary {
+                Text("Compares this against your own wallpapers by look, so the same "
+                     + "picture at another resolution is found too.")
+                    .font(.system(size: 11.5)).foregroundStyle(.secondary)
+            }
+
+            ForEach(store.libraryMatches.prefix(6), id: \.file.id) { match in
+                Button {
+                    store.localPreviewItems = store.libraryMatches.map(\.file)
+                    store.localPreview = match.file
+                } label: {
+                    HStack(spacing: Tokens.s2) {
+                        CachedImage(url: match.file.url) { image in
+                            image.resizable().aspectRatio(contentMode: .fill)
+                        } placeholder: {
+                            Rectangle().fill(.quaternary)
+                        } failure: {
+                            Rectangle().fill(.quaternary)
+                        }
+                        .frame(width: 44, height: 27)
+                        .clipShape(RoundedRectangle(cornerRadius: 3))
+
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(match.file.filename)
+                                .font(.system(size: 11.5)).lineLimit(1)
+                            Text(verdict(for: match.distance))
+                                .font(.caption2Mono)
+                                .foregroundStyle(match.distance <= ImagePrints.duplicateThreshold
+                                                 ? Tokens.warning : .secondary)
+                        }
+                        Spacer()
+                    }
+                    .padding(.horizontal, 8).padding(.vertical, 5)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(.quaternary.opacity(0.4), in: .rect(cornerRadius: Tokens.control))
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+
+    /// Plain words for a distance, since the number means nothing on its own.
+    /// The bands come from the same measurements the duplicate threshold does.
+    private func verdict(for distance: Float) -> String {
+        if distance <= ImagePrints.duplicateThreshold { "you already have this" }
+        else if distance < 0.5 { "very close" }
+        else if distance < 0.8 { "similar look" }
+        else { "loosely related" }
     }
 
     /// Assigns this wallpaper to one Space, leaving the others alone.

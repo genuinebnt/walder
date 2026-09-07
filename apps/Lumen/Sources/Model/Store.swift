@@ -116,6 +116,8 @@ final class Store {
         }
 
         apiKey = Store.migratedAPIKey(from: defaults)
+        focusUsesFilters = bool("focusUsesFilters", default: false)
+        focusSorting = Sorting(rawValue: defaults.string(forKey: "focusSorting") ?? "") ?? .dateAdded
         localSort = LocalSort(rawValue: defaults.string(forKey: "localSort") ?? "") ?? .name
         localSortAscending = bool("localSortAscending", default: true)
         remoteSort = RemoteSort(rawValue: defaults.string(forKey: "remoteSort") ?? "") ?? .dateAdded
@@ -913,7 +915,13 @@ final class Store {
 
         // Compare only within the chosen scope, not the whole library.
         let wanted = Set(candidates.map(\.path))
-        let prints = await loadedPrints().filter { wanted.contains($0.path) }
+        // Vectors rather than prints: the comparison is the same measure, four
+        // times faster, and the same one the graph uses.
+        let prints = await loadedPrints()
+            .filter { wanted.contains($0.path) }
+            .compactMap { entry -> (path: String, vector: [Float])? in
+                ImagePrints.vector(entry.print).map { (entry.path, $0) }
+            }
         // Shapes come from the file headers the grid already reads, so the
         // confirming check costs nothing extra.
         let aspects = candidates.reduce(into: [String: Double]()) { out, file in
@@ -1078,13 +1086,20 @@ final class Store {
     @MainActor
     func alreadyInLibrary(_ wallpaper: Wallpaper) async -> LocalWallpaper? {
         guard skipDuplicateDownloads else { return nil }
-        let vectors = await libraryVectors()
-        guard !vectors.isEmpty else { return nil }
+        let nearest = await nearestInLibrary(to: wallpaper, limit: 1).first
+        guard let nearest, nearest.distance <= ImagePrints.duplicateThreshold else { return nil }
+        return nearest.file
+    }
 
+    /// The wallpaper's own vector, printed from the thumbnail the grid has
+    /// already decoded so nothing has to be downloaded to ask.
+    private func vector(for wallpaper: Wallpaper) async -> [Float]? {
         guard let image = await ImageCache.shared.image(for: wallpaper.thumb) else { return nil }
-        let made = await Task.detached(priority: .userInitiated) { () -> [Float]? in
+        return await Task.detached(priority: .userInitiated) { () -> [Float]? in
+            // Vision reads from a file, so the decoded thumbnail goes back out
+            // to one briefly rather than being re-fetched.
             let url = FileManager.default.temporaryDirectory
-                .appending(path: "lumen-dupe-\(UUID().uuidString).png")
+                .appending(path: "lumen-print-\(UUID().uuidString).png")
             defer { try? FileManager.default.removeItem(at: url) }
             guard let tiff = image.tiffRepresentation,
                   let rep = NSBitmapImageRep(data: tiff),
@@ -1093,16 +1108,51 @@ final class Store {
                   let print = ImagePrints.print(of: url) else { return nil }
             return ImagePrints.vector(print)
         }.value
-        guard let made else { return nil }
+    }
 
-        let nearest = await Task.detached(priority: .userInitiated) {
+    /// What the library already holds that looks like a wallpaper from
+    /// Wallhaven, nearest first.
+    ///
+    /// A remote wallpaper is not a node in the similarity graph — it is not on
+    /// disk — so the graph walk that answers "more like this" for a local file
+    /// cannot be used. This measures against the library's vectors directly,
+    /// which is the same question asked a cruder way.
+    func nearestInLibrary(to wallpaper: Wallpaper,
+                          limit: Int = 12) async -> [(file: LocalWallpaper, distance: Float)] {
+        let vectors = await libraryVectors()
+        guard !vectors.isEmpty, let made = await vector(for: wallpaper) else { return [] }
+
+        let ranked = await Task.detached(priority: .userInitiated) {
             vectors
                 .map { ($0.path, ImagePrints.distance(made, $0.vector)) }
-                .min { $0.1 < $1.1 }
+                .sorted { $0.1 < $1.1 }
+                .prefix(limit)
+                .map { ($0.0, $0.1) }
         }.value
-        guard let nearest, nearest.1 <= ImagePrints.duplicateThreshold else { return nil }
-        return libraryWallpapers.first { $0.path == nearest.0 }
+
+        let byPath = Dictionary(uniqueKeysWithValues: libraryWallpapers.map { ($0.path, $0) })
+        return ranked.compactMap { path, distance in
+            byPath[path].map { (file: $0, distance: distance) }
+        }
     }
+
+    /// What the library holds like the wallpaper being previewed, and whether
+    /// the closest is close enough to call the same picture.
+    var libraryMatches: [(file: LocalWallpaper, distance: Float)] = []
+    var isMatchingLibrary = false
+
+    @MainActor
+    func findInLibrary(like wallpaper: Wallpaper) async {
+        guard coreReady else { return }
+        isMatchingLibrary = true
+        defer { isMatchingLibrary = false }
+        await indexLibrary()
+        let found = await nearestInLibrary(to: wallpaper)
+        withAnimation(Tokens.normal) { libraryMatches = found }
+    }
+
+    @MainActor
+    func clearLibraryMatches() { libraryMatches = [] }
 
     /// Files a wallpaper into the chosen collection, if one is chosen.
     @MainActor
@@ -1309,6 +1359,7 @@ final class Store {
     func reloadSpaces() {
         spaces = SpacesWallpaper.spaces()
         spaceWallpapers = SpacesWallpaper.currentWallpapers()
+        lockScreen = SpacesWallpaper.lockScreenWallpaper()
     }
 
     /// The file a Space is showing, if Lumen can tell.
@@ -1333,6 +1384,49 @@ final class Store {
                 errorMessage = error.localizedDescription
             }
         }
+    }
+
+    /// Puts a wallpaper on the lock screen rather than the desktop.
+    @MainActor
+    func setLockScreen(_ wallpaper: Wallpaper) {
+        Task {
+            do {
+                let local = try await LumenCore.shared.ensureLocal(
+                    url: wallpaper.path.absoluteString, filename: wallpaper.filename)
+                attachLocalFile(local, to: wallpaper.id)
+                try SpacesWallpaper.applyToLockScreen(fileURL: local)
+                // Deliberately not recorded in history: history is what has
+                // been on the *desktop*, and undo restores that. Mixing the
+                // lock screen in would make undo put the wrong thing back.
+                lockScreen = local
+                errorMessage = nil
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    @MainActor
+    func setLockScreen(local wallpaper: LocalWallpaper) {
+        guard FileManager.default.fileExists(atPath: wallpaper.url.path) else {
+            errorMessage = "\(wallpaper.filename) is no longer on disk."
+            return
+        }
+        do {
+            try SpacesWallpaper.applyToLockScreen(fileURL: wallpaper.url)
+            lockScreen = wallpaper.url
+            errorMessage = nil
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    /// What the lock screen is showing, when it is a still image.
+    var lockScreen: URL?
+
+    @MainActor
+    func reloadLockScreen() {
+        lockScreen = SpacesWallpaper.lockScreenWallpaper()
     }
 
     @MainActor
@@ -3004,6 +3098,38 @@ final class Store {
     }
 
     var focus: Focus?
+    /// The category of the wallpaper a focus page was opened from, so the page
+    /// cannot exclude it. See `query(prefix:_:)`.
+    @ObservationIgnored private var focusSeedCategory: Category?
+
+    /// Whether a tag or uploader page is narrowed by the browse filters.
+    ///
+    /// Off by default. Opening someone's work is a request to see *their work*,
+    /// and inheriting a General-only filter from the last search silently
+    /// removed every anime wallpaper they had posted — including, often, the
+    /// one that was clicked through from.
+    var focusUsesFilters = false {
+        didSet {
+            save(focusUsesFilters, "focusUsesFilters")
+            Task { await reloadFocus() }
+        }
+    }
+
+    /// How a tag or uploader page is ordered. Newest first by default, which is
+    /// what "show me their work" usually means; toplist is the other useful
+    /// answer and is one click away.
+    var focusSorting: Sorting = .dateAdded {
+        didSet {
+            save(focusSorting.rawValue, "focusSorting")
+            Task { await reloadFocus() }
+        }
+    }
+
+    @MainActor
+    func reloadFocus() async {
+        guard focus != nil else { return }
+        await loadFocus(reset: true)
+    }
     var focusWallpapers: [Wallpaper] = []
     var focusPage = 1
     var focusLastPage = 1
@@ -3014,9 +3140,15 @@ final class Store {
     var uploaderCollections: [UploaderCollection] = []
     var tagInfo: TagInfo?
 
+    /// `from` is the wallpaper the page was opened from, when there is one.
+    ///
+    /// Its category is added to the scope, because inheriting the browse
+    /// filter alone can exclude the very wallpaper that was clicked through:
+    /// open an anime wallpaper's uploader while browsing General only and the
+    /// page comes back without it, or empty if that is all they post.
     @MainActor
-    func showUploader(_ name: String) async {
-        beginFocus(.uploader(name))
+    func showUploader(_ name: String, from wallpaper: Wallpaper? = nil) async {
+        beginFocus(.uploader(name), seenIn: wallpaper?.category)
         // Public collections are a bonus; a failure there must not hold up the
         // wallpapers, so it runs alongside rather than before.
         async let collections = try? await LumenCore.shared.uploaderCollections(username: name)
@@ -3025,8 +3157,8 @@ final class Store {
     }
 
     @MainActor
-    func showTag(_ ref: TagRef) async {
-        beginFocus(.tag(ref))
+    func showTag(_ ref: TagRef, from wallpaper: Wallpaper? = nil) async {
+        beginFocus(.tag(ref), seenIn: wallpaper?.category)
         async let record = try? await LumenCore.shared.tagInfo(id: ref.id)
         await loadFocus(reset: true)
         tagInfo = await record
@@ -3040,7 +3172,8 @@ final class Store {
 
     /// Clears the pane and records what is now in focus. The caller loads.
     @MainActor
-    private func beginFocus(_ next: Focus) {
+    private func beginFocus(_ next: Focus, seenIn category: String? = nil) {
+        focusSeedCategory = category.flatMap { Category(rawValue: $0.lowercased()) }
         forgetScroll(for: "focus")
         withAnimation(Tokens.normal) {
             focus = next
@@ -3126,10 +3259,19 @@ final class Store {
     /// from the last search silently emptied it.
     private func query(prefix: String, _ value: String) -> SearchFilters {
         var scoped = SearchFilters()
-        scoped.categories = filters.categories
+        if focusUsesFilters {
+            scoped.categories = filters.categories
+            // Whatever was clicked through from belongs on the page it opened,
+            // even when the filters would have excluded it.
+            if let seed = focusSeedCategory { scoped.categories.insert(seed) }
+        } else {
+            scoped.categories = [.general, .anime, .people]
+        }
+        // Purity is always inherited, filters on or off: it is about what you
+        // are willing to be shown at all, not about narrowing a result set.
         scoped.purity = filters.purity
         scoped.query = prefix + value
-        scoped.sorting = .dateAdded
+        scoped.sorting = focusSorting
         return scoped
     }
 

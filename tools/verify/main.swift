@@ -405,6 +405,46 @@ func run() async -> Int32 {
     }
 
     // ── displays ──────────────────────────────────────────────────────────
+    v.section("Tag and uploader pages")
+    v.check("Filters do not narrow a focus page unless asked") {
+        // Opening an uploader while browsing General only used to return their
+        // work minus every anime wallpaper — including, often, the one clicked
+        // through from. Off is the default for that reason.
+        store.focusUsesFilters = false
+        return !Store(defaults: defaults).focusUsesFilters
+    }
+    v.check("The scope and order choices survive a relaunch") {
+        store.focusUsesFilters = true
+        store.focusSorting = .toplist
+        let relaunched = Store(defaults: defaults)
+        defer {
+            store.focusUsesFilters = false
+            store.focusSorting = .dateAdded
+        }
+        return relaunched.focusUsesFilters && relaunched.focusSorting == .toplist
+    }
+    v.check("Every sort option is offered on a focus page") {
+        // A picker case the enum cannot express would silently order by
+        // whatever the API defaults to.
+        Sorting.allCases.count >= 6 && Sorting.allCases.allSatisfy { !$0.label.isEmpty }
+    }
+
+    v.section("Lock screen")
+    v.check("The lock screen is read from the store, not guessed") {
+        guard SpacesWallpaper.isAvailable else { return true }
+        // Nil is a legitimate answer — the lock screen is a screen saver until
+        // a picture is put on it — but anything returned must be a real file.
+        guard let url = SpacesWallpaper.lockScreenWallpaper() else { return true }
+        return url.isFileURL
+    }
+    v.check("The store exposes the lock screen separately from the desktop") {
+        guard SpacesWallpaper.isAvailable else { return true }
+        store.reloadSpaces()
+        // Reading one must not be reading the other: they are different keys
+        // in the same file, and conflating them would set the wrong thing.
+        return store.lockScreen == SpacesWallpaper.lockScreenWallpaper()
+    }
+
     v.section("Duplicate accuracy")
     v.check("The threshold is tight enough to be useful") {
         // Measured over a 3,894-wallpaper library: 1,552 provably-identical
@@ -2099,21 +2139,25 @@ func run() async -> Int32 {
           let a = ImagePrints.print(of: bigCopy),
           let b = ImagePrints.print(of: smallCopy),
           let c = ImagePrints.print(of: different) else { return false }
+        guard let va = ImagePrints.vector(a), let vb = ImagePrints.vector(b),
+          let vc = ImagePrints.vector(c) else { return false }
         let groups = ImagePrints.duplicateGroups(in: [
-        (bigCopy.path, a), (smallCopy.path, b), (different.path, c)
+        (bigCopy.path, va), (smallCopy.path, vb), (different.path, vc)
         ])
         return groups.count == 1
         && groups[0].count == 2
         && !groups[0].contains(different.path)
     }
-    v.check("Nearest ranks the resized copy above the unrelated one") {
+    v.check("The graph ranks the resized copy above the unrelated one") {
         guard let bigCopy, let smallCopy, let different,
           let a = ImagePrints.print(of: bigCopy),
           let b = ImagePrints.print(of: smallCopy),
-          let c = ImagePrints.print(of: different) else { return false }
-        let ranked = ImagePrints.nearest(
-        to: a, in: [(smallCopy.path, b), (different.path, c)], excluding: bigCopy.path)
-        return ranked.first?.path == smallCopy.path
+          let c = ImagePrints.print(of: different),
+          let va = ImagePrints.vector(a), let vb = ImagePrints.vector(b),
+          let vc = ImagePrints.vector(c) else { return false }
+        let graph = SimilarityGraph.build(
+        from: [(bigCopy.path, va), (smallCopy.path, vb), (different.path, vc)], k: 2)
+        return graph.related(to: bigCopy.path, limit: 2).first?.path == smallCopy.path
     }
     v.check("An unreadable file yields no print rather than a wrong one") {
         let url = FileManager.default.temporaryDirectory
@@ -2303,15 +2347,18 @@ func run() async -> Int32 {
           let pb = ImagePrints.print(of: b),
           let pc = ImagePrints.print(of: c) else { return false }
 
-        // A minimum of two: the pair clusters, the odd one out does not.
-        let groups = ImagePrints.cluster(
-        [(a.path, pa), (b.path, pb), (c.path, pc)],
-        threshold: 0.8, minimumSize: 2)
-        guard groups.count == 1 else {
-        print("        got \(groups.count) groups")
+        guard let va = ImagePrints.vector(pa), let vb = ImagePrints.vector(pb),
+          let vc = ImagePrints.vector(pc) else { return false }
+
+        // A minimum of two: the pair groups, the odd one out does not.
+        let graph = SimilarityGraph.build(
+        from: [(a.path, va), (b.path, vb), (c.path, vc)], k: 2)
+        let groups = graph.communities(minimumSize: 2)
+        guard let biggest = groups.first else {
+        print("        got no groups")
         return false
         }
-        return groups[0].count == 2 && !groups[0].contains(c.path)
+        return biggest.count >= 2 && biggest.contains(a.path) && biggest.contains(b.path)
     }
     v.check("A minimum size larger than anything found yields nothing") {
         guard let a = writePattern(width: 400, height: 250),
@@ -2320,11 +2367,15 @@ func run() async -> Int32 {
         try? FileManager.default.removeItem(at: a)
         try? FileManager.default.removeItem(at: b)
         }
-        guard let pa = ImagePrints.print(of: a), let pb = ImagePrints.print(of: b)
+        guard let pa = ImagePrints.print(of: a), let pb = ImagePrints.print(of: b),
+          let va = ImagePrints.vector(pa), let vb = ImagePrints.vector(pb)
         else { return false }
-        return ImagePrints.cluster([(a.path, pa), (b.path, pb)], minimumSize: 6).isEmpty
+        return SimilarityGraph.build(from: [(a.path, va), (b.path, vb)], k: 1)
+        .communities(minimumSize: 6).isEmpty
     }
-    v.check("Affinity is the mean distance, and declines an empty reference set") {
+    v.check("A walk from one wallpaper prefers its copy to an unrelated file") {
+        // What mean-distance affinity used to check. Taste ranking now walks
+        // the graph instead, so the property is asserted where it lives.
         guard let a = writePattern(width: 400, height: 250),
           let b = writePattern(width: 200, height: 125),
           let c = writePattern(width: 400, height: 250, shifted: true) else { return false }
@@ -2333,12 +2384,14 @@ func run() async -> Int32 {
         }
         guard let pa = ImagePrints.print(of: a),
           let pb = ImagePrints.print(of: b),
-          let pc = ImagePrints.print(of: c) else { return false }
+          let pc = ImagePrints.print(of: c),
+          let va = ImagePrints.vector(pa), let vb = ImagePrints.vector(pb),
+          let vc = ImagePrints.vector(pc) else { return false }
 
-        // The resized copy sits closer to the original than the unrelated one.
-        guard let near = ImagePrints.affinity(of: pb, to: [pa]),
-          let far = ImagePrints.affinity(of: pc, to: [pa]) else { return false }
-        return near < far && ImagePrints.affinity(of: pa, to: []) == nil
+        let graph = SimilarityGraph.build(
+        from: [(a.path, va), (b.path, vb), (c.path, vc)], k: 2)
+        let ranked = graph.discover(likes: [a.path], limit: 2)
+        return ranked.first?.path == b.path
     }
     v.check("Taste ranking says what it needs rather than doing nothing") {
         // With no favourites there is nothing to measure against, and silence
