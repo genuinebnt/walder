@@ -44,11 +44,19 @@ struct JustifiedGrid<Item: Identifiable, Content: View>: View {
                         content(item)
                             .frame(width: max(row.height * aspect(item), 1),
                                    height: row.height)
+                            // The tiles ask to fill the width they are given;
+                            // without this a picture drawn to fill its frame
+                            // spills over its neighbour.
+                            .clipped()
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
+        // Spans the container even with no rows in it. Without this the stack
+        // has nothing to give it a width, the width stays unknown, and the
+        // "nothing until measured" rule above would never resolve.
+        .frame(maxWidth: .infinity)
         .background {
             GeometryReader { proxy in
                 Color.clear.onChange(of: proxy.size.width, initial: true) { _, width in
@@ -81,9 +89,10 @@ struct JustifiedGrid<Item: Identifiable, Content: View>: View {
     /// wider, so scaling it back to the container makes it shorter — the row
     /// closes on the first item that would take it below the target.
     private func build(in width: CGFloat) -> [Row] {
-        guard width > 1, !items.isEmpty else {
-            return items.isEmpty ? [] : [Row(id: 0, items: items, height: targetRowHeight)]
-        }
+        // Nothing until the width is known. Falling back to one row of
+        // everything — which is what this used to do — laid the whole library
+        // out in a single horizontal line, and the tiles drew over each other.
+        guard width > 1, !items.isEmpty else { return [] }
 
         var rows: [Row] = []
         var current: [Item] = []

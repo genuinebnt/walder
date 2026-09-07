@@ -712,9 +712,28 @@ func run() async -> Int32 {
         guard let last = rows.last, rows.count > 1 else { return false }
         return last.height <= 200.001
     }
-    v.check("A zero width does not divide by zero") {
-        let rows = justified([16.0 / 9, 1], width: 0)
-        return rows.count == 1 && rows[0].items.count == 2
+    v.check("Nothing is laid out until the width is known") {
+        // Falling back to a single row of everything put the whole library on
+        // one line and the tiles overlapped. Drawing nothing for one frame is
+        // the correct answer to "how wide is it?" = "not known yet".
+        return justified([16.0 / 9, 1], width: 0).isEmpty
+            && justified([16.0 / 9, 1], width: 1).isEmpty
+    }
+    v.check("No row is ever wider than the container") {
+        // Overlap is a row that does not fit; assert it directly.
+        for width in [600.0, 900.0, 1400.0, 2400.0] {
+            let rows = justified([16.0/9, 2.0/3, 1, 3, 4.0/5, 16.0/10, 1.5, 2.35, 0.5],
+                                 width: width)
+            for row in rows {
+                let used = row.items.reduce(0.0) { $0 + row.height * $1.ratio }
+                    + 14 * Double(row.items.count - 1)
+                guard used <= width + 1 else {
+                    print("        width \(width): a row used \(used)")
+                    return false
+                }
+            }
+        }
+        return true
     }
     v.check("Natural is offered alongside the other layouts") {
         GridTheme.allCases.contains(.natural) && GridTheme.natural.label == "Natural"
