@@ -110,6 +110,8 @@ struct LibraryFolderView: View {
             }
             .controlSize(.small)
 
+            if !store.libraryFolders.isEmpty { healthRow }
+
             if !store.libraryFolders.isEmpty {
                 FlowLayout(spacing: 6) {
                     chip(title: "All folders", isOn: store.selectedFolder == nil) {
@@ -133,6 +135,54 @@ struct LibraryFolderView: View {
                     }
                 }
             }
+        }
+    }
+
+    /// What the library actually holds. Useful at a few thousand files, where
+    /// "how much of this is worth keeping" is a real question.
+    private var healthRow: some View {
+        let health = store.health
+        return HStack(spacing: Tokens.s4) {
+            if health.count == 0 {
+                Button("Measure library") { Task { await store.measureLibrary() } }
+                    .controlSize(.small)
+                    .disabled(store.isMeasuringHealth)
+            } else {
+                stat("\(health.count)", "wallpapers")
+                stat(health.size, "on disk")
+                if health.belowDisplay > 0 {
+                    stat("\(health.belowDisplay)", "below your display", tint: Tokens.warning)
+                }
+                if health.unindexed > 0 {
+                    stat("\(health.unindexed)", "not indexed")
+                }
+                if let largest = health.largest {
+                    stat(ByteCountFormatter.string(fromByteCount: Int64(largest.bytes),
+                                                   countStyle: .file),
+                         "largest · \(largest.name)")
+                }
+                Spacer()
+                Button {
+                    Task { await store.measureLibrary() }
+                } label: {
+                    Image(systemName: "arrow.clockwise").font(.system(size: 10))
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+            }
+            if store.isMeasuringHealth { ProgressView().controlSize(.small) }
+            Spacer()
+        }
+        .padding(Tokens.s3)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .card()
+    }
+
+    private func stat(_ value: String, _ label: String,
+                      tint: Color = .primary) -> some View {
+        VStack(alignment: .leading, spacing: 1) {
+            Text(value).font(.system(size: 13, weight: .medium)).foregroundStyle(tint)
+            Text(label).font(.system(size: 10.5)).foregroundStyle(.secondary).lineLimit(1)
         }
     }
 
@@ -652,6 +702,15 @@ struct LocalPreview: View {
                 Task { await store.findSimilarInLibrary(to: wallpaper) }
             } label: {
                 Label("Find Similar in Library", systemImage: "square.on.square.dashed")
+                    .frame(maxWidth: .infinity)
+            }
+            .controlSize(.large)
+
+            Button {
+                close()
+                store.editCrop(for: wallpaper)
+            } label: {
+                Label("Choose the Crop…", systemImage: "crop.rotate")
                     .frame(maxWidth: .infinity)
             }
             .controlSize(.large)

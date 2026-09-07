@@ -375,6 +375,17 @@ struct PreviewPane: View {
                     .help("Search similar wallpapers at your display's resolution and shape")
                 }
                 .controlSize(.small)
+
+                Button {
+                    close()
+                    store.editCrop(for: wallpaper)
+                } label: {
+                    Label("Choose the Crop…", systemImage: "crop.rotate")
+                        .frame(maxWidth: .infinity)
+                }
+                .controlSize(.small)
+                .help("Pick which part of the image survives, rather than the "
+                      + "centre crop macOS would make")
             }
         }
     }

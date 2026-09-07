@@ -35,6 +35,19 @@ struct RootView: View {
             // The preview takes over the whole window rather than opening a
             // sheet, so the image gets every pixel available when deciding
             // whether to keep it.
+            if let target = store.cropTarget {
+                CropEditor(title: target.title,
+                           source: target.source,
+                           displaySize: WallpaperFitter.mainPixelSize,
+                           existing: store.savedCrop(forPath: target.path),
+                           onSave: { store.saveCrop($0) },
+                           onCancel: { store.cropTarget = nil })
+                    .environment(store)
+                    .clipped()
+                    .transition(.opacity)
+                    .zIndex(3)
+            }
+
             if let local = store.localPreview {
                 // Steps through whatever list it was opened from.
                 LocalPreview(items: store.localPreviewItems, selected: local) {
@@ -64,7 +77,8 @@ struct RootView: View {
         // renders above any SwiftUI overlay whatever its zIndex — it has to be
         // hidden, not covered. The content is dropped as well as the bar: a
         // hidden bar that still holds items left it half-drawn.
-        .toolbar(selection == nil && store.localPreview == nil ? .automatic : .hidden,
+        .toolbar(selection == nil && store.localPreview == nil && store.cropTarget == nil
+                 ? .automatic : .hidden,
                  for: .windowToolbar)
         // Previewing collapses the sidebar so a zoomed image gets the whole
         // window instead of running into it.

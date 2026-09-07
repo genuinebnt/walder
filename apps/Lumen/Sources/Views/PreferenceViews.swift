@@ -185,6 +185,11 @@ struct SettingsView: View {
                 Toggle("Show purity borders", isOn: Binding(
                     get: { store.showPurityBorders }, set: { store.showPurityBorders = $0 }))
                     .help("Red border for NSFW, amber for sketchy.")
+                Toggle("Hide results below my display", isOn: Binding(
+                    get: { store.hideBelowDisplay }, set: { store.hideBelowDisplay = $0 }))
+                    .help("Hides anything that would have to be upscaled. Filtered "
+                          + "here rather than in the query, since Wallhaven's own "
+                          + "minimum also excludes differently shaped wallpapers.")
             }
 
             SwiftUI.Section("Behaviour") {

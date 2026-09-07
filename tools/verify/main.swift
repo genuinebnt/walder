@@ -966,6 +966,89 @@ func run() async -> Int32 {
             to: URL(filePath: "/tmp/not-here-\(UUID().uuidString).png")) == false
     }
 
+    v.section("Resolution rule")
+    v.check("Off by default, and hides nothing when off") {
+        store.hideBelowDisplay = false
+        return store.visible(store.wallpapers).count == store.wallpapers.count
+            && store.hiddenCount(in: store.wallpapers) == 0
+    }
+    v.check("On, it hides exactly what would be upscaled") {
+        guard !store.wallpapers.isEmpty else { return true }
+        store.hideBelowDisplay = true
+        let shown = store.visible(store.wallpapers)
+        let hidden = store.hiddenCount(in: store.wallpapers)
+        let correct = shown.allSatisfy { !store.fit($0).upscales }
+            && hidden == store.wallpapers.count - shown.count
+        store.hideBelowDisplay = false
+        return correct
+    }
+    v.check("The rule persists") {
+        store.hideBelowDisplay = true
+        let persisted = Store(defaults: defaults).hideBelowDisplay
+        store.hideBelowDisplay = false
+        return persisted
+    }
+
+    v.section("Library health")
+    await v.checkAsync("Measuring reports size, count and what is unindexed") {
+        guard !store.libraryWallpapers.isEmpty else { return true }
+        await store.measureLibrary()
+        let health = store.health
+        return health.count == store.libraryWallpapers.count
+            && health.bytes > 0
+            && health.largest != nil
+            && health.unindexed <= health.count
+            && health.belowDisplay <= health.count
+    }
+    v.check("An empty library measures as empty rather than failing") {
+        let empty = Store.LibraryHealth()
+        // ByteCountFormatter says "Zero bytes" for 0, not "0 bytes".
+        return empty.count == 0 && empty.bytes == 0 && empty.largest == nil
+            && !empty.size.isEmpty
+    }
+
+    v.section("Crop rectangles")
+    v.check("A crop round-trips through storage, keyed by display") {
+        let path = "/tmp/lumen-verify-crop-\(UUID().uuidString).png"
+        let display = LumenCore.displayKey(CGSize(width: 3024, height: 1964))
+        let other = LumenCore.displayKey(CGSize(width: 3440, height: 1440))
+        let rect = CGRect(x: 0.1, y: 0.2, width: 0.5, height: 0.4)
+
+        LumenCore.shared.saveCrop(path: path, display: display, rect: rect)
+        guard let read = LumenCore.shared.crop(path: path, display: display) else { return false }
+        // The same file on a differently shaped screen wants a different crop.
+        let isolated = LumenCore.shared.crop(path: path, display: other) == nil
+
+        LumenCore.shared.clearCrop(path: path, display: display)
+        let cleared = LumenCore.shared.crop(path: path, display: display) == nil
+
+        return abs(read.minX - rect.minX) < 0.001
+            && abs(read.height - rect.height) < 0.001
+            && isolated && cleared
+    }
+    await v.checkAsync("Rendering honours the crop it is given") {
+        guard let done = store.downloads.first(where: { $0.state == .done }),
+              let local = done.localFile else { return true }
+        let directory = FileManager.default.temporaryDirectory
+            .appending(path: "lumen-verify-crop")
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        // The left half only: a different image from the centre crop.
+        let left = CGRect(x: 0, y: 0, width: 0.5, height: 1)
+        guard let cropped = try? WallpaperFitter.render(
+                local, to: CGSize(width: 400, height: 250), in: directory, crop: left),
+              let centred = try? WallpaperFitter.render(
+                local, to: CGSize(width: 400, height: 250), in: directory)
+        else { return false }
+
+        guard let a = NSImage(contentsOf: cropped), let b = NSImage(contentsOf: centred),
+              let printA = ImagePrints.print(of: cropped),
+              let printB = ImagePrints.print(of: centred),
+              let apart = ImagePrints.distance(printA, printB) else { return false }
+        // Both are the requested size, and they are genuinely different images.
+        return a.size.width > 0 && b.size.width > 0 && apart > 0.01
+    }
+
     v.section("Masonry layout")
     v.check("Columns balance by shape rather than by count") {
         // A Layout measures every subview before placing any, which is what

@@ -64,6 +64,8 @@ final class Store {
     var menuBarEnabled: Bool { didSet { save(menuBarEnabled, "menuBarEnabled") } }
     var wallpaperScope: WallpaperScope { didSet { save(wallpaperScope.rawValue, "wallpaperScope") } }
     var showPurityBorders: Bool { didSet { save(showPurityBorders, "showPurityBorders") } }
+    /// Hides results that would have to be upscaled on this display.
+    var hideBelowDisplay: Bool { didSet { save(hideBelowDisplay, "hideBelowDisplay") } }
     var pauseOnBattery: Bool { didSet { save(pauseOnBattery, "pauseOnBattery"); rearmRotation() } }
 
     /// Saved filter sets, most recently created last.
@@ -112,6 +114,7 @@ final class Store {
         wallpaperScope = WallpaperScope(rawValue: defaults.string(forKey: "wallpaperScope") ?? "")
             ?? .thisSpace
         showPurityBorders = bool("showPurityBorders", default: true)
+        hideBelowDisplay = bool("hideBelowDisplay", default: false)
         pauseOnBattery = bool("pauseOnBattery", default: false)
         presets = Self.loadJSON([FilterPreset].self, "filterPresets", from: defaults) ?? []
         radarMinutes = int("radarMinutes", default: 180)
@@ -1587,6 +1590,141 @@ final class Store {
             errorMessage = "Nothing was added to \(collection.name)."
         }
         reloadCollections()
+    }
+
+    // MARK: Resolution rule
+
+    /// Results worth showing, given the resolution rule.
+    ///
+    /// Filtering here rather than in the query is deliberate: Wallhaven's
+    /// `atleast` also excludes anything of a different shape that is otherwise
+    /// large enough, which is not what "do not upscale" means.
+    func visible(_ list: [Wallpaper]) -> [Wallpaper] {
+        guard hideBelowDisplay else { return list }
+        return list.filter { !fit($0).upscales }
+    }
+
+    /// How many of the loaded results the rule is hiding.
+    func hiddenCount(in list: [Wallpaper]) -> Int {
+        guard hideBelowDisplay else { return 0 }
+        return list.count - visible(list).count
+    }
+
+    // MARK: Library health
+
+    struct LibraryHealth {
+        var count = 0
+        var bytes: Int64 = 0
+        var belowDisplay = 0
+        var unindexed = 0
+        var largest: (name: String, bytes: Int)?
+
+        var size: String {
+            ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
+        }
+    }
+
+    var health = LibraryHealth()
+    var isMeasuringHealth = false
+
+    /// Measures the imported library: size, how much is below this display,
+    /// and how much still has no feature print.
+    @MainActor
+    func measureLibrary() async {
+        guard coreReady, !isMeasuringHealth else { return }
+        isMeasuringHealth = true
+        defer { isMeasuringHealth = false }
+
+        let files = libraryWallpapers
+        let printed = LumenCore.shared.printedPaths()
+        let display = WallpaperFitter.mainPixelSize
+
+        health = await Task.detached(priority: .utility) {
+            var found = LibraryHealth()
+            found.count = files.count
+            for file in files {
+                found.bytes += Int64(file.fileSize)
+                if found.largest == nil || file.fileSize > (found.largest?.bytes ?? 0) {
+                    found.largest = (file.filename, file.fileSize)
+                }
+                if !printed.contains(file.path) { found.unindexed += 1 }
+                // Reading each header is why this runs off the main thread.
+                if let size = file.pixelSize,
+                   DisplayFit(image: size, display: display).upscales {
+                    found.belowDisplay += 1
+                }
+            }
+            return found
+        }.value
+    }
+
+    // MARK: Cropping
+
+    /// The file the crop editor is open on, if any.
+    var cropTarget: (title: String, source: URL, path: String)?
+
+    var mainDisplayKey: String { LumenCore.displayKey(WallpaperFitter.mainPixelSize) }
+
+    func savedCrop(forPath path: String) -> CGRect? {
+        LumenCore.shared.crop(path: path, display: mainDisplayKey)
+    }
+
+    func hasCrop(forPath path: String) -> Bool { savedCrop(forPath: path) != nil }
+
+    /// Opens the editor for a Wallhaven wallpaper, materialising the file first
+    /// since cropping needs the real image, not a thumbnail.
+    @MainActor
+    func editCrop(for wallpaper: Wallpaper) {
+        Task {
+            do {
+                let local = try await LumenCore.shared.ensureLocal(
+                    url: wallpaper.path.absoluteString, filename: wallpaper.filename)
+                cropTarget = (title: wallpaper.filename, source: local,
+                              path: local.path(percentEncoded: false))
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    @MainActor
+    func editCrop(for wallpaper: LocalWallpaper) {
+        cropTarget = (title: wallpaper.filename, source: wallpaper.url, path: wallpaper.path)
+    }
+
+    @MainActor
+    func saveCrop(_ rect: CGRect) {
+        guard let target = cropTarget else { return }
+        LumenCore.shared.saveCrop(path: target.path, display: mainDisplayKey, rect: rect)
+        cropTarget = nil
+        // Applying it immediately is the point of having set it.
+        applyCroppedWallpaper(at: URL(filePath: target.path), crop: rect)
+    }
+
+    @MainActor
+    func clearCrop(forPath path: String) {
+        LumenCore.shared.clearCrop(path: path, display: mainDisplayKey)
+    }
+
+    /// Renders the chosen crop at the display's exact pixels and sets it.
+    @MainActor
+    private func applyCroppedWallpaper(at file: URL, crop: CGRect) {
+        let size = WallpaperFitter.mainPixelSize
+        Task {
+            do {
+                let directory = URL(filePath: LumenCore.shared.downloadDirectory)
+                    .appending(path: "Fitted")
+                let fitted = try WallpaperFitter.render(file, to: size, in: directory, crop: crop)
+                try WallpaperSetter.apply(fileURL: fitted, to: nil, fit: .fill)
+                recordHistory(fitted, id: nil, label: file.lastPathComponent + " (cropped)")
+                if wallpaperScope == .allSpaces {
+                    try? SpacesWallpaper.applyEverywhere(fileURL: fitted)
+                }
+                errorMessage = nil
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+        }
     }
 
     // MARK: Fitting

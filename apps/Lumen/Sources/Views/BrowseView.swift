@@ -8,13 +8,31 @@ struct BrowseView: View {
     /// Drives .scrollPosition, so leaving and returning lands in the same spot.
     @State private var scrolledTo: String?
 
-    private var items: [Wallpaper] { section == .favorites ? store.favorites : store.wallpapers }
+    private var items: [Wallpaper] {
+        store.visible(section == .favorites ? store.favorites : store.wallpapers)
+    }
+
+    /// What the resolution rule is holding back, so it is never silent.
+    private var hidden: Int {
+        store.hiddenCount(in: section == .favorites ? store.favorites : store.wallpapers)
+    }
     private var theme: GridTheme { store.gridTheme }
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: Tokens.s4) {
                 if let message = store.errorMessage { notice(message) }
+                if hidden > 0 {
+                    HStack(spacing: Tokens.s2) {
+                        Image(systemName: "arrow.up.left.and.arrow.down.right")
+                        Text("\(hidden) hidden — below \(Int(WallpaperFitter.mainPixelSize.width)) × \(Int(WallpaperFitter.mainPixelSize.height))")
+                        Button("Show them") { store.hideBelowDisplay = false }
+                            .controlSize(.small)
+                        Spacer()
+                    }
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(.secondary)
+                }
 
                 // Re-laying out hundreds of tiles is not something to
                 // interpolate; the tiles themselves cross-fade instead.

@@ -136,6 +136,35 @@ final class LumenCore: @unchecked Sendable {
                           Self.takeString(lumen_wallpapers_cached(Self.json(["ids": ids])))) ?? []
     }
 
+    // MARK: Crops
+
+    /// Identifier a crop is stored against. Screens have no stable name, so
+    /// their pixel size stands in — the same size means the same framing.
+    static func displayKey(_ size: CGSize) -> String {
+        "\(Int(size.width))x\(Int(size.height))"
+    }
+
+    func saveCrop(path: String, display: String, rect: CGRect) {
+        let payload: [String: Any] = [
+            "path": path, "display": display,
+            "x": rect.minX, "y": rect.minY, "width": rect.width, "height": rect.height
+        ]
+        _ = Self.takeString(lumen_crop_save(Self.json(payload)))
+    }
+
+    func crop(path: String, display: String) -> CGRect? {
+        struct Rect: Decodable { let x: Double; let y: Double
+                                 let width: Double; let height: Double }
+        let reply = Self.takeString(
+            lumen_crop_get(Self.json(["path": path, "display": display])))
+        guard let rect = decodeSync(Rect.self, reply) else { return nil }
+        return CGRect(x: rect.x, y: rect.y, width: rect.width, height: rect.height)
+    }
+
+    func clearCrop(path: String, display: String) {
+        _ = Self.takeString(lumen_crop_clear(Self.json(["path": path, "display": display])))
+    }
+
     // MARK: Image feature prints
 
     struct StoredPrint: Decodable {
