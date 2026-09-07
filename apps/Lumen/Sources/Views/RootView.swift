@@ -36,7 +36,8 @@ struct RootView: View {
             // sheet, so the image gets every pixel available when deciding
             // whether to keep it.
             if let local = store.localPreview {
-                LocalPreview(wallpaper: local) {
+                // Steps through whatever list it was opened from.
+                LocalPreview(items: store.localPreviewItems, selected: local) {
                     withAnimation(Tokens.normal) { store.localPreview = nil }
                 }
                 .environment(store)
@@ -71,6 +72,13 @@ struct RootView: View {
             withAnimation(Tokens.normal) {
                 columnVisibility = id == nil ? .automatic : .detailOnly
             }
+            if id == nil { store.collectionPreview = [] }
+        }
+        // A pane can ask for the preview to open on something specific.
+        .onChange(of: store.previewSelection?.id) { _, _ in
+            guard let wanted = store.previewSelection else { return }
+            selection = wanted
+            store.previewSelection = nil
         }
         .onChange(of: store.localPreview?.id) { _, id in
             withAnimation(Tokens.normal) {
@@ -147,6 +155,8 @@ struct RootView: View {
 
     /// What ← and → step through, which depends on the pane in view.
     private var viewerItems: [Wallpaper] {
+        // A collection preview steps through that collection, not the search.
+        if !store.collectionPreview.isEmpty { return store.collectionPreview }
         if store.focus != nil { return store.focusWallpapers }
         return section == .favorites ? store.favorites : store.wallpapers
     }

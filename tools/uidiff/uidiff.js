@@ -58,6 +58,9 @@ const WAIVED = new Map([
   ['No downloads yet', 'replaced by "No downloads in progress", which is what the pane shows'],
   ['Hover a wallpaper and choose Download.',
    'replaced by text saying downloaded files live in Folders'],
+  // Rotation used to offer three fixed sources. Collections are named
+  // individually now ("Collection · Night skies"), so the bare word is gone.
+  ['Collection', 'rotation now lists each collection by name'],
 ]);
 
 const read = (p) => (fs.existsSync(p) ? fs.readFileSync(p, 'utf8') : '');
@@ -85,6 +88,10 @@ function strings(source) {
     /\bChip\(text:\s*"((?:[^"\\]|\\.)*)"/g,
     // The popover's own section-label helper; it renders the string as a Text.
     /\bgroup\(\s*"((?:[^"\\]|\\.)*)"/g,
+    // A switch returning display text — how `Sorting.label`, `GridTheme.label`
+    // and the rotation-source names are all written. These are user-facing
+    // strings, not just chrome.
+    /case\s+\.?\w+(?:\(.*?\))?:\s*"((?:[^"\\]|\\.)*)"/g,
   ];
   for (const pattern of patterns) {
     for (const match of source.matchAll(pattern)) {

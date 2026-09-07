@@ -245,7 +245,7 @@ func run() async -> Int32 {
     }
     v.check("Source picker changes rotationSource") {
         let before = store.rotationSource
-        store.rotationSource = before == "Downloads" ? "Favorites" : "Downloads"
+        store.rotationSource = before == .downloads ? .favorites : .downloads
         return store.rotationSource != before
     }
     v.check("Shuffle toggle changes shuffle") {
@@ -1412,6 +1412,65 @@ func run() async -> Int32 {
         store.favoriteSelected(from: store.wallpapers)
         store.setSelecting(false)
         return store.downloads.count == before
+    }
+
+    v.section("Rotation sources")
+    v.check("Every source round-trips through its key") {
+        let sources: [RotationSource] = [
+            .favorites, .downloads, .collection("abc"), .folder("def"),
+            .savedFilter(UUID())
+        ]
+        return sources.allSatisfy { RotationSource(key: $0.key) == $0 }
+            && RotationSource(key: "nonsense") == nil
+            && RotationSource(key: "filter:not-a-uuid") == nil
+    }
+    v.check("The old three-choice setting still maps to something sensible") {
+        // An existing install must not silently reset to Favourites.
+        RotationSource.fromLegacy("Downloads") == .downloads
+            && RotationSource.fromLegacy("Favorites") == .favorites
+            && RotationSource.fromLegacy("anything else") == .favorites
+    }
+    v.check("The source list offers collections, folders and saved filters") {
+        store.createCollection(named: "Verify rotation")
+        store.subscribe(to: "id:31", label: "unused", minFavorites: 0)   // not a source
+        store.filters.query = "rotation-preset"
+        store.savePreset(named: "Verify preset")
+
+        let sources = store.rotationSources
+        let hasFixed = sources.contains(.favorites) && sources.contains(.downloads)
+        let hasCollection = sources.contains {
+            if case .collection = $0 { return store.name(of: $0) == "Verify rotation" }
+            return false
+        }
+        let hasPreset = sources.contains {
+            if case .savedFilter = $0 { return store.name(of: $0) == "Verify preset" }
+            return false
+        }
+
+        if let made = store.collections.first(where: { $0.name == "Verify rotation" }) {
+            store.deleteCollection(made)
+        }
+        if let preset = store.presets.first(where: { $0.name == "Verify preset" }) {
+            store.deletePreset(preset)
+        }
+        if let watch = store.subscriptions.first(where: { $0.query == "id:31" }) {
+            store.unsubscribe(watch)
+        }
+        return hasFixed && hasCollection && hasPreset
+    }
+    v.check("The pool size persists") {
+        store.rotationPoolSize = 250
+        return Store(defaults: defaults).rotationPoolSize == 250
+    }
+    await v.checkAsync("A missing saved filter is reported, not silently ignored") {
+        let previous = store.rotationSource
+        store.rotationSource = .savedFilter(UUID())      // never existed
+        store.errorMessage = nil
+        await store.rotate()
+        let reported = store.errorMessage?.contains("no longer exists") == true
+        store.rotationSource = previous
+        store.errorMessage = nil
+        return reported
     }
 
     v.section("Bulk selection by count")

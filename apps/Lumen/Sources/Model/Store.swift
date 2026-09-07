@@ -56,7 +56,9 @@ final class Store {
     var appearance: Appearance { didSet { save(appearance.rawValue, "appearance") } }
     var rotationEnabled: Bool { didSet { save(rotationEnabled, "rotationEnabled"); rearmRotation() } }
     var rotationMinutes: Int { didSet { save(rotationMinutes, "rotationMinutes"); rearmRotation() } }
-    var rotationSource: String { didSet { save(rotationSource, "rotationSource") } }
+    var rotationSource: RotationSource { didSet { save(rotationSource.key, "rotationSourceKey") } }
+    /// How many results a saved filter draws from before picking one.
+    var rotationPoolSize: Int { didSet { save(rotationPoolSize, "rotationPoolSize") } }
     var shuffle: Bool { didSet { save(shuffle, "shuffle") } }
     var preferLocalPreview: Bool { didSet { save(preferLocalPreview, "preferLocalPreview") } }
     var menuBarEnabled: Bool { didSet { save(menuBarEnabled, "menuBarEnabled") } }
@@ -99,7 +101,11 @@ final class Store {
         appearance = Appearance(rawValue: defaults.string(forKey: "appearance") ?? "") ?? .system
         rotationEnabled = bool("rotationEnabled", default: true)
         rotationMinutes = int("rotationMinutes", default: 60)
-        rotationSource = defaults.string(forKey: "rotationSource") ?? "Favorites"
+        rotationPoolSize = int("rotationPoolSize", default: 100)
+        // Falls back to the old three-choice string so an existing setting is
+        // not silently reset to Favorites.
+        rotationSource = (defaults.string(forKey: "rotationSourceKey").flatMap(RotationSource.init(key:)))
+            ?? RotationSource.fromLegacy(defaults.string(forKey: "rotationSource") ?? "Favorites")
         shuffle = bool("shuffle", default: true)
         preferLocalPreview = bool("preferLocalPreview", default: true)
         menuBarEnabled = bool("menuBarEnabled", default: true)
@@ -491,16 +497,124 @@ final class Store {
         }
     }
 
+    /// Sets the next wallpaper from whatever the rotation source names.
+    ///
+    /// Async because a saved filter re-queries Wallhaven, and local folders
+    /// take a different set path from Wallhaven wallpapers.
     @MainActor
     func shuffleNow() {
-        let pool: [Wallpaper]
+        Task { await rotate() }
+    }
+
+    @MainActor
+    func rotate() async {
         switch rotationSource {
-        case "Downloads": pool = downloads.filter { $0.state == .done }.compactMap { known[$0.wallpaperId] }
-        case "Collection": pool = collections.flatMap(\.wallpapers)
-        default: pool = favorites.isEmpty ? wallpapers : favorites
+        case .folder(let id):
+            let pool = libraryWallpapers.filter { id.isEmpty || $0.folderId == id }
+            guard let pick = pickLocal(from: pool) else {
+                errorMessage = "That folder has no wallpapers to rotate."
+                return
+            }
+            setLocalWallpaper(pick)
+
+        case .savedFilter(let id):
+            guard let preset = presets.first(where: { $0.id == id }) else {
+                errorMessage = "That saved filter no longer exists."
+                return
+            }
+            let pool = await filterPool(preset.filters)
+            guard let pick = pick(from: pool) else {
+                errorMessage = "That saved filter returned nothing."
+                return
+            }
+            remember(pool)
+            setWallpaper(pick)
+
+        default:
+            guard let pick = pick(from: rotationPool()) else { return }
+            setWallpaper(pick)
         }
-        guard let pick = shuffle ? pool.randomElement() : pool.first else { return }
-        setWallpaper(pick)
+    }
+
+    /// The top `rotationPoolSize` results a filter matches, in its own order.
+    ///
+    /// Keeping the filter's sorting is the point: "top 100 of this search, pick
+    /// one" is a different thing from "any result at random". Pages are fetched
+    /// only until the pool is full, and never past the real last page.
+    private func filterPool(_ filters: SearchFilters) async -> [Wallpaper] {
+        var collected: [Wallpaper] = []
+        var page = 1
+        var lastPage = 1
+        var seed: String?
+
+        while collected.count < rotationPoolSize && page <= lastPage {
+            guard let result = try? await LumenCore.shared.search(filters, page: page, seed: seed)
+            else { break }
+            lastPage = max(result.lastPage, 1)
+            if let found = result.seed, !found.isEmpty { seed = found }
+            guard !result.wallpapers.isEmpty else { break }
+            collected += result.wallpapers
+            page += 1
+        }
+        return Array(collected.prefix(rotationPoolSize))
+    }
+
+    /// Wallhaven wallpapers the current source offers.
+    private func rotationPool() -> [Wallpaper] {
+        switch rotationSource {
+        case .downloads:
+            downloads.filter { $0.state == .done }.compactMap { known[$0.wallpaperId] }
+        case .collection(let id):
+            id.isEmpty
+                ? collections.flatMap(\.wallpapers)
+                : collections.first { $0.id == id }?.wallpapers ?? []
+        default:
+            favorites.isEmpty ? wallpapers : favorites
+        }
+    }
+
+    /// Picks the next wallpaper, avoiding what has been on the desktop lately.
+    ///
+    /// Without this a shuffle regularly lands on the wallpaper already showing,
+    /// which reads as the rotation being broken.
+    private func pick(from pool: [Wallpaper]) -> Wallpaper? {
+        guard !pool.isEmpty else { return nil }
+        guard shuffle else { return pool.first }
+        let recent = Set(history.prefix(recentlyShownCount).compactMap(\.wallpaperId))
+        let fresh = pool.filter { !recent.contains($0.id) }
+        return (fresh.isEmpty ? pool : fresh).randomElement()
+    }
+
+    private func pickLocal(from pool: [LocalWallpaper]) -> LocalWallpaper? {
+        guard !pool.isEmpty else { return nil }
+        guard shuffle else { return pool.first }
+        let recent = Set(history.prefix(recentlyShownCount).map(\.url.path))
+        let fresh = pool.filter { !recent.contains($0.url.path) }
+        return (fresh.isEmpty ? pool : fresh).randomElement()
+    }
+
+    /// How far back to look before repeating. Small enough that a short
+    /// collection still rotates rather than running out of candidates.
+    private var recentlyShownCount: Int { 8 }
+
+    /// Every source the Schedule picker can offer. Naming them is the view's
+    /// job, so the words a person reads live where the rest of the UI text does.
+    var rotationSources: [RotationSource] {
+        var options: [RotationSource] = [.favorites, .downloads]
+        options += collections.map { .collection($0.id) }
+        options += libraryFolders.map { .folder($0.id) }
+        options += presets.map { .savedFilter($0.id) }
+        return options
+    }
+
+    /// The name behind a source, for the view to label it with.
+    func name(of source: RotationSource) -> String {
+        switch source {
+        case .collection(let id): collections.first { $0.id == id }?.name ?? "Collection"
+        case .folder(let id): libraryFolders.first { $0.id == id }?.name ?? "Folder"
+        case .savedFilter(let id): presets.first { $0.id == id }?.name ?? "Filter"
+        default: ""
+        }
     }
 
     // MARK: Rotation
@@ -1065,8 +1179,32 @@ final class Store {
         withAnimation(Tokens.quick) { browsePath = path }
     }
 
-    /// The wallpaper being previewed full-window from the Folders pane.
+    /// The wallpaper being previewed full-window from a local pane.
     var localPreview: LocalWallpaper?
+    /// The list that preview steps through with ← and →.
+    var localPreviewItems: [LocalWallpaper] = []
+
+    /// Opens a collection's wallpaper in the Wallhaven preview, stepping
+    /// through that collection rather than the search behind it.
+    var collectionPreview: [Wallpaper] = []
+
+    @MainActor
+    func openCollectionPreview(_ wallpaper: Wallpaper, in collection: Collection) {
+        collectionPreview = collection.wallpapers
+        remember(collection.wallpapers)
+        withAnimation(Tokens.normal) { previewSelection = wallpaper }
+        Task { await loadDetails(for: wallpaper) }
+    }
+
+    /// Set by a pane that wants the preview opened on something specific.
+    var previewSelection: Wallpaper?
+
+    /// Opens the full-window preview on `wallpaper`, stepping through `items`.
+    @MainActor
+    func openLocalPreview(_ wallpaper: LocalWallpaper, in items: [LocalWallpaper]) {
+        localPreviewItems = items
+        withAnimation(Tokens.normal) { localPreview = wallpaper }
+    }
 
     /// Subdirectories directly inside the level being browsed, with a count of
     /// everything beneath each.
@@ -1295,7 +1433,7 @@ final class Store {
     @MainActor
     func selectFirst(_ count: Int, in list: [Wallpaper]) async {
         guard coreReady, count > 0 else { return }
-        // Favourites and focus panes are already fully loaded lists.
+        // Favorites and focus panes are already fully loaded lists.
         guard list.count == wallpapers.count else {
             selectAll(Array(list.prefix(count)))
             return

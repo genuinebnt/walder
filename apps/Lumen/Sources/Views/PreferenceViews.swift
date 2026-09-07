@@ -17,7 +17,25 @@ struct ScheduleView: View {
                 }
                 Picker("Source", selection: Binding(
                     get: { store.rotationSource }, set: { store.rotationSource = $0 })) {
-                    ForEach(["Favorites", "Collection", "Downloads"], id: \.self) { Text($0).tag($0) }
+                    ForEach(store.rotationSources, id: \.self) { source in
+                        Text(label(for: source)).tag(source)
+                    }
+                }
+
+                // A saved filter is a live search, so how deep to draw from is
+                // part of the schedule: "top 100 of this, pick one".
+                if case .savedFilter = store.rotationSource {
+                    Picker("Draw from the top", selection: Binding(
+                        get: { store.rotationPoolSize },
+                        set: { store.rotationPoolSize = $0 })) {
+                        Text("24 results").tag(24)
+                        Text("50 results").tag(50)
+                        Text("100 results").tag(100)
+                        Text("250 results").tag(250)
+                        Text("500 results").tag(500)
+                    }
+                    .help("Keeps the filter's own sorting, so this is the top N "
+                          + "of that search rather than anything at random")
                 }
                 Toggle("Shuffle wallpapers", isOn: Binding(
                     get: { store.shuffle }, set: { store.shuffle = $0 }))
@@ -120,6 +138,19 @@ struct ScheduleView: View {
         .formStyle(.grouped)
         .scrollContentBackground(.hidden)
     }
+
+    /// What each rotation source is called. Kept here rather than in the store
+    /// so every word the user reads lives with the rest of the UI text.
+    private func label(for source: RotationSource) -> String {
+        switch source {
+        case .favorites: "Favorites"
+        case .downloads: "Downloads"
+        case .collection: "Collection · \(store.name(of: source))"
+        case .folder: "Folder · \(store.name(of: source))"
+        case .savedFilter: "Filter · \(store.name(of: source))"
+        }
+    }
+
 }
 
 struct SettingsView: View {

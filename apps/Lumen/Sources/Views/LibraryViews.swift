@@ -103,6 +103,11 @@ struct DownloadsView: View {
 struct CollectionsView: View {
     @Environment(Store.self) private var store
     @State private var name = ""
+    /// nil shows the collections; a value shows one collection's wallpapers.
+    @State private var opened: Collection?
+    @State private var hovered: String?
+
+    private var theme: GridTheme { store.gridTheme }
 
     var body: some View {
         ScrollView {
@@ -119,9 +124,17 @@ struct CollectionsView: View {
                     .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty)
                 }
 
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 236), spacing: Tokens.s4)], spacing: Tokens.s4) {
-                    ForEach(store.collections) { collection in
-                        card(collection)
+                if let opened, let live = store.collections.first(where: { $0.id == opened.id }) {
+                    // Inside a collection: the same grid and layouts the rest
+                    // of the app uses, rather than a card that only shuffles.
+                    contents(of: live)
+                } else {
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 236), spacing: Tokens.s4)],
+                              spacing: Tokens.s4) {
+                        ForEach(store.collections) { collection in
+                            card(collection)
+                                .onTapGesture { withAnimation(Tokens.quick) { self.opened = collection } }
+                        }
                     }
                 }
 
@@ -137,6 +150,87 @@ struct CollectionsView: View {
             .animation(Tokens.normal, value: store.collections.map(\.id))
         }
         .scrollContentBackground(.hidden)
+    }
+
+    /// One collection's wallpapers, with the layout picker and a way back.
+    private func contents(of collection: Collection) -> some View {
+        VStack(alignment: .leading, spacing: Tokens.s3) {
+            HStack(spacing: Tokens.s3) {
+                Button {
+                    withAnimation(Tokens.quick) { opened = nil }
+                } label: {
+                    Label("Collections", systemImage: "chevron.left")
+                        .font(.system(size: 12, weight: .medium))
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .keyboardShortcut(.cancelAction)
+
+                Text(collection.name).font(.system(size: 15, weight: .semibold))
+                Text("\(collection.wallpapers.count) wallpapers")
+                    .font(.caption2Mono).foregroundStyle(.secondary)
+                Spacer()
+
+                Picker("", selection: Binding(get: { store.gridTheme },
+                                              set: { store.gridTheme = $0 })) {
+                    ForEach(GridTheme.allCases) { Text($0.label).tag($0) }
+                }
+                .pickerStyle(.segmented).labelsHidden().controlSize(.small).fixedSize()
+            }
+
+            if collection.wallpapers.isEmpty {
+                ContentUnavailableView("Nothing in here yet",
+                                       systemImage: "rectangle.stack",
+                                       description: Text("Add wallpapers from a preview."))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, Tokens.s6)
+            } else {
+                Group {
+                    if theme == .masonry {
+                        MasonryLayout(columnWidth: theme.minTileWidth, spacing: theme.spacing) {
+                            ForEach(collection.wallpapers) { tile($0, in: collection) }
+                        }
+                    } else {
+                        LazyVGrid(columns: [GridItem(.adaptive(minimum: theme.minTileWidth),
+                                                     spacing: theme.spacing)],
+                                  spacing: theme.spacing) {
+                            ForEach(collection.wallpapers) { tile($0, in: collection) }
+                        }
+                    }
+                }
+                .transaction { $0.animation = nil }
+            }
+        }
+    }
+
+    private func tile(_ wallpaper: Wallpaper, in collection: Collection) -> some View {
+        WallpaperTile(wallpaper: wallpaper,
+                      theme: theme,
+                      isHovered: hovered == wallpaper.id,
+                      isFavorite: store.isFavorite(wallpaper),
+                      isSelecting: store.isSelecting,
+                      isSelected: store.isSelected(wallpaper),
+                      isDownloaded: store.isDownloaded(wallpaper),
+                      open: {
+                          if store.isSelecting {
+                              store.toggleSelection(wallpaper)
+                              return
+                          }
+                          store.openCollectionPreview(wallpaper, in: collection)
+                      })
+            .onHover { inside in
+                withAnimation(Tokens.quick) {
+                    hovered = inside ? wallpaper.id : (hovered == wallpaper.id ? nil : hovered)
+                }
+            }
+            .contextMenu {
+                Button("Set as Wallpaper") { store.setWallpaper(wallpaper) }
+                Button("Download") { store.download(wallpaper) }
+                Divider()
+                Button("Remove from \(collection.name)", role: .destructive) {
+                    store.setMembership(wallpaper, of: collection, member: false)
+                }
+            }
     }
 
     private func card(_ collection: Collection) -> some View {

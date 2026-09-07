@@ -63,7 +63,7 @@ struct LibraryFolderView: View {
                 }
                 .disabled(store.libraryFolders.isEmpty || store.isScanningLibrary)
 
-                Toggle("Favourites only", isOn: Binding(
+                Toggle("Favorites only", isOn: Binding(
                     get: { store.libraryFavoritesOnly },
                     set: { store.setLibraryFavoritesOnly($0) }))
                     .toggleStyle(.switch)
@@ -280,6 +280,13 @@ struct LibraryFolderView: View {
 
     // MARK: Grid
 
+    /// What the preview steps through: whatever this pane is showing.
+    private var visibleItems: [LocalWallpaper] {
+        if !store.duplicateGroups.isEmpty { return store.duplicateGroups.flatMap { $0 } }
+        if !store.similarToSelection.isEmpty { return store.similarToSelection }
+        return store.currentFiles
+    }
+
     private var grid: some View {
         // Only what is at this level; subfolders are their own tiles above.
         let shown = store.currentFiles
@@ -316,16 +323,23 @@ struct LibraryFolderView: View {
 
     private func tile(_ wallpaper: LocalWallpaper) -> some View {
         CachedImage(url: wallpaper.url) { image in
-            image.resizable().scaledToFill()
-                .scaleEffect(hovered == wallpaper.id ? 1.05 : 1)
+            // Fixed layouts fit rather than fill: a portrait wallpaper forced
+            // to fill a 16:10 tile shows a zoomed strip of its middle, which is
+            // useless for deciding whether you want it. Masonry uses the real
+            // shape, so filling there crops nothing.
+            image.resizable()
+                .aspectRatio(contentMode: theme == .masonry ? .fill : .fit)
+                .scaleEffect(hovered == wallpaper.id ? 1.03 : 1)
         } placeholder: {
             Rectangle().fill(.quaternary).shimmer()
         } failure: {
             Rectangle().fill(.quaternary)
                 .overlay { Image(systemName: "photo").foregroundStyle(.tertiary) }
         }
-        .aspectRatio(tileAspect(for: wallpaper), contentMode: .fill)
         .frame(maxWidth: .infinity)
+        .aspectRatio(tileAspect(for: wallpaper), contentMode: .fit)
+        // A letterboxed tile needs something behind it.
+        .background(theme == .masonry ? Color.clear : Color.black.opacity(0.35))
         .clipped()
         .overlay { hoverLayer(wallpaper) }
         .clipShape(.rect(cornerRadius: theme.cornerRadius))
@@ -341,11 +355,11 @@ struct LibraryFolderView: View {
             }
         }
         .contentShape(.rect)
-        .onTapGesture { withAnimation(Tokens.normal) { store.localPreview = wallpaper } }
+        .onTapGesture { store.openLocalPreview(wallpaper, in: visibleItems) }
         .onDrag { NSItemProvider(contentsOf: wallpaper.url) ?? NSItemProvider() }
         .contextMenu {
             Button("Set as Wallpaper") { store.setLocalWallpaper(wallpaper) }
-            Button(wallpaper.isFavorite ? "Remove from Favourites" : "Add to Favourites") {
+            Button(wallpaper.isFavorite ? "Remove from Favorites" : "Add to Favorites") {
                 store.toggleLibraryFavorite(wallpaper)
             }
             Divider()
@@ -434,10 +448,44 @@ struct LibraryFolderView: View {
 /// on the left, everything you can do with it on the right.
 struct LocalPreview: View {
     @Environment(Store.self) private var store
-    let wallpaper: LocalWallpaper
+
+    /// The list being browsed, so ← and → have somewhere to go — the same
+    /// stepping the Wallhaven preview offers.
+    let items: [LocalWallpaper]
+    /// What it was opened on, and what stays on screen if the list empties.
+    let opened: LocalWallpaper
     var close: () -> Void
 
+    @State private var index: Int
     @State private var zoomed = false
+    @FocusState private var focused: Bool
+
+    init(items: [LocalWallpaper], selected: LocalWallpaper, close: @escaping () -> Void) {
+        self.items = items
+        self.opened = selected
+        self.close = close
+        _index = State(initialValue: items.firstIndex { $0.id == selected.id } ?? 0)
+    }
+
+    init(wallpaper: LocalWallpaper, close: @escaping () -> Void) {
+        self.init(items: [wallpaper], selected: wallpaper, close: close)
+    }
+
+    private var wallpaper: LocalWallpaper {
+        guard !items.isEmpty else { return opened }
+        return items[min(max(index, 0), items.count - 1)]
+    }
+
+    private var position: (current: Int, total: Int) {
+        guard !items.isEmpty else { return (1, 1) }
+        return (min(max(index, 0), items.count - 1) + 1, items.count)
+    }
+
+    private func step(_ delta: Int) {
+        let next = index + delta
+        guard items.indices.contains(next) else { return }
+        withAnimation(Tokens.quick) { index = next }
+    }
 
     var body: some View {
         HStack(spacing: 0) {
@@ -445,8 +493,26 @@ struct LocalPreview: View {
             Divider()
             inspector
         }
-        .frame(minWidth: 880, idealWidth: 1180, minHeight: 540, idealHeight: 720)
-        .background(.regularMaterial)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(.background)
+        .focusable()
+        .focusEffectDisabled()
+        .focused($focused)
+        .onAppear { focused = true }
+        .onKeyPress(.leftArrow) { step(-1); return .handled }
+        .onKeyPress(.rightArrow) { step(1); return .handled }
+        .onKeyPress(.escape) { close(); return .handled }
+        .onKeyPress(.space) {
+            withAnimation(Tokens.normal) { zoomed.toggle() }
+            return .handled
+        }
+        .task(id: wallpaper.id) {
+            // Keep the neighbours warm so paging is instant.
+            let neighbours = [index - 2, index - 1, index + 1, index + 2]
+                .filter { items.indices.contains($0) }
+                .map { items[$0].url }
+            ImageCache.shared.prefetch(neighbours, maxPixels: ImageDetail.preview)
+        }
     }
 
     private var preview: some View {
@@ -474,12 +540,21 @@ struct LocalPreview: View {
                     .buttonStyle(.plain)
                     .keyboardShortcut(.cancelAction)
                     Spacer()
+                    Text("\(position.current) of \(position.total)")
+                        .font(.captionMono)
+                        .padding(.horizontal, 9).padding(.vertical, 4)
+                        .background(.black.opacity(0.5), in: .rect(cornerRadius: 7))
                     Text(wallpaper.displayResolution)
                         .font(.captionMono)
                         .padding(.horizontal, 9).padding(.vertical, 4)
                         .background(.black.opacity(0.5), in: .rect(cornerRadius: 7))
                 }
                 Spacer()
+                HStack {
+                    stepButton("chevron.left", enabled: index > 0) { step(-1) }
+                    Spacer()
+                    stepButton("chevron.right", enabled: index + 1 < items.count) { step(1) }
+                }
             }
             .foregroundStyle(.white)
             .padding(Tokens.s3)
@@ -488,6 +563,20 @@ struct LocalPreview: View {
         .clipped()
         .contentShape(.rect)
         .onTapGesture { withAnimation(Tokens.normal) { zoomed.toggle() } }
+    }
+
+    private func stepButton(_ symbol: String, enabled: Bool,
+                           action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: 15, weight: .semibold))
+                .frame(width: 34, height: 34)
+                .background(.black.opacity(0.45), in: .circle)
+                .overlay { Circle().strokeBorder(.white.opacity(0.16), lineWidth: 0.5) }
+        }
+        .buttonStyle(.plain)
+        .opacity(enabled ? 1 : 0.25)
+        .disabled(!enabled)
     }
 
     private var inspector: some View {
@@ -537,7 +626,7 @@ struct LocalPreview: View {
                 Button {
                     store.toggleLibraryFavorite(wallpaper)
                 } label: {
-                    Label(wallpaper.isFavorite ? "Saved" : "Favourite",
+                    Label(wallpaper.isFavorite ? "Saved" : "Favorite",
                           systemImage: wallpaper.isFavorite ? "heart.fill" : "heart")
                         .frame(maxWidth: .infinity)
                 }

@@ -444,6 +444,59 @@ struct RadarResult: Identifiable, Decodable {
     let wallpapers: [Wallpaper]
 }
 
+/// Where the rotation draws its wallpapers from.
+///
+/// A string was enough when there were three fixed choices; naming a specific
+/// collection, folder or saved filter needs the identity to travel with it.
+enum RotationSource: Codable, Equatable, Hashable {
+    case favorites
+    case downloads
+    /// A collection Lumen stores, by id.
+    case collection(String)
+    /// An imported folder, by id. These are local files, not Wallhaven ones.
+    case folder(String)
+    /// A saved filter, re-queried each time so the pool stays fresh.
+    case savedFilter(UUID)
+
+    /// Stable key for persistence and for picker tags.
+    var key: String {
+        switch self {
+        case .favorites: "favorites"
+        case .downloads: "downloads"
+        case .collection(let id): "collection:\(id)"
+        case .folder(let id): "folder:\(id)"
+        case .savedFilter(let id): "filter:\(id.uuidString)"
+        }
+    }
+
+    init?(key: String) {
+        switch key {
+        case "favorites": self = .favorites
+        case "downloads": self = .downloads
+        default:
+            let parts = key.split(separator: ":", maxSplits: 1).map(String.init)
+            guard parts.count == 2 else { return nil }
+            switch parts[0] {
+            case "collection": self = .collection(parts[1])
+            case "folder": self = .folder(parts[1])
+            case "filter":
+                guard let id = UUID(uuidString: parts[1]) else { return nil }
+                self = .savedFilter(id)
+            default: return nil
+            }
+        }
+    }
+
+    /// Migration from the three fixed choices this replaced.
+    static func fromLegacy(_ name: String) -> RotationSource {
+        switch name {
+        case "Downloads": .downloads
+        case "Collection": .collection("")
+        default: .favorites
+        }
+    }
+}
+
 /// Where a set applies. macOS gives each Space its own desktop picture, and
 /// `NSWorkspace` only ever writes the one you are looking at.
 enum WallpaperScope: String, Codable, CaseIterable, Identifiable {
