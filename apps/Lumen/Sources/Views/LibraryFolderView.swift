@@ -633,7 +633,11 @@ struct LibraryFolderView: View {
             // useless for deciding whether you want it. Masonry uses the real
             // shape, so filling there crops nothing.
             image.resizable()
-                .aspectRatio(contentMode: theme == .masonry || theme == .natural ? .fill : .fit)
+                // Natural fits rather than fills: its frame is already the
+                // picture's own shape, so the two agree — but until a file's
+                // header has been read the shape is a guess, and filling a
+                // guessed frame crops a portrait down to a landscape slice.
+                .aspectRatio(contentMode: theme == .masonry ? .fill : .fit)
                 .scaleEffect(hovered == wallpaper.id ? 1.03 : 1)
         } placeholder: {
             Rectangle().fill(.quaternary).shimmer()

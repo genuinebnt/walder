@@ -798,15 +798,22 @@ final class Store {
         let missing = wallpapers.filter { aspectRatios[$0.path] == nil }
         guard !missing.isEmpty else { return }
 
-        let measured = await Task.detached(priority: .utility) {
-            missing.reduce(into: [String: Double]()) { found, wallpaper in
-                guard let size = wallpaper.pixelSize, size.height > 0 else { return }
-                found[wallpaper.path] = size.width / size.height
-            }
-        }.value
-
-        guard !measured.isEmpty else { return }
-        aspectRatios.merge(measured) { _, new in new }
+        // Published in batches. Reading four thousand file headers takes long
+        // enough that doing it all before publishing anything left the grid
+        // laying every wallpaper out at the placeholder shape for seconds.
+        for chunk in stride(from: 0, to: missing.count, by: 200).map({
+            Array(missing[$0..<min($0 + 200, missing.count)])
+        }) {
+            if Task.isCancelled { return }
+            let measured = await Task.detached(priority: .utility) {
+                chunk.reduce(into: [String: Double]()) { found, wallpaper in
+                    guard let size = wallpaper.pixelSize, size.height > 0 else { return }
+                    found[wallpaper.path] = size.width / size.height
+                }
+            }.value
+            guard !measured.isEmpty else { continue }
+            aspectRatios.merge(measured) { _, new in new }
+        }
     }
 
     // MARK: Library similarity

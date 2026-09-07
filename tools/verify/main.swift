@@ -735,6 +735,30 @@ func run() async -> Int32 {
         }
         return true
     }
+    v.check("Rows are rebuilt when the shapes change under them") {
+        // File proportions are read from headers in the background and arrive
+        // after the first layout. Rows keyed only on the item count kept the
+        // placeholder shape for good, which is what left portraits sitting in
+        // landscape rows.
+        let placeholder = justified(Array(repeating: 16.0 / 10, count: 6), width: 1200)
+        let real = justified([2.0/3, 2.0/3, 2.0/3, 3.0, 3.0, 3.0], width: 1200)
+        guard let a = placeholder.first, let b = real.first else { return false }
+        // Same count and width, different shapes: the layout must differ.
+        return a.items.count != b.items.count || abs(a.height - b.height) > 1
+    }
+    v.check("A row's frames match the shapes they were built from") {
+        // The frame is the picture's own shape, which is what makes cropping
+        // unnecessary — and a mismatch here is what cropped portraits.
+        let ratios = [2.0 / 3, 16.0 / 9, 1.0, 3.0]
+        let rows = justified(ratios, width: 1000)
+        for row in rows {
+            for item in row.items {
+                let width = row.height * item.ratio
+                guard abs(width / row.height - item.ratio) < 0.001 else { return false }
+            }
+        }
+        return true
+    }
     v.check("Natural is offered alongside the other layouts") {
         GridTheme.allCases.contains(.natural) && GridTheme.natural.label == "Natural"
     }

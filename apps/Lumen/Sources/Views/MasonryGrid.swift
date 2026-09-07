@@ -70,7 +70,11 @@ struct MasonryGrid<Item: Identifiable, Content: View>: View {
     /// Heights are relative — 1/aspect per item — because only their ordering
     /// matters for balancing, not their pixel values.
     private var columns: [[Item]] {
-        let key = "\(items.count)|\(columnCount)|\(items.first.map { String(describing: $0.id) } ?? "")"
+        // Shapes included for the same reason as in [JustifiedGrid]: they are
+        // read in the background and arrive after the first distribution.
+        let shapes = items.reduce(into: 0.0) { total, item in total += aspect(item) }
+        let key = "\(items.count)|\(columnCount)|\(Int(shapes * 100))"
+            + "|\(items.first.map { String(describing: $0.id) } ?? "")"
         if let cached, cached.key == key { return cached.columns }
         let built = distribute(into: columnCount)
         // Assigning during body would loop; the cache is filled on the next

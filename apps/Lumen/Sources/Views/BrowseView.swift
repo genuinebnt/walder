@@ -194,7 +194,9 @@ struct WallpaperTile: View {
         CachedImage(url: wallpaper.thumb) { image in
             image
                 .resizable()
-                .scaledToFill()
+                // Natural sizes its frame to the wallpaper's own shape, so
+                // filling would only ever crop it.
+                .aspectRatio(contentMode: theme == .natural ? .fit : .fill)
                 .scaleEffect(isHovered ? 1.05 : 1)
                 .transition(.opacity)
         } placeholder: {

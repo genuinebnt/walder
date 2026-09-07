@@ -73,7 +73,13 @@ struct JustifiedGrid<Item: Identifiable, Content: View>: View {
     }
 
     private var rows: [Row] {
+        // The shapes are part of the key. They arrive after the first layout —
+        // a file's proportions are read from its header in the background —
+        // and rows built from the placeholder shape would otherwise never be
+        // rebuilt, leaving portraits in landscape rows for good.
+        let shapes = items.reduce(into: 0.0) { total, item in total += aspect(item) }
         let key = "\(items.count)|\(Int(available))|\(Int(targetRowHeight))"
+            + "|\(Int(shapes * 100))"
             + "|\(items.first.map { String(describing: $0.id) } ?? "")"
         if let cached, cached.key == key { return cached.rows }
         let built = build(in: available)
