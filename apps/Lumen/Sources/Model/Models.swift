@@ -521,7 +521,7 @@ struct DisplayTarget: Identifiable, Hashable {
 // MARK: - Appearance
 
 enum GridTheme: String, Codable, CaseIterable, Identifiable {
-    case compact, comfortable, cinema, masonry
+    case compact, comfortable, cinema, masonry, natural
     var id: String { rawValue }
     var label: String {
         switch self {
@@ -529,6 +529,7 @@ enum GridTheme: String, Codable, CaseIterable, Identifiable {
         case .comfortable: "Grid"
         case .cinema: "Cinema"
         case .masonry: "Masonry"
+        case .natural: "Natural"
         }
     }
     var minTileWidth: CGFloat {
@@ -537,6 +538,8 @@ enum GridTheme: String, Codable, CaseIterable, Identifiable {
         case .comfortable: 280
         case .cinema: 420
         case .masonry: 250
+        // The height rows aim for, rather than a tile width.
+        case .natural: 240
         }
     }
     var spacing: CGFloat { self == .compact ? 10 : self == .cinema ? 20 : 14 }

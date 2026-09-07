@@ -542,6 +542,11 @@ struct LibraryFolderView: View {
                             aspect: { store.aspectRatio(of: $0) },
                             columnWidth: theme.minTileWidth,
                             spacing: theme.spacing) { tile($0) }
+            } else if theme == .natural {
+                JustifiedGrid(items: shown,
+                              aspect: { store.aspectRatio(of: $0) },
+                              targetRowHeight: theme.minTileWidth,
+                              spacing: theme.spacing) { tile($0) }
             } else {
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: theme.minTileWidth),
                                              spacing: theme.spacing)],
@@ -628,7 +633,7 @@ struct LibraryFolderView: View {
             // useless for deciding whether you want it. Masonry uses the real
             // shape, so filling there crops nothing.
             image.resizable()
-                .aspectRatio(contentMode: theme == .masonry ? .fill : .fit)
+                .aspectRatio(contentMode: theme == .masonry || theme == .natural ? .fill : .fit)
                 .scaleEffect(hovered == wallpaper.id ? 1.03 : 1)
         } placeholder: {
             Rectangle().fill(.quaternary).shimmer()
@@ -639,9 +644,11 @@ struct LibraryFolderView: View {
         .frame(maxWidth: .infinity)
         // Masonry sizes the tile from its shape, so only the fixed layouts
         // impose one here.
-        .aspectRatio(theme == .masonry ? nil : tileAspect(for: wallpaper), contentMode: .fit)
+        .aspectRatio(theme == .masonry || theme == .natural
+                     ? nil : tileAspect(for: wallpaper), contentMode: .fit)
         // A letterboxed tile needs something behind it.
-        .background(theme == .masonry ? Color.clear : Color.black.opacity(0.35))
+        .background(theme == .masonry || theme == .natural
+                    ? Color.clear : Color.black.opacity(0.35))
         .clipped()
         .overlay { if hovered == wallpaper.id { hoverLayer(wallpaper) } }
         .clipShape(.rect(cornerRadius: theme.cornerRadius))
@@ -691,7 +698,7 @@ struct LibraryFolderView: View {
     /// which is what crops a portrait wallpaper into a strip of its middle.
     private func tileAspect(for wallpaper: LocalWallpaper) -> Double {
         switch theme {
-        case .masonry: store.aspectRatio(of: wallpaper)
+        case .masonry, .natural: store.aspectRatio(of: wallpaper)
         case .cinema: 16.0 / 9
         default: 16.0 / 10
         }

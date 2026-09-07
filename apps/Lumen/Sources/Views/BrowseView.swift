@@ -42,6 +42,11 @@ struct BrowseView: View {
                                     aspect: { $0.ratio > 0 ? $0.ratio : 16.0 / 10 },
                                     columnWidth: theme.minTileWidth,
                                     spacing: theme.spacing) { tile($0) }
+                    } else if theme == .natural {
+                        JustifiedGrid(items: items,
+                                      aspect: { $0.ratio > 0 ? $0.ratio : 16.0 / 10 },
+                                      targetRowHeight: theme.minTileWidth,
+                                      spacing: theme.spacing) { tile($0) }
                     } else {
                         LazyVGrid(columns: [GridItem(.adaptive(minimum: theme.minTileWidth),
                                                      spacing: theme.spacing)],
@@ -177,7 +182,13 @@ struct WallpaperTile: View {
     var isDownloaded = false
     let open: () -> Void
 
-    private var aspect: Double { theme == .masonry ? wallpaper.ratio : (theme == .cinema ? 16.0/9 : 16.0/10) }
+    /// Masonry and Natural both draw the picture at its own shape, so the tile
+    /// takes its size from the layout rather than imposing one.
+    private var aspect: Double {
+        theme == .masonry || theme == .natural
+            ? wallpaper.ratio
+            : (theme == .cinema ? 16.0 / 9 : 16.0 / 10)
+    }
 
     var body: some View {
         CachedImage(url: wallpaper.thumb) { image in
@@ -192,7 +203,7 @@ struct WallpaperTile: View {
             Rectangle().fill(.quaternary)
                 .overlay { Image(systemName: "photo").foregroundStyle(.tertiary) }
         }
-        .aspectRatio(theme == .masonry ? nil : aspect, contentMode: .fill)
+        .aspectRatio(theme == .masonry || theme == .natural ? nil : aspect, contentMode: .fill)
         .frame(maxWidth: .infinity)
         .clipped()
         .overlay { if isHovered { hoverLayer } }

@@ -660,6 +660,66 @@ func run() async -> Int32 {
         return await store.alreadyInLibrary(wallpaper) == nil
     }
 
+    v.section("Natural layout")
+    struct Shaped: Identifiable {
+        let id: Int
+        let ratio: Double
+    }
+    func justified(_ ratios: [Double], width: CGFloat,
+                   height: CGFloat = 200, spacing: CGFloat = 14)
+        -> [JustifiedGrid<Shaped, EmptyView>.Row] {
+        let items = ratios.enumerated().map { Shaped(id: $0.offset, ratio: $0.element) }
+        let grid = JustifiedGrid(items: items, aspect: { $0.ratio },
+                                 targetRowHeight: height, spacing: spacing) { _ in EmptyView() }
+        return grid.rowsForVerification(width: width)
+    }
+
+    v.check("Every full row fills the width exactly") {
+        // The point of the layout: no ragged right edge, and no cropping to
+        // get one.
+        let rows = justified(Array(repeating: 16.0 / 9, count: 12), width: 1200)
+        guard rows.count > 1 else { return false }
+        // All but the last are full rows.
+        for row in rows.dropLast() {
+            let widths = row.items.reduce(0.0) { $0 + row.height * $1.ratio }
+            let gaps = 14 * Double(row.items.count - 1)
+            guard abs(widths + gaps - 1200) < 1 else {
+                print("        row of \(row.items.count) came to \(widths + gaps)")
+                return false
+            }
+        }
+        return true
+    }
+    v.check("A portrait comes out tall and a panorama wide") {
+        // Same row, so the same height — the widths are what differ, which is
+        // exactly what the fixed-tile layouts could not express.
+        let rows = justified([2.0 / 3, 3.0, 2.0 / 3, 3.0], width: 1400)
+        guard let row = rows.first, row.items.count >= 2 else { return false }
+        let portrait = row.items.first { $0.ratio < 1 }
+        let panorama = row.items.first { $0.ratio > 2 }
+        guard let portrait, let panorama else { return true }
+        return row.height * portrait.ratio < row.height * panorama.ratio
+    }
+    v.check("Every wallpaper lands in exactly one row") {
+        let rows = justified([16.0/9, 2.0/3, 1, 3, 4.0/5, 16.0/10, 1.5], width: 900)
+        let placed = rows.flatMap { $0.items.map(\.id) }
+        return placed.count == 7 && Set(placed).count == 7
+    }
+    v.check("The last row is not blown up to fill the width") {
+        // Scaling a half-empty final row to the full width would draw its
+        // pictures far larger than everything above them.
+        let rows = justified(Array(repeating: 16.0 / 9, count: 7), width: 1200)
+        guard let last = rows.last, rows.count > 1 else { return false }
+        return last.height <= 200.001
+    }
+    v.check("A zero width does not divide by zero") {
+        let rows = justified([16.0 / 9, 1], width: 0)
+        return rows.count == 1 && rows[0].items.count == 2
+    }
+    v.check("Natural is offered alongside the other layouts") {
+        GridTheme.allCases.contains(.natural) && GridTheme.natural.label == "Natural"
+    }
+
     v.section("Semantic search")
     v.check("The CLIP tokenizer matches known token ids") {
         // A tokenizer that is subtly wrong yields ids that are individually

@@ -39,6 +39,7 @@ swiftc -Onone \
     "$ROOT/apps/Lumen/Sources/Model/ImageCache.swift" \
     "$ROOT/apps/Lumen/Sources/Views/PreviewPane.swift" \
     "$ROOT/apps/Lumen/Sources/Views/MasonryGrid.swift" \
+    "$ROOT/apps/Lumen/Sources/Views/JustifiedGrid.swift" \
     "$ROOT/apps/Lumen/Sources/Views/FiltersPopover.swift" \
     "$ROOT/tools/verify/main.swift" \
     -L "$ROOT/target/debug" -llumen_ffi \

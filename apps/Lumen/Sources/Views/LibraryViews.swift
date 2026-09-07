@@ -233,7 +233,12 @@ struct CollectionsView: View {
                     .padding(.vertical, Tokens.s6)
             } else {
                 Group {
-                    if theme == .masonry {
+                    if theme == .natural {
+                JustifiedGrid(items: shown(collection),
+                              aspect: { $0.ratio > 0 ? $0.ratio : 16.0 / 10 },
+                              targetRowHeight: theme.minTileWidth,
+                              spacing: theme.spacing) { tile($0, in: collection) }
+            } else if theme == .masonry {
                         MasonryGrid(items: shown(collection),
                                     aspect: { $0.ratio > 0 ? $0.ratio : 16.0 / 10 },
                                     columnWidth: theme.minTileWidth,
