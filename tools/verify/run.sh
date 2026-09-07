@@ -3,6 +3,12 @@
 # Rust core, then runs it. Read the summary line, not the exit code.
 set -euo pipefail
 
+# --fast skips everything that talks to Wallhaven, for a quick pass during
+# development. The full run is what should pass before committing.
+if [ "${1:-}" = "--fast" ]; then
+    export LUMEN_VERIFY_NETWORK=0
+fi
+
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 OUT="$ROOT/build/verify"
 SDK="$(xcrun --show-sdk-path)"

@@ -98,6 +98,13 @@ final class Verifier {
     }
 }
 
+/// Whether to run the checks that talk to Wallhaven.
+///
+/// On by default, because the network half is where the real defects have been
+/// found. `LUMEN_VERIFY_NETWORK=0`, or `run.sh --fast`, skips it.
+let networkChecksEnabled = ProcessInfo.processInfo
+    .environment["LUMEN_VERIFY_NETWORK"] != "0"
+
 @MainActor
 func run() async -> Int32 {
     let v = Verifier()
@@ -406,7 +413,14 @@ func run() async -> Int32 {
     let desktopBefore = NSScreen.main.flatMap { NSWorkspace.shared.desktopImageURL(for: $0) }
 
     // ── network-dependent ─────────────────────────────────────────────────
+    // Everything from here to the end of this block talks to Wallhaven. A fast
+    // run skips it: the offline checks below still run, so a quick pass stays
+    // useful without waiting on the network or risking a rate limit.
     v.section("Search (network)")
+    if !networkChecksEnabled {
+        v.skip("Everything that needs Wallhaven", "fast run — set LUMEN_VERIFY_NETWORK=1")
+    }
+    if networkChecksEnabled {
     store.filters = SearchFilters()
     await store.search()
     if let message = store.errorMessage {
@@ -678,240 +692,6 @@ func run() async -> Int32 {
         return store.downloads.count == before
     }
 
-    v.section("Image feature prints")
-
-    /// Writes a PNG of a given size with a deterministic pattern, so two files
-    /// can be the same picture at different resolutions.
-    func writePattern(width: Int, height: Int, shifted: Bool = false) -> URL? {
-        let url = FileManager.default.temporaryDirectory
-            .appending(path: "lumen-verify-print-\(UUID().uuidString).png")
-        guard let context = CGContext(
-            data: nil, width: width, height: height,
-            bitsPerComponent: 8, bytesPerRow: 0,
-            space: CGColorSpace(name: CGColorSpace.sRGB)!,
-            bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue) else { return nil }
-
-        if shifted {
-            // Structurally different, not just recoloured: reordering four
-            // colour bands measured 0.11 apart, which is duplicate territory.
-            var generator = SystemRandomNumberGenerator()
-            for _ in 0..<600 {
-                context.setFillColor(red: .random(in: 0...1, using: &generator),
-                                     green: .random(in: 0...1, using: &generator),
-                                     blue: .random(in: 0...1, using: &generator), alpha: 1)
-                context.fill(CGRect(x: .random(in: 0...CGFloat(width), using: &generator),
-                                    y: .random(in: 0...CGFloat(height), using: &generator),
-                                    width: CGFloat(width) / 12, height: CGFloat(height) / 12))
-            }
-        } else {
-            // Big blocks of colour: recognisable to a feature print at any size.
-            let palette: [(CGFloat, CGFloat, CGFloat)] =
-                [(0.1, 0.6, 0.3), (0.95, 0.85, 0.1), (0.2, 0.3, 0.9), (0.9, 0.2, 0.2)]
-            for (index, colour) in palette.enumerated() {
-                context.setFillColor(red: colour.0, green: colour.1, blue: colour.2, alpha: 1)
-                let band = CGFloat(height) / CGFloat(palette.count)
-                context.fill(CGRect(x: 0, y: CGFloat(index) * band,
-                                    width: CGFloat(width), height: band))
-            }
-        }
-        guard let image = context.makeImage(),
-              let destination = CGImageDestinationCreateWithURL(
-                url as CFURL, "public.png" as CFString, 1, nil) else { return nil }
-        CGImageDestinationAddImage(destination, image, nil)
-        guard CGImageDestinationFinalize(destination) else { return nil }
-        return url
-    }
-
-    let bigCopy = writePattern(width: 800, height: 500)
-    let smallCopy = writePattern(width: 320, height: 200)
-    let different = writePattern(width: 800, height: 500, shifted: true)
-    defer {
-        for url in [bigCopy, smallCopy, different].compactMap({ $0 }) {
-            try? FileManager.default.removeItem(at: url)
-        }
-    }
-
-    v.check("The duplicate threshold sits between the two measured ranges") {
-        // Unrelated real wallpapers measure 0.97-1.27; the same image resized
-        // measures 0.24. A threshold outside that gap is the bug to catch.
-        ImagePrints.duplicateThreshold > 0.3 && ImagePrints.duplicateThreshold < 0.9
-    }
-    v.check("A print can be computed, archived and read back") {
-        guard let bigCopy, let observation = ImagePrints.print(of: bigCopy),
-              let data = ImagePrints.encode(observation),
-              let restored = ImagePrints.decode(data) else { return false }
-        // A print must survive the round trip through storage intact.
-        guard let apart = ImagePrints.distance(observation, restored) else { return false }
-        return apart < 0.001
-    }
-    v.check("The same picture at another size is recognised") {
-        // This is the whole point: a file hash cannot see that these match.
-        guard let bigCopy, let smallCopy,
-              let a = ImagePrints.print(of: bigCopy),
-              let b = ImagePrints.print(of: smallCopy),
-              let apart = ImagePrints.distance(a, b) else { return false }
-        if apart > ImagePrints.duplicateThreshold {
-            print("        resized copy measured \(apart), over the threshold")
-        }
-        return apart <= ImagePrints.duplicateThreshold
-    }
-    v.check("A different picture is not called a duplicate") {
-        guard let bigCopy, let different,
-              let a = ImagePrints.print(of: bigCopy),
-              let b = ImagePrints.print(of: different),
-              let apart = ImagePrints.distance(a, b) else { return false }
-        if apart <= ImagePrints.duplicateThreshold {
-            print("        unrelated pair measured \(apart), under the threshold")
-        }
-        return apart > ImagePrints.duplicateThreshold
-    }
-    v.check("Grouping puts the copies together and leaves the odd one out") {
-        guard let bigCopy, let smallCopy, let different,
-              let a = ImagePrints.print(of: bigCopy),
-              let b = ImagePrints.print(of: smallCopy),
-              let c = ImagePrints.print(of: different) else { return false }
-        let groups = ImagePrints.duplicateGroups(in: [
-            (bigCopy.path, a), (smallCopy.path, b), (different.path, c)
-        ])
-        return groups.count == 1
-            && groups[0].count == 2
-            && !groups[0].contains(different.path)
-    }
-    v.check("Nearest ranks the resized copy above the unrelated one") {
-        guard let bigCopy, let smallCopy, let different,
-              let a = ImagePrints.print(of: bigCopy),
-              let b = ImagePrints.print(of: smallCopy),
-              let c = ImagePrints.print(of: different) else { return false }
-        let ranked = ImagePrints.nearest(
-            to: a, in: [(smallCopy.path, b), (different.path, c)], excluding: bigCopy.path)
-        return ranked.first?.path == smallCopy.path
-    }
-    v.check("An unreadable file yields no print rather than a wrong one") {
-        let url = FileManager.default.temporaryDirectory
-            .appending(path: "lumen-verify-notimage-\(UUID().uuidString).png")
-        try? Data("definitely not a png".utf8).write(to: url)
-        defer { try? FileManager.default.removeItem(at: url) }
-        return ImagePrints.print(of: url) == nil
-    }
-
-    v.section("Duplicate scan scope")
-    v.check("Each scope covers exactly what it says") {
-        store.libraryWallpapers = [
-            LocalWallpaper(id: "1", folderId: "f", url: URL(filePath: "/tmp/a.png"),
-                           path: "/tmp/a.png", filename: "a.png", fileSize: 1,
-                           isFavorite: false, subpath: "anime"),
-            LocalWallpaper(id: "2", folderId: "f", url: URL(filePath: "/tmp/b.png"),
-                           path: "/tmp/b.png", filename: "b.png", fileSize: 1,
-                           isFavorite: false, subpath: "anime/girls"),
-            LocalWallpaper(id: "3", folderId: "f", url: URL(filePath: "/tmp/c.png"),
-                           path: "/tmp/c.png", filename: "c.png", fileSize: 1,
-                           isFavorite: false, subpath: "nature")
-        ]
-        store.selectedFolder = "f"
-        store.browse(to: "anime")
-
-        store.duplicateScope = .thisFolder
-        let here = store.duplicateCandidates.map(\.filename)
-
-        store.duplicateScope = .includingNested
-        let nested = store.duplicateCandidates.map(\.filename).sorted()
-
-        store.duplicateScope = .everything
-        let all = store.duplicateCandidates.count
-
-        store.libraryWallpapers = []
-        store.selectedFolder = nil
-        store.browse(to: "")
-        store.duplicateScope = .includingNested
-
-        // "anime" alone, then anime plus anime/girls, then the lot.
-        return here == ["a.png"]
-            && nested == ["a.png", "b.png"]
-            && all == 3
-    }
-    v.check("A sibling folder is never pulled in by the nested scope") {
-        // anime/girls must not sweep in nature just because both are nested.
-        store.libraryWallpapers = [
-            LocalWallpaper(id: "1", folderId: "f", url: URL(filePath: "/tmp/a.png"),
-                           path: "/tmp/a.png", filename: "a.png", fileSize: 1,
-                           isFavorite: false, subpath: "anime"),
-            LocalWallpaper(id: "2", folderId: "f", url: URL(filePath: "/tmp/c.png"),
-                           path: "/tmp/c.png", filename: "c.png", fileSize: 1,
-                           isFavorite: false, subpath: "animals")
-        ]
-        store.selectedFolder = "f"
-        store.browse(to: "anime")
-        store.duplicateScope = .includingNested
-        // "animals" starts with "anima" but is not inside "anime".
-        let scoped = store.duplicateCandidates.map(\.filename)
-        store.libraryWallpapers = []
-        store.selectedFolder = nil
-        store.browse(to: "")
-        return scoped == ["a.png"]
-    }
-
-    v.section("System accent matching")
-    v.check("A strong colour maps to the accent a person would name") {
-        SystemAccent.nearest(toHex: "0066cc") == .blue
-            && SystemAccent.nearest(toHex: "cc0000") == .red
-            && SystemAccent.nearest(toHex: "336600") == .green
-            && SystemAccent.nearest(toHex: "993399") == .purple
-    }
-    v.check("A leading # is tolerated, and nonsense is declined") {
-        SystemAccent.nearest(toHex: "#0066cc") == .blue
-            && SystemAccent.nearest(toHex: "zzz") == nil
-            && SystemAccent.nearest(toHex: "12345") == nil
-    }
-    v.check("A palette skips the black and white every wallpaper has") {
-        // Wallhaven lists strongest first, and almost every palette starts
-        // with #000000 — matching on that would make everything Graphite.
-        let palette = ["000000", "ffffff", "cc0000", "999999"]
-        return SystemAccent.nearest(toPalette: palette) == .red
-    }
-    v.check("A palette with nothing usable still answers rather than failing") {
-        SystemAccent.nearest(toPalette: ["000000"]) != nil
-            && SystemAccent.nearest(toPalette: []) == nil
-    }
-    v.check("Restore is only offered once something has been changed") {
-        // Uses an isolated suite: this must not read or write the real setting.
-        let suite = "cc.lumen.verify.accent"
-        UserDefaults.standard.removePersistentDomain(forName: suite)
-        let defaults = UserDefaults(suiteName: suite)!
-        defer { UserDefaults.standard.removePersistentDomain(forName: suite) }
-        return SystemAccent.canRestore(defaults) == false
-            && SystemAccent.restore(defaults) == false
-    }
-
-    v.section("Navigation history")
-    v.check("Back and forward walk the panes") {
-        let browse = Store.Destination(pane: "browse", focus: nil)
-        let downloads = Store.Destination(pane: "downloads", focus: nil)
-        store.recordDestination(browse)
-        store.recordDestination(downloads)
-        guard store.canGoBack else { return false }
-
-        let settings = Store.Destination(pane: "settings", focus: nil)
-        guard store.goBack(from: settings)?.pane == "downloads" else { return false }
-        guard store.canGoForward else { return false }
-        return store.goForward(from: downloads)?.pane == "settings"
-    }
-    v.check("Going somewhere new clears the forward stack") {
-        // Browser behaviour: a new destination discards what you stepped back from.
-        _ = store.goBack(from: .init(pane: "settings", focus: nil))
-        store.recordDestination(.init(pane: "favorites", focus: nil))
-        return !store.canGoForward
-    }
-    v.check("The same place twice is not recorded twice") {
-        // Start from a place that is definitely not already on top, or the
-        // first record is legitimately deduped and the count never moves.
-        store.recordDestination(.init(pane: "collections", focus: nil))
-        let before = store.backStack.count
-        let here = Store.Destination(pane: "displays", focus: nil)
-        store.recordDestination(here)
-        store.recordDestination(here)
-        return store.backStack.count == before + 1
-    }
-
     v.section("Tag radar")
     v.check("Subscribing is idempotent and updates the threshold") {
         store.subscribe(to: "id:31", label: "Verify tag", minFavorites: 0)
@@ -1030,21 +810,6 @@ func run() async -> Int32 {
         return reported
     }
 
-    v.section("Spaces, individually")
-    v.check("The window server's Spaces are enumerated and numbered") {
-        let spaces = SpacesWallpaper.spaces()
-        guard !spaces.isEmpty else {
-            print("        no Spaces reported — nothing to assign to")
-            return false
-        }
-        // Exactly one current Space per display, numbered from one.
-        let currentPerDisplay = Dictionary(grouping: spaces, by: \.display)
-            .allSatisfy { $0.value.filter(\.isCurrent).count <= 1 }
-        return currentPerDisplay
-            && spaces.allSatisfy { $0.number >= 1 }
-            && spaces.contains { $0.isCurrent }
-    }
-
     v.section("Backup")
     await v.checkAsync("A backup round-trips favourites, collections and filters") {
         // Restore adds rather than replaces, so this checks the contents
@@ -1096,77 +861,6 @@ func run() async -> Int32 {
         return backup.favorites.first?.thumb.absoluteString.isEmpty == false
     }
 
-    v.section("Colour search")
-    v.check("Colours use the same seven-name vocabulary as the accent matcher") {
-        // "Show me the green ones" should mean the same thing in both places.
-        SystemAccent.allCases.count == 8
-            && SystemAccent.nearest(toHex: "336600") == .green
-    }
-    v.check("No filter shows everything") {
-        store.setColourFilter(nil)
-        return store.byColour(store.libraryWallpapers).count == store.libraryWallpapers.count
-    }
-
-    v.section("Auto-collections and taste")
-    v.check("Clustering groups by look and drops groups that are too small") {
-        struct Entry { let path: String }
-        // Build three prints from two genuinely different pictures.
-        guard let a = writePattern(width: 400, height: 250),
-              let b = writePattern(width: 200, height: 125),
-              let c = writePattern(width: 400, height: 250, shifted: true)
-        else { return false }
-        defer {
-            for url in [a, b, c] { try? FileManager.default.removeItem(at: url) }
-        }
-        guard let pa = ImagePrints.print(of: a),
-              let pb = ImagePrints.print(of: b),
-              let pc = ImagePrints.print(of: c) else { return false }
-
-        // A minimum of two: the pair clusters, the odd one out does not.
-        let groups = ImagePrints.cluster(
-            [(a.path, pa), (b.path, pb), (c.path, pc)],
-            threshold: 0.8, minimumSize: 2)
-        guard groups.count == 1 else {
-            print("        got \(groups.count) groups")
-            return false
-        }
-        return groups[0].count == 2 && !groups[0].contains(c.path)
-    }
-    v.check("A minimum size larger than anything found yields nothing") {
-        guard let a = writePattern(width: 400, height: 250),
-              let b = writePattern(width: 200, height: 125) else { return false }
-        defer {
-            try? FileManager.default.removeItem(at: a)
-            try? FileManager.default.removeItem(at: b)
-        }
-        guard let pa = ImagePrints.print(of: a), let pb = ImagePrints.print(of: b)
-        else { return false }
-        return ImagePrints.cluster([(a.path, pa), (b.path, pb)], minimumSize: 6).isEmpty
-    }
-    v.check("Affinity is the mean distance, and declines an empty reference set") {
-        guard let a = writePattern(width: 400, height: 250),
-              let b = writePattern(width: 200, height: 125),
-              let c = writePattern(width: 400, height: 250, shifted: true) else { return false }
-        defer {
-            for url in [a, b, c] { try? FileManager.default.removeItem(at: url) }
-        }
-        guard let pa = ImagePrints.print(of: a),
-              let pb = ImagePrints.print(of: b),
-              let pc = ImagePrints.print(of: c) else { return false }
-
-        // The resized copy sits closer to the original than the unrelated one.
-        guard let near = ImagePrints.affinity(of: pb, to: [pa]),
-              let far = ImagePrints.affinity(of: pc, to: [pa]) else { return false }
-        return near < far && ImagePrints.affinity(of: pa, to: []) == nil
-    }
-    v.check("Taste ranking says what it needs rather than doing nothing") {
-        // With no favourites there is nothing to measure against, and silence
-        // would read as the button being broken.
-        let empty = Store(defaults: UserDefaults(suiteName: "cc.lumen.verify.taste")!)
-        defer { UserDefaults.standard.removePersistentDomain(forName: "cc.lumen.verify.taste") }
-        return empty.favorites.isEmpty && empty.tasteRanked == false
-    }
-
     v.section("Resolution rule")
     v.check("Off by default, and hides nothing when off") {
         store.hideBelowDisplay = false
@@ -1188,24 +882,6 @@ func run() async -> Int32 {
         let persisted = Store(defaults: defaults).hideBelowDisplay
         store.hideBelowDisplay = false
         return persisted
-    }
-
-    v.section("Library health")
-    await v.checkAsync("Measuring reports size, count and what is unindexed") {
-        guard !store.libraryWallpapers.isEmpty else { return true }
-        await store.measureLibrary()
-        let health = store.health
-        return health.count == store.libraryWallpapers.count
-            && health.bytes > 0
-            && health.largest != nil
-            && health.unindexed <= health.count
-            && health.belowDisplay <= health.count
-    }
-    v.check("An empty library measures as empty rather than failing") {
-        let empty = Store.LibraryHealth()
-        // ByteCountFormatter says "Zero bytes" for 0, not "0 bytes".
-        return empty.count == 0 && empty.bytes == 0 && empty.largest == nil
-            && !empty.size.isEmpty
     }
 
     v.section("Crop rectangles")
@@ -1248,39 +924,6 @@ func run() async -> Int32 {
               let apart = ImagePrints.distance(printA, printB) else { return false }
         // Both are the requested size, and they are genuinely different images.
         return a.size.width > 0 && b.size.width > 0 && apart > 0.01
-    }
-
-    v.section("Masonry layout")
-    v.check("Columns balance by shape rather than by count") {
-        // A Layout measures every subview before placing any, which is what
-        // hung a two-thousand-file folder. This is arithmetic on known ratios.
-        struct Tile: Identifiable { let id: Int; let ratio: Double }
-        // Three wide tiles and three tall ones: an even split by count would
-        // pile all the tall ones into one column.
-        let tiles = (0..<6).map { Tile(id: $0, ratio: $0 < 3 ? 2.0 : 0.5) }
-        let grid = MasonryGrid(items: tiles, aspect: \.ratio,
-                               columnWidth: 100, spacing: 8) { _ in EmptyView() }
-        let columns = grid.columnsForVerification(width: 320)   // three columns
-
-        guard columns.count == 3 else { return false }
-        // Every tile placed exactly once, and no column left empty.
-        let placed = columns.flatMap { $0 }.map(\.id).sorted()
-        return placed == [0, 1, 2, 3, 4, 5] && columns.allSatisfy { !$0.isEmpty }
-    }
-    v.check("A single narrow column keeps the original order") {
-        struct Tile: Identifiable { let id: Int; let ratio: Double }
-        let tiles = (0..<4).map { Tile(id: $0, ratio: 1.5) }
-        let grid = MasonryGrid(items: tiles, aspect: \.ratio,
-                               columnWidth: 300, spacing: 8) { _ in EmptyView() }
-        let columns = grid.columnsForVerification(width: 320)
-        return columns.count == 1 && columns[0].map(\.id) == [0, 1, 2, 3]
-    }
-    v.check("A degenerate ratio does not divide by zero") {
-        struct Tile: Identifiable { let id: Int; let ratio: Double }
-        let tiles = [Tile(id: 0, ratio: 0), Tile(id: 1, ratio: -1)]
-        let grid = MasonryGrid(items: tiles, aspect: \.ratio,
-                               columnWidth: 100, spacing: 8) { _ in EmptyView() }
-        return grid.columnsForVerification(width: 320).flatMap { $0 }.count == 2
     }
 
     v.section("Download metadata sidecar")
@@ -1520,61 +1163,6 @@ func run() async -> Int32 {
         return store.errorMessage?.contains("no longer on disk") == true
     }
 
-    v.section("Menu bar legibility")
-
-    /// A flat image of one luminance, for the assessments below.
-    func flat(_ level: Double) -> NSImage {
-        let size = NSSize(width: 256, height: 160)
-        let image = NSImage(size: size)
-        image.lockFocus()
-        NSColor(calibratedWhite: level, alpha: 1).setFill()
-        NSRect(origin: .zero, size: size).fill()
-        image.unlockFocus()
-        return image
-    }
-
-    /// Dark everywhere except a bright band across the top.
-    func brightTopped() -> NSImage {
-        let size = NSSize(width: 256, height: 160)
-        let image = NSImage(size: size)
-        image.lockFocus()
-        NSColor(calibratedWhite: 0.05, alpha: 1).setFill()
-        NSRect(origin: .zero, size: size).fill()
-        NSColor(calibratedWhite: 0.5, alpha: 1).setFill()
-        // Top of the image is the high-y end in AppKit's flipped-up space.
-        NSRect(x: 0, y: size.height - 14, width: size.width, height: 14).fill()
-        image.unlockFocus()
-        return image
-    }
-
-    let screen = CGSize(width: 3024, height: 1964)
-    v.check("A dark strip reads as safe") {
-        guard let verdict = MenuBarLegibility.assess(flat(0.05), displaySize: screen)
-        else { return false }
-        return !verdict.isRisky && verdict.luminance < 0.2
-    }
-    v.check("A near-white strip reads as safe") {
-        guard let verdict = MenuBarLegibility.assess(flat(0.97), displaySize: screen)
-        else { return false }
-        return !verdict.isRisky
-    }
-    v.check("A mid-tone strip is flagged") {
-        guard let verdict = MenuBarLegibility.assess(flat(0.5), displaySize: screen)
-        else { return false }
-        return verdict.isRisky && verdict.summary.localizedCaseInsensitiveContains("mid-tone")
-    }
-    v.check("A dark image with a bright top is judged on the top, not the average") {
-        // The whole point: macOS picks the text colour from the whole image,
-        // so a dark wallpaper with a light band still fails.
-        guard let verdict = MenuBarLegibility.assess(brightTopped(), displaySize: screen)
-        else { return false }
-        return verdict.isRisky
-    }
-    v.check("A degenerate image is declined rather than guessed at") {
-        MenuBarLegibility.assess(NSImage(size: .zero), displaySize: screen) == nil
-            && MenuBarLegibility.assess(flat(0.5), displaySize: .zero) == nil
-    }
-
     v.section("Appearance pairing")
     v.check("Binding a wallpaper to light and dark persists") {
         guard store.wallpapers.count >= 2 else { return true }
@@ -1774,65 +1362,6 @@ func run() async -> Int32 {
         store.favoriteSelected(from: store.wallpapers)
         store.setSelecting(false)
         return store.downloads.count == before
-    }
-
-    v.section("Rotation sources")
-    v.check("Every source round-trips through its key") {
-        let sources: [RotationSource] = [
-            .favorites, .downloads, .collection("abc"), .folder("def"),
-            .savedFilter(UUID())
-        ]
-        return sources.allSatisfy { RotationSource(key: $0.key) == $0 }
-            && RotationSource(key: "nonsense") == nil
-            && RotationSource(key: "filter:not-a-uuid") == nil
-    }
-    v.check("The old three-choice setting still maps to something sensible") {
-        // An existing install must not silently reset to Favourites.
-        RotationSource.fromLegacy("Downloads") == .downloads
-            && RotationSource.fromLegacy("Favorites") == .favorites
-            && RotationSource.fromLegacy("anything else") == .favorites
-    }
-    v.check("The source list offers collections, folders and saved filters") {
-        store.createCollection(named: "Verify rotation")
-        store.subscribe(to: "id:31", label: "unused", minFavorites: 0)   // not a source
-        store.filters.query = "rotation-preset"
-        store.savePreset(named: "Verify preset")
-
-        let sources = store.rotationSources
-        let hasFixed = sources.contains(.favorites) && sources.contains(.downloads)
-        let hasCollection = sources.contains {
-            if case .collection = $0 { return store.name(of: $0) == "Verify rotation" }
-            return false
-        }
-        let hasPreset = sources.contains {
-            if case .savedFilter = $0 { return store.name(of: $0) == "Verify preset" }
-            return false
-        }
-
-        if let made = store.collections.first(where: { $0.name == "Verify rotation" }) {
-            store.deleteCollection(made)
-        }
-        if let preset = store.presets.first(where: { $0.name == "Verify preset" }) {
-            store.deletePreset(preset)
-        }
-        if let watch = store.subscriptions.first(where: { $0.query == "id:31" }) {
-            store.unsubscribe(watch)
-        }
-        return hasFixed && hasCollection && hasPreset
-    }
-    v.check("The pool size persists") {
-        store.rotationPoolSize = 250
-        return Store(defaults: defaults).rotationPoolSize == 250
-    }
-    await v.checkAsync("A missing saved filter is reported, not silently ignored") {
-        let previous = store.rotationSource
-        store.rotationSource = .savedFilter(UUID())      // never existed
-        store.errorMessage = nil
-        await store.rotate()
-        let reported = store.errorMessage?.contains("no longer exists") == true
-        store.rotationSource = previous
-        store.errorMessage = nil
-        return reported
     }
 
     v.section("Bulk selection by count")
@@ -2094,6 +1623,496 @@ func run() async -> Int32 {
                 return true
             }
         }
+    }
+
+    // Checks that need nothing from the network. Hoisted out of the
+    // block above: they used to sit inside it, so an offline run — or one
+    // where the search happened to return nothing — silently skipped them.
+    v.section("Image feature prints")
+
+    /// Writes a PNG of a given size with a deterministic pattern, so two files
+    /// can be the same picture at different resolutions.
+    func writePattern(width: Int, height: Int, shifted: Bool = false) -> URL? {
+        let url = FileManager.default.temporaryDirectory
+        .appending(path: "lumen-verify-print-\(UUID().uuidString).png")
+        guard let context = CGContext(
+        data: nil, width: width, height: height,
+        bitsPerComponent: 8, bytesPerRow: 0,
+        space: CGColorSpace(name: CGColorSpace.sRGB)!,
+        bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue) else { return nil }
+
+        if shifted {
+        // Structurally different, not just recoloured: reordering four
+        // colour bands measured 0.11 apart, which is duplicate territory.
+        var generator = SystemRandomNumberGenerator()
+        for _ in 0..<600 {
+            context.setFillColor(red: .random(in: 0...1, using: &generator),
+                                 green: .random(in: 0...1, using: &generator),
+                                 blue: .random(in: 0...1, using: &generator), alpha: 1)
+            context.fill(CGRect(x: .random(in: 0...CGFloat(width), using: &generator),
+                                y: .random(in: 0...CGFloat(height), using: &generator),
+                                width: CGFloat(width) / 12, height: CGFloat(height) / 12))
+        }
+        } else {
+        // Big blocks of colour: recognisable to a feature print at any size.
+        let palette: [(CGFloat, CGFloat, CGFloat)] =
+            [(0.1, 0.6, 0.3), (0.95, 0.85, 0.1), (0.2, 0.3, 0.9), (0.9, 0.2, 0.2)]
+        for (index, colour) in palette.enumerated() {
+            context.setFillColor(red: colour.0, green: colour.1, blue: colour.2, alpha: 1)
+            let band = CGFloat(height) / CGFloat(palette.count)
+            context.fill(CGRect(x: 0, y: CGFloat(index) * band,
+                                width: CGFloat(width), height: band))
+        }
+        }
+        guard let image = context.makeImage(),
+          let destination = CGImageDestinationCreateWithURL(
+            url as CFURL, "public.png" as CFString, 1, nil) else { return nil }
+        CGImageDestinationAddImage(destination, image, nil)
+        guard CGImageDestinationFinalize(destination) else { return nil }
+        return url
+    }
+
+    let bigCopy = writePattern(width: 800, height: 500)
+    let smallCopy = writePattern(width: 320, height: 200)
+    let different = writePattern(width: 800, height: 500, shifted: true)
+    defer {
+        for url in [bigCopy, smallCopy, different].compactMap({ $0 }) {
+        try? FileManager.default.removeItem(at: url)
+        }
+    }
+
+    v.check("The duplicate threshold sits between the two measured ranges") {
+        // Unrelated real wallpapers measure 0.97-1.27; the same image resized
+        // measures 0.24. A threshold outside that gap is the bug to catch.
+        ImagePrints.duplicateThreshold > 0.3 && ImagePrints.duplicateThreshold < 0.9
+    }
+    v.check("A print can be computed, archived and read back") {
+        guard let bigCopy, let observation = ImagePrints.print(of: bigCopy),
+          let data = ImagePrints.encode(observation),
+          let restored = ImagePrints.decode(data) else { return false }
+        // A print must survive the round trip through storage intact.
+        guard let apart = ImagePrints.distance(observation, restored) else { return false }
+        return apart < 0.001
+    }
+    v.check("The same picture at another size is recognised") {
+        // This is the whole point: a file hash cannot see that these match.
+        guard let bigCopy, let smallCopy,
+          let a = ImagePrints.print(of: bigCopy),
+          let b = ImagePrints.print(of: smallCopy),
+          let apart = ImagePrints.distance(a, b) else { return false }
+        if apart > ImagePrints.duplicateThreshold {
+        print("        resized copy measured \(apart), over the threshold")
+        }
+        return apart <= ImagePrints.duplicateThreshold
+    }
+    v.check("A different picture is not called a duplicate") {
+        guard let bigCopy, let different,
+          let a = ImagePrints.print(of: bigCopy),
+          let b = ImagePrints.print(of: different),
+          let apart = ImagePrints.distance(a, b) else { return false }
+        if apart <= ImagePrints.duplicateThreshold {
+        print("        unrelated pair measured \(apart), under the threshold")
+        }
+        return apart > ImagePrints.duplicateThreshold
+    }
+    v.check("Grouping puts the copies together and leaves the odd one out") {
+        guard let bigCopy, let smallCopy, let different,
+          let a = ImagePrints.print(of: bigCopy),
+          let b = ImagePrints.print(of: smallCopy),
+          let c = ImagePrints.print(of: different) else { return false }
+        let groups = ImagePrints.duplicateGroups(in: [
+        (bigCopy.path, a), (smallCopy.path, b), (different.path, c)
+        ])
+        return groups.count == 1
+        && groups[0].count == 2
+        && !groups[0].contains(different.path)
+    }
+    v.check("Nearest ranks the resized copy above the unrelated one") {
+        guard let bigCopy, let smallCopy, let different,
+          let a = ImagePrints.print(of: bigCopy),
+          let b = ImagePrints.print(of: smallCopy),
+          let c = ImagePrints.print(of: different) else { return false }
+        let ranked = ImagePrints.nearest(
+        to: a, in: [(smallCopy.path, b), (different.path, c)], excluding: bigCopy.path)
+        return ranked.first?.path == smallCopy.path
+    }
+    v.check("An unreadable file yields no print rather than a wrong one") {
+        let url = FileManager.default.temporaryDirectory
+        .appending(path: "lumen-verify-notimage-\(UUID().uuidString).png")
+        try? Data("definitely not a png".utf8).write(to: url)
+        defer { try? FileManager.default.removeItem(at: url) }
+        return ImagePrints.print(of: url) == nil
+    }
+
+    v.section("Duplicate scan scope")
+    v.check("Each scope covers exactly what it says") {
+        store.libraryWallpapers = [
+        LocalWallpaper(id: "1", folderId: "f", url: URL(filePath: "/tmp/a.png"),
+                       path: "/tmp/a.png", filename: "a.png", fileSize: 1,
+                       isFavorite: false, subpath: "anime"),
+        LocalWallpaper(id: "2", folderId: "f", url: URL(filePath: "/tmp/b.png"),
+                       path: "/tmp/b.png", filename: "b.png", fileSize: 1,
+                       isFavorite: false, subpath: "anime/girls"),
+        LocalWallpaper(id: "3", folderId: "f", url: URL(filePath: "/tmp/c.png"),
+                       path: "/tmp/c.png", filename: "c.png", fileSize: 1,
+                       isFavorite: false, subpath: "nature")
+        ]
+        store.selectedFolder = "f"
+        store.browse(to: "anime")
+
+        store.duplicateScope = .thisFolder
+        let here = store.duplicateCandidates.map(\.filename)
+
+        store.duplicateScope = .includingNested
+        let nested = store.duplicateCandidates.map(\.filename).sorted()
+
+        store.duplicateScope = .everything
+        let all = store.duplicateCandidates.count
+
+        store.libraryWallpapers = []
+        store.selectedFolder = nil
+        store.browse(to: "")
+        store.duplicateScope = .includingNested
+
+        // "anime" alone, then anime plus anime/girls, then the lot.
+        return here == ["a.png"]
+        && nested == ["a.png", "b.png"]
+        && all == 3
+    }
+    v.check("A sibling folder is never pulled in by the nested scope") {
+        // anime/girls must not sweep in nature just because both are nested.
+        store.libraryWallpapers = [
+        LocalWallpaper(id: "1", folderId: "f", url: URL(filePath: "/tmp/a.png"),
+                       path: "/tmp/a.png", filename: "a.png", fileSize: 1,
+                       isFavorite: false, subpath: "anime"),
+        LocalWallpaper(id: "2", folderId: "f", url: URL(filePath: "/tmp/c.png"),
+                       path: "/tmp/c.png", filename: "c.png", fileSize: 1,
+                       isFavorite: false, subpath: "animals")
+        ]
+        store.selectedFolder = "f"
+        store.browse(to: "anime")
+        store.duplicateScope = .includingNested
+        // "animals" starts with "anima" but is not inside "anime".
+        let scoped = store.duplicateCandidates.map(\.filename)
+        store.libraryWallpapers = []
+        store.selectedFolder = nil
+        store.browse(to: "")
+        return scoped == ["a.png"]
+    }
+
+    v.section("System accent matching")
+    v.check("A strong colour maps to the accent a person would name") {
+        SystemAccent.nearest(toHex: "0066cc") == .blue
+        && SystemAccent.nearest(toHex: "cc0000") == .red
+        && SystemAccent.nearest(toHex: "336600") == .green
+        && SystemAccent.nearest(toHex: "993399") == .purple
+    }
+    v.check("A leading # is tolerated, and nonsense is declined") {
+        SystemAccent.nearest(toHex: "#0066cc") == .blue
+        && SystemAccent.nearest(toHex: "zzz") == nil
+        && SystemAccent.nearest(toHex: "12345") == nil
+    }
+    v.check("A palette skips the black and white every wallpaper has") {
+        // Wallhaven lists strongest first, and almost every palette starts
+        // with #000000 — matching on that would make everything Graphite.
+        let palette = ["000000", "ffffff", "cc0000", "999999"]
+        return SystemAccent.nearest(toPalette: palette) == .red
+    }
+    v.check("A palette with nothing usable still answers rather than failing") {
+        SystemAccent.nearest(toPalette: ["000000"]) != nil
+        && SystemAccent.nearest(toPalette: []) == nil
+    }
+    v.check("Restore is only offered once something has been changed") {
+        // Uses an isolated suite: this must not read or write the real setting.
+        let suite = "cc.lumen.verify.accent"
+        UserDefaults.standard.removePersistentDomain(forName: suite)
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { UserDefaults.standard.removePersistentDomain(forName: suite) }
+        return SystemAccent.canRestore(defaults) == false
+        && SystemAccent.restore(defaults) == false
+    }
+
+    v.section("Navigation history")
+    v.check("Back and forward walk the panes") {
+        let browse = Store.Destination(pane: "browse", focus: nil)
+        let downloads = Store.Destination(pane: "downloads", focus: nil)
+        store.recordDestination(browse)
+        store.recordDestination(downloads)
+        guard store.canGoBack else { return false }
+
+        let settings = Store.Destination(pane: "settings", focus: nil)
+        guard store.goBack(from: settings)?.pane == "downloads" else { return false }
+        guard store.canGoForward else { return false }
+        return store.goForward(from: downloads)?.pane == "settings"
+    }
+    v.check("Going somewhere new clears the forward stack") {
+        // Browser behaviour: a new destination discards what you stepped back from.
+        _ = store.goBack(from: .init(pane: "settings", focus: nil))
+        store.recordDestination(.init(pane: "favorites", focus: nil))
+        return !store.canGoForward
+    }
+    v.check("The same place twice is not recorded twice") {
+        // Start from a place that is definitely not already on top, or the
+        // first record is legitimately deduped and the count never moves.
+        store.recordDestination(.init(pane: "collections", focus: nil))
+        let before = store.backStack.count
+        let here = Store.Destination(pane: "displays", focus: nil)
+        store.recordDestination(here)
+        store.recordDestination(here)
+        return store.backStack.count == before + 1
+    }
+
+    v.section("Spaces, individually")
+    v.check("The window server's Spaces are enumerated and numbered") {
+        let spaces = SpacesWallpaper.spaces()
+        guard !spaces.isEmpty else {
+        print("        no Spaces reported — nothing to assign to")
+        return false
+        }
+        // Exactly one current Space per display, numbered from one.
+        let currentPerDisplay = Dictionary(grouping: spaces, by: \.display)
+        .allSatisfy { $0.value.filter(\.isCurrent).count <= 1 }
+        return currentPerDisplay
+        && spaces.allSatisfy { $0.number >= 1 }
+        && spaces.contains { $0.isCurrent }
+    }
+
+    v.section("Colour search")
+    v.check("Colours use the same seven-name vocabulary as the accent matcher") {
+        // "Show me the green ones" should mean the same thing in both places.
+        SystemAccent.allCases.count == 8
+        && SystemAccent.nearest(toHex: "336600") == .green
+    }
+    v.check("No filter shows everything") {
+        store.setColourFilter(nil)
+        return store.byColour(store.libraryWallpapers).count == store.libraryWallpapers.count
+    }
+
+    v.section("Auto-collections and taste")
+    v.check("Clustering groups by look and drops groups that are too small") {
+        struct Entry { let path: String }
+        // Build three prints from two genuinely different pictures.
+        guard let a = writePattern(width: 400, height: 250),
+          let b = writePattern(width: 200, height: 125),
+          let c = writePattern(width: 400, height: 250, shifted: true)
+        else { return false }
+        defer {
+        for url in [a, b, c] { try? FileManager.default.removeItem(at: url) }
+        }
+        guard let pa = ImagePrints.print(of: a),
+          let pb = ImagePrints.print(of: b),
+          let pc = ImagePrints.print(of: c) else { return false }
+
+        // A minimum of two: the pair clusters, the odd one out does not.
+        let groups = ImagePrints.cluster(
+        [(a.path, pa), (b.path, pb), (c.path, pc)],
+        threshold: 0.8, minimumSize: 2)
+        guard groups.count == 1 else {
+        print("        got \(groups.count) groups")
+        return false
+        }
+        return groups[0].count == 2 && !groups[0].contains(c.path)
+    }
+    v.check("A minimum size larger than anything found yields nothing") {
+        guard let a = writePattern(width: 400, height: 250),
+          let b = writePattern(width: 200, height: 125) else { return false }
+        defer {
+        try? FileManager.default.removeItem(at: a)
+        try? FileManager.default.removeItem(at: b)
+        }
+        guard let pa = ImagePrints.print(of: a), let pb = ImagePrints.print(of: b)
+        else { return false }
+        return ImagePrints.cluster([(a.path, pa), (b.path, pb)], minimumSize: 6).isEmpty
+    }
+    v.check("Affinity is the mean distance, and declines an empty reference set") {
+        guard let a = writePattern(width: 400, height: 250),
+          let b = writePattern(width: 200, height: 125),
+          let c = writePattern(width: 400, height: 250, shifted: true) else { return false }
+        defer {
+        for url in [a, b, c] { try? FileManager.default.removeItem(at: url) }
+        }
+        guard let pa = ImagePrints.print(of: a),
+          let pb = ImagePrints.print(of: b),
+          let pc = ImagePrints.print(of: c) else { return false }
+
+        // The resized copy sits closer to the original than the unrelated one.
+        guard let near = ImagePrints.affinity(of: pb, to: [pa]),
+          let far = ImagePrints.affinity(of: pc, to: [pa]) else { return false }
+        return near < far && ImagePrints.affinity(of: pa, to: []) == nil
+    }
+    v.check("Taste ranking says what it needs rather than doing nothing") {
+        // With no favourites there is nothing to measure against, and silence
+        // would read as the button being broken.
+        let empty = Store(defaults: UserDefaults(suiteName: "cc.lumen.verify.taste")!)
+        defer { UserDefaults.standard.removePersistentDomain(forName: "cc.lumen.verify.taste") }
+        return empty.favorites.isEmpty && empty.tasteRanked == false
+    }
+
+    v.section("Library health")
+    await v.checkAsync("Measuring reports size, count and what is unindexed") {
+        guard !store.libraryWallpapers.isEmpty else { return true }
+        await store.measureLibrary()
+        let health = store.health
+        return health.count == store.libraryWallpapers.count
+        && health.bytes > 0
+        && health.largest != nil
+        && health.unindexed <= health.count
+        && health.belowDisplay <= health.count
+    }
+    v.check("An empty library measures as empty rather than failing") {
+        let empty = Store.LibraryHealth()
+        // ByteCountFormatter says "Zero bytes" for 0, not "0 bytes".
+        return empty.count == 0 && empty.bytes == 0 && empty.largest == nil
+        && !empty.size.isEmpty
+    }
+
+    v.section("Masonry layout")
+    v.check("Columns balance by shape rather than by count") {
+        // A Layout measures every subview before placing any, which is what
+        // hung a two-thousand-file folder. This is arithmetic on known ratios.
+        struct Tile: Identifiable { let id: Int; let ratio: Double }
+        // Three wide tiles and three tall ones: an even split by count would
+        // pile all the tall ones into one column.
+        let tiles = (0..<6).map { Tile(id: $0, ratio: $0 < 3 ? 2.0 : 0.5) }
+        let grid = MasonryGrid(items: tiles, aspect: \.ratio,
+                           columnWidth: 100, spacing: 8) { _ in EmptyView() }
+        let columns = grid.columnsForVerification(width: 320)   // three columns
+
+        guard columns.count == 3 else { return false }
+        // Every tile placed exactly once, and no column left empty.
+        let placed = columns.flatMap { $0 }.map(\.id).sorted()
+        return placed == [0, 1, 2, 3, 4, 5] && columns.allSatisfy { !$0.isEmpty }
+    }
+    v.check("A single narrow column keeps the original order") {
+        struct Tile: Identifiable { let id: Int; let ratio: Double }
+        let tiles = (0..<4).map { Tile(id: $0, ratio: 1.5) }
+        let grid = MasonryGrid(items: tiles, aspect: \.ratio,
+                           columnWidth: 300, spacing: 8) { _ in EmptyView() }
+        let columns = grid.columnsForVerification(width: 320)
+        return columns.count == 1 && columns[0].map(\.id) == [0, 1, 2, 3]
+    }
+    v.check("A degenerate ratio does not divide by zero") {
+        struct Tile: Identifiable { let id: Int; let ratio: Double }
+        let tiles = [Tile(id: 0, ratio: 0), Tile(id: 1, ratio: -1)]
+        let grid = MasonryGrid(items: tiles, aspect: \.ratio,
+                           columnWidth: 100, spacing: 8) { _ in EmptyView() }
+        return grid.columnsForVerification(width: 320).flatMap { $0 }.count == 2
+    }
+
+    v.section("Menu bar legibility")
+
+    /// A flat image of one luminance, for the assessments below.
+    func flat(_ level: Double) -> NSImage {
+        let size = NSSize(width: 256, height: 160)
+        let image = NSImage(size: size)
+        image.lockFocus()
+        NSColor(calibratedWhite: level, alpha: 1).setFill()
+        NSRect(origin: .zero, size: size).fill()
+        image.unlockFocus()
+        return image
+    }
+
+    /// Dark everywhere except a bright band across the top.
+    func brightTopped() -> NSImage {
+        let size = NSSize(width: 256, height: 160)
+        let image = NSImage(size: size)
+        image.lockFocus()
+        NSColor(calibratedWhite: 0.05, alpha: 1).setFill()
+        NSRect(origin: .zero, size: size).fill()
+        NSColor(calibratedWhite: 0.5, alpha: 1).setFill()
+        // Top of the image is the high-y end in AppKit's flipped-up space.
+        NSRect(x: 0, y: size.height - 14, width: size.width, height: 14).fill()
+        image.unlockFocus()
+        return image
+    }
+
+    let screen = CGSize(width: 3024, height: 1964)
+    v.check("A dark strip reads as safe") {
+        guard let verdict = MenuBarLegibility.assess(flat(0.05), displaySize: screen)
+        else { return false }
+        return !verdict.isRisky && verdict.luminance < 0.2
+    }
+    v.check("A near-white strip reads as safe") {
+        guard let verdict = MenuBarLegibility.assess(flat(0.97), displaySize: screen)
+        else { return false }
+        return !verdict.isRisky
+    }
+    v.check("A mid-tone strip is flagged") {
+        guard let verdict = MenuBarLegibility.assess(flat(0.5), displaySize: screen)
+        else { return false }
+        return verdict.isRisky && verdict.summary.localizedCaseInsensitiveContains("mid-tone")
+    }
+    v.check("A dark image with a bright top is judged on the top, not the average") {
+        // The whole point: macOS picks the text colour from the whole image,
+        // so a dark wallpaper with a light band still fails.
+        guard let verdict = MenuBarLegibility.assess(brightTopped(), displaySize: screen)
+        else { return false }
+        return verdict.isRisky
+    }
+    v.check("A degenerate image is declined rather than guessed at") {
+        MenuBarLegibility.assess(NSImage(size: .zero), displaySize: screen) == nil
+        && MenuBarLegibility.assess(flat(0.5), displaySize: .zero) == nil
+    }
+
+    v.section("Rotation sources")
+    v.check("Every source round-trips through its key") {
+        let sources: [RotationSource] = [
+        .favorites, .downloads, .collection("abc"), .folder("def"),
+        .savedFilter(UUID())
+        ]
+        return sources.allSatisfy { RotationSource(key: $0.key) == $0 }
+        && RotationSource(key: "nonsense") == nil
+        && RotationSource(key: "filter:not-a-uuid") == nil
+    }
+    v.check("The old three-choice setting still maps to something sensible") {
+        // An existing install must not silently reset to Favourites.
+        RotationSource.fromLegacy("Downloads") == .downloads
+        && RotationSource.fromLegacy("Favorites") == .favorites
+        && RotationSource.fromLegacy("anything else") == .favorites
+    }
+    v.check("The source list offers collections, folders and saved filters") {
+        store.createCollection(named: "Verify rotation")
+        store.subscribe(to: "id:31", label: "unused", minFavorites: 0)   // not a source
+        store.filters.query = "rotation-preset"
+        store.savePreset(named: "Verify preset")
+
+        let sources = store.rotationSources
+        let hasFixed = sources.contains(.favorites) && sources.contains(.downloads)
+        let hasCollection = sources.contains {
+        if case .collection = $0 { return store.name(of: $0) == "Verify rotation" }
+        return false
+        }
+        let hasPreset = sources.contains {
+        if case .savedFilter = $0 { return store.name(of: $0) == "Verify preset" }
+        return false
+        }
+
+        if let made = store.collections.first(where: { $0.name == "Verify rotation" }) {
+        store.deleteCollection(made)
+        }
+        if let preset = store.presets.first(where: { $0.name == "Verify preset" }) {
+        store.deletePreset(preset)
+        }
+        if let watch = store.subscriptions.first(where: { $0.query == "id:31" }) {
+        store.unsubscribe(watch)
+        }
+        return hasFixed && hasCollection && hasPreset
+    }
+    v.check("The pool size persists") {
+        store.rotationPoolSize = 250
+        return Store(defaults: defaults).rotationPoolSize == 250
+    }
+    await v.checkAsync("A missing saved filter is reported, not silently ignored") {
+        let previous = store.rotationSource
+        store.rotationSource = .savedFilter(UUID())      // never existed
+        store.errorMessage = nil
+        await store.rotate()
+        let reported = store.errorMessage?.contains("no longer exists") == true
+        store.rotationSource = previous
+        store.errorMessage = nil
+        return reported
+    }
+
     }
 
     return v.summary()

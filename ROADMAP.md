@@ -190,10 +190,3 @@ clusters are accepted or rejected.
   surface.
 
 ---
-
-## Retiring the iced front end
-
-`src/` still holds the iced app and still compiles. It is not built into the
-bundle and has no path to one. Delete it once Lumen has run for a couple of
-weeks without a reason to fall back — at that point `Cargo.toml`'s root
-`[package]` and its `iced` dependency go with it.

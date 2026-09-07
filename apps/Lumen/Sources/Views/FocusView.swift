@@ -20,6 +20,8 @@ struct FocusView: View {
             VStack(alignment: .leading, spacing: Tokens.s4) {
                 header
 
+                if let stats = store.uploaderStats { uploaderStats(stats) }
+
                 if case .uploader(let name) = store.focus, !store.uploaderCollections.isEmpty {
                     collections(of: name)
                 }
@@ -128,6 +130,33 @@ struct FocusView: View {
         case .uploader: return "Uploader · \(counted)"
         case .tag: return "Tag · \(counted)"
         case .uploaderCollection(let username, _): return "\(username)'s collection · \(counted)"
+        }
+    }
+
+    /// What can be said about an uploader from their uploads.
+    ///
+    /// Wallhaven has no profile endpoint, so the counts below are derived and
+    /// the wording says which are complete and which are only over what has
+    /// loaded so far.
+    private func uploaderStats(_ stats: Store.UploaderStats) -> some View {
+        HStack(spacing: Tokens.s5) {
+            stat("\(stats.uploads)", "uploads")
+            stat(stats.views.formatted(), "views · first \(stats.loaded)")
+            stat(stats.favorites.formatted(), "favorites · first \(stats.loaded)")
+            stat("\(stats.averageFavorites)", "average per wallpaper")
+            Spacer()
+        }
+        .padding(Tokens.s3)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .card()
+        .help("Wallhaven publishes no profile, so these come from the uploads "
+              + "themselves — totals are across what has loaded, not everything.")
+    }
+
+    private func stat(_ value: String, _ label: String) -> some View {
+        VStack(alignment: .leading, spacing: 1) {
+            Text(value).font(.system(size: 14, weight: .medium))
+            Text(label).font(.system(size: 10.5)).foregroundStyle(.secondary).lineLimit(1)
         }
     }
 

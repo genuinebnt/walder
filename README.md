@@ -56,8 +56,10 @@ Both must pass before a change is done.
 
 ```sh
 node tools/uidiff/uidiff.js      # or: node tools/uidiff/uidiff.js Browse
-./tools/verify/run.sh
+./tools/verify/run.sh --fast     # skips everything that needs Wallhaven
+./tools/verify/run.sh            # the one that must pass before committing
 cargo test --workspace
+cargo +nightly miri test -p lumen-ffi   # the C string boundary
 ```
 
 **uidiff** compares the shipped app against the design it ports — every
@@ -96,8 +98,3 @@ to `~/Pictures/Lumen`.
 Renders every `.iconset` size from `tools/icon/make-icon.swift` and runs
 `iconutil`. The artwork is code, so it is worth editing there rather than
 replacing the `.icns`.
-
-## The iced app
-
-`src/` still holds the previous iced front end and still compiles, but is not
-built into the bundle. See `ROADMAP.md` for when it goes.

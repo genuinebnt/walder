@@ -69,31 +69,3 @@ lumen-downloader = { path = "crates/lumen-downloader" }
 lumen-setter = { path = "crates/lumen-setter" }
 lumen-db = { path = "crates/lumen-db" }
 lumen-scheduler = { path = "crates/lumen-scheduler" }
-
-[package]
-name = "walder"
-version.workspace = true
-edition.workspace = true
-
-[dependencies]
-lumen-core.workspace = true
-lumen-provider.workspace = true
-lumen-downloader.workspace = true
-lumen-setter.workspace = true
-lumen-db.workspace = true
-lumen-scheduler.workspace = true
-
-iced = { version = "0.13", features = ["tokio", "image", "lazy"] }
-tokio.workspace = true
-tracing.workspace = true
-tracing-subscriber.workspace = true
-serde.workspace = true
-serde_json.workspace = true
-anyhow.workspace = true
-directories.workspace = true
-image.workspace = true
-chrono.workspace = true
-uuid.workspace = true
-futures.workspace = true
-bytes.workspace = true
-reqwest.workspace = true

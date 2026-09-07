@@ -2450,6 +2450,30 @@ final class Store {
         }
     }
 
+    /// What can honestly be said about an uploader.
+    ///
+    /// Wallhaven has no profile endpoint — no join date, no follower count — so
+    /// this is derived from their uploads: how many there are, and the views
+    /// and favourites across the ones actually loaded. Labelled as such rather
+    /// than presented as a complete profile.
+    struct UploaderStats {
+        var uploads: Int
+        var loaded: Int
+        var views: Int
+        var favorites: Int
+
+        var averageFavorites: Int { loaded > 0 ? favorites / loaded : 0 }
+    }
+
+    var uploaderStats: UploaderStats? {
+        guard case .uploader = focus, !focusWallpapers.isEmpty else { return nil }
+        return UploaderStats(
+            uploads: focusTotal,
+            loaded: focusWallpapers.count,
+            views: focusWallpapers.reduce(0) { $0 + $1.views },
+            favorites: focusWallpapers.reduce(0) { $0 + $1.favorites })
+    }
+
     @MainActor
     func closeFocus() {
         withAnimation(Tokens.normal) {
