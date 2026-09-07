@@ -1211,6 +1211,139 @@ final class Store {
         setMembership(wallpaper, of: collection, member: true)
     }
 
+    // MARK: Semantic search
+    //
+    // Describing what you want, rather than naming it. Tags only cover what
+    // Wallhaven happened to label; this covers the rest, and works on folders
+    // of your own images that have no tags at all.
+
+    /// Results for the current description, best first.
+    var semanticResults: [LocalWallpaper] = []
+    var isSemanticIndexing = false
+    var semanticProgress = (done: 0, total: 0)
+    /// Set when the model is missing or failed, so the UI can say why.
+    var semanticUnavailable: String?
+
+    /// How many of the library's files have an embedding.
+    var semanticCoverage: (done: Int, total: Int) {
+        (embeddedCount, libraryWallpapers.count)
+    }
+
+    @ObservationIgnored private var embeddedCount = 0
+    /// Vectors held in memory once loaded: 3,900 x 512 floats is eight
+    /// megabytes, and reloading them per query would be the slowest part.
+    @ObservationIgnored private var semanticVectors: [(path: String, vector: [Float])] = []
+
+    @MainActor
+    func prepareSemanticIndex() async {
+        await SemanticIndex.shared.load()
+        semanticUnavailable = SemanticIndex.shared.unavailableReason
+        loadSemanticVectors()
+    }
+
+    private func loadSemanticVectors() {
+        let stored = LumenCore.shared.allEmbeddings(model: SemanticIndex.modelIdentifier)
+        semanticVectors = stored.compactMap { entry in
+            guard let data = Data(base64Encoded: entry.embedding),
+                  let vector = SemanticIndex.decode(data) else { return nil }
+            return (entry.path, vector)
+        }
+        embeddedCount = semanticVectors.count
+    }
+
+    /// Embeds everything in the library that has not been embedded yet.
+    ///
+    /// Resumable by construction — only what is missing is computed — because
+    /// at roughly forty milliseconds an image a full library is minutes, and
+    /// that is not something to start over after a quit.
+    @MainActor
+    func buildSemanticIndex() async {
+        await SemanticIndex.shared.load()
+        guard SemanticIndex.shared.isReady else {
+            semanticUnavailable = SemanticIndex.shared.unavailableReason
+            return
+        }
+        semanticUnavailable = nil
+
+        let known = LumenCore.shared.embeddedPaths(model: SemanticIndex.modelIdentifier)
+        let pending = libraryWallpapers.filter { !known.contains($0.path) }
+        guard !pending.isEmpty else {
+            loadSemanticVectors()
+            return
+        }
+
+        isSemanticIndexing = true
+        semanticProgress = (0, pending.count)
+        defer {
+            isSemanticIndexing = false
+            semanticProgress = (0, 0)
+        }
+
+        // Written in batches so an interrupted run keeps most of its work, and
+        // so the progress the user sees is real rather than a spinner.
+        var batch: [(path: String, data: Data, fileSize: Int)] = []
+        for (index, file) in pending.enumerated() {
+            if Task.isCancelled { break }
+            if let vector = SemanticIndex.shared.embed(imageAt: file.url) {
+                batch.append((file.path, SemanticIndex.encode(vector), file.fileSize))
+            }
+            if batch.count >= 64 {
+                _ = LumenCore.shared.storeEmbeddings(batch,
+                                                     model: SemanticIndex.modelIdentifier)
+                batch.removeAll(keepingCapacity: true)
+            }
+            semanticProgress = (index + 1, pending.count)
+            // Yield so the grid keeps drawing during a run of several minutes.
+            await Task.yield()
+        }
+        if !batch.isEmpty {
+            _ = LumenCore.shared.storeEmbeddings(batch, model: SemanticIndex.modelIdentifier)
+        }
+        loadSemanticVectors()
+    }
+
+    /// Finds library wallpapers matching a description.
+    @MainActor
+    func searchSemantically(_ description: String) async {
+        let query = description.trimmingCharacters(in: .whitespaces)
+        guard !query.isEmpty else {
+            semanticResults = []
+            return
+        }
+        await SemanticIndex.shared.load()
+        guard SemanticIndex.shared.isReady else {
+            semanticUnavailable = SemanticIndex.shared.unavailableReason
+            return
+        }
+        if semanticVectors.isEmpty { loadSemanticVectors() }
+        guard !semanticVectors.isEmpty else {
+            semanticUnavailable = "Nothing indexed yet — run Build Index first."
+            return
+        }
+        semanticUnavailable = nil
+
+        guard let wanted = SemanticIndex.shared.embed(text: query) else { return }
+        let vectors = semanticVectors
+        let ranked = await Task.detached(priority: .userInitiated) {
+            vectors
+                .map { ($0.path, SemanticIndex.similarity(wanted, $0.vector)) }
+                .sorted { $0.1 > $1.1 }
+                .prefix(96)
+                .map(\.0)
+        }.value
+
+        let unique = collapsingDuplicates(ranked, limit: 36)
+        let byPath = Dictionary(uniqueKeysWithValues: libraryWallpapers.map { ($0.path, $0) })
+        withAnimation(Tokens.normal) {
+            semanticResults = unique.compactMap { byPath[$0] }
+        }
+    }
+
+    @MainActor
+    func clearSemanticResults() {
+        withAnimation(Tokens.normal) { semanticResults = [] }
+    }
+
     // MARK: Discover
 
     /// Wallpapers of your own worth another look.

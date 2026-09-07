@@ -188,6 +188,12 @@ final class LumenCore: @unchecked Sendable {
         let print: String
     }
 
+    struct StoredEmbedding: Decodable {
+        let path: String
+        /// Base64 of the raw float32s.
+        let embedding: String
+    }
+
     @discardableResult
     func storePrints(_ entries: [(path: String, data: Data, fileSize: Int)]) -> Int {
         guard !entries.isEmpty else { return 0 }
@@ -197,6 +203,42 @@ final class LumenCore: @unchecked Sendable {
         let reply = Self.takeString(lumen_prints_store(Self.json(["prints": payload])))
         struct Stored: Decodable { let stored: Int }
         return decodeSync(Stored.self, reply)?.stored ?? 0
+    }
+
+    // ── semantic embeddings ───────────────────────────────────────────────
+    //
+    // Same shape as the prints above, keyed by model so a change of model
+    // cannot mix two incompatible vector spaces in one result.
+
+    func storeEmbeddings(_ entries: [(path: String, data: Data, fileSize: Int)],
+                         model: String) -> Int {
+        guard !entries.isEmpty else { return 0 }
+        let payload = entries.map {
+            ["path": $0.path, "embedding": $0.data.base64EncodedString(), "fileSize": $0.fileSize]
+        }
+        let reply = Self.takeString(
+            lumen_embeddings_store(Self.json(["model": model, "embeddings": payload])))
+        struct Stored: Decodable { let stored: Int }
+        return decodeSync(Stored.self, reply)?.stored ?? 0
+    }
+
+    func allEmbeddings(model: String) -> [StoredEmbedding] {
+        model.withCString {
+            decodeSync([StoredEmbedding].self, Self.takeString(lumen_embeddings_all($0))) ?? []
+        }
+    }
+
+    func embeddedPaths(model: String) -> Set<String> {
+        model.withCString {
+            Set(decodeSync([String].self, Self.takeString(lumen_embeddings_known($0))) ?? [])
+        }
+    }
+
+    @discardableResult
+    func pruneEmbeddings() -> Int {
+        let reply = Self.takeString(lumen_embeddings_prune())
+        struct Removed: Decodable { let removed: Int }
+        return decodeSync(Removed.self, reply)?.removed ?? 0
     }
 
     func allPrints() -> [StoredPrint] {

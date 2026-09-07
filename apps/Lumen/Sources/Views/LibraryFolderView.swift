@@ -15,6 +15,9 @@ struct LibraryFolderView: View {
     private var items: [LocalWallpaper] { store.libraryWallpapers }
     private var theme: GridTheme { store.gridTheme }
 
+    /// What was last described, kept so the results header can quote it.
+    @State private var described = ""
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: Tokens.s4) {
@@ -26,6 +29,9 @@ struct LibraryFolderView: View {
                 } else if !store.duplicateGroups.isEmpty {
                     resultsHeader("Possible duplicates")
                     duplicates
+                } else if !store.semanticResults.isEmpty {
+                    resultsHeader("“\(described)”")
+                    semanticGrid
                 } else if !store.discoveries.isEmpty {
                     resultsHeader("Discover")
                     discoveries
@@ -124,6 +130,8 @@ struct LibraryFolderView: View {
                 .disabled(store.duplicateCandidates.isEmpty || store.isClustering)
                 .help("Groups the library by what things look like. Names are a "
                       + "guess from the folder — a print knows appearance, not subject.")
+
+                describeField
 
                 Button {
                     Task { await store.discover() }
@@ -427,6 +435,7 @@ struct LibraryFolderView: View {
                 store.clearSimilarity()
                 store.clearProposals()
                 store.clearDiscoveries()
+                store.clearSemanticResults()
             } label: {
                 Label("All Wallpapers", systemImage: "chevron.left")
                     .font(.system(size: 12, weight: .medium))
@@ -437,6 +446,53 @@ struct LibraryFolderView: View {
 
             Text(title).font(.system(size: 15, weight: .semibold))
             Spacer()
+        }
+    }
+
+    /// Search the library by describing it rather than naming it.
+    ///
+    /// Only offered when the model is installed: it is a large download that
+    /// cannot be redistributed, so a fresh checkout will not have it and the
+    /// control would otherwise be a button that always fails.
+    @ViewBuilder
+    private var describeField: some View {
+        if SemanticIndex.isInstalled {
+            HStack(spacing: 4) {
+                Image(systemName: "text.magnifyingglass")
+                    .foregroundStyle(.secondary).font(.system(size: 11))
+                TextField("Describe it…", text: $described)
+                    .textFieldStyle(.plain)
+                    .frame(width: 150)
+                    .onSubmit {
+                        Task { await store.searchSemantically(described) }
+                    }
+                    .help("Finds by what is in the picture — \"a city at night\" — "
+                          + "rather than by filename or tag.")
+                if store.isSemanticIndexing {
+                    Text("\(store.semanticProgress.done)/\(store.semanticProgress.total)")
+                        .font(.caption2Mono).foregroundStyle(.secondary)
+                } else if store.semanticCoverage.done < store.semanticCoverage.total {
+                    Button("Build Index") {
+                        Task { await store.buildSemanticIndex() }
+                    }
+                    .controlSize(.small)
+                    .help("\(store.semanticCoverage.done) of \(store.semanticCoverage.total) "
+                          + "wallpapers are indexed. About 40ms each; safe to interrupt.")
+                }
+            }
+            .padding(.horizontal, 8).padding(.vertical, 3)
+            .background(.quaternary.opacity(0.35), in: .capsule)
+        }
+    }
+
+    /// What matched a description.
+    private var semanticGrid: some View {
+        VStack(alignment: .leading, spacing: Tokens.s2) {
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: theme.minTileWidth),
+                                         spacing: theme.spacing)],
+                      spacing: theme.spacing) {
+                ForEach(store.semanticResults) { tile($0) }
+            }
         }
     }
 
@@ -469,6 +525,7 @@ struct LibraryFolderView: View {
     /// What the preview steps through: whatever this pane is showing.
     private var visibleItems: [LocalWallpaper] {
         if !store.duplicateGroups.isEmpty { return store.duplicateGroups.flatMap { $0 } }
+        if !store.semanticResults.isEmpty { return store.semanticResults }
         if !store.discoveries.isEmpty { return store.discoveries }
         if !store.similarToSelection.isEmpty { return store.similarToSelection }
         return store.currentFiles

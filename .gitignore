@@ -2,3 +2,10 @@
 /dist
 /build
 .DS_Store
+
+# MobileCLIP weights, fetched to Application Support rather than committed.
+# Apple licenses them for research use only, so they are not redistributable;
+# tools/fetch-model.sh puts them where the app looks. See README.
+Models/
+*.mlpackage
+*.mlmodelc

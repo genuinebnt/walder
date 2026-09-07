@@ -104,6 +104,26 @@ finder all depend on frameworks that need a running app, so they stay in the app
 
 ---
 
+## Semantic search
+
+Feature prints know what an image *looks like*. They cannot connect a picture to
+a word, so "a city at night" is not a question they can be asked. MobileCLIP can:
+images and text land in one space, and searching is a dot product.
+
+```sh
+./tools/fetch-model.sh     # ~103 MB into Application Support, not the repo
+```
+
+Then open Folders, press **Build Index** — roughly 40 ms a wallpaper, resumable
+— and type into **Describe it…**.
+
+**The model is deliberately not part of this repository.** Apple releases
+MobileCLIP's weights under a licence limited to research purposes, which
+excludes product development and commercial use, so they cannot be
+redistributed. The fetch script puts them in Application Support and
+`.gitignore` keeps them out; the app hides the feature when they are absent. The
+CLIP vocabulary and merge list are OpenAI's, under the MIT licence.
+
 ## Configuration
 
 An API key is optional; without one Wallhaven allows 45 requests a minute and

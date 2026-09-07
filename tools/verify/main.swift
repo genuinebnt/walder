@@ -660,6 +660,89 @@ func run() async -> Int32 {
         return await store.alreadyInLibrary(wallpaper) == nil
     }
 
+    v.section("Semantic search")
+    v.check("The CLIP tokenizer matches known token ids") {
+        // A tokenizer that is subtly wrong yields ids that are individually
+        // valid and collectively meaningless, so this pins it to sequences
+        // published for OpenAI's CLIP rather than to itself.
+        guard SemanticIndex.isInstalled,
+              let tokenizer = try? CLIPTokenizer.standard(in: SemanticIndex.modelDirectory)
+        else { return true }
+
+        let cases: [(String, [Int32])] = [
+            ("a photo of a cat", [49406, 320, 1125, 539, 320, 2368, 49407]),
+            ("samurai", [49406, 21739, 49407]),
+            ("moody city at night", [49406, 17170, 1305, 536, 930, 49407]),
+        ]
+        for (text, expected) in cases {
+            let got = tokenizer.encode(text)
+            guard Array(got.prefix(expected.count)) == expected else {
+                print("        \(text): expected \(expected), got \(Array(got.prefix(expected.count)))")
+                return false
+            }
+            guard got.count == CLIPTokenizer.contextLength,
+                  got.dropFirst(expected.count).allSatisfy({ $0 == 0 }) else { return false }
+        }
+        return true
+    }
+    v.check("Over-long text is truncated, not rejected") {
+        guard SemanticIndex.isInstalled,
+              let tokenizer = try? CLIPTokenizer.standard(in: SemanticIndex.modelDirectory)
+        else { return true }
+        let long = String(repeating: "wallpaper ", count: 200)
+        let tokens = tokenizer.encode(long)
+        // Exactly the context length, and still terminated properly.
+        return tokens.count == CLIPTokenizer.contextLength
+            && tokens.last != 0
+    }
+    v.check("An embedding survives the round trip to storage") {
+        let vector = (0..<SemanticIndex.dimensions).map { Float($0) * 0.001 }
+        guard let back = SemanticIndex.decode(SemanticIndex.encode(vector)) else { return false }
+        return back == vector
+    }
+    v.check("A wrongly sized blob is refused rather than misread") {
+        // A row written by a different model would otherwise be read as
+        // garbage coordinates in the wrong space.
+        return SemanticIndex.decode(Data([1, 2, 3])) == nil
+    }
+    v.check("Normalising gives unit length, and similarity behaves") {
+        let a = SemanticIndex.normalised([3, 4] + [Float](repeating: 0, count: 6))
+        let magnitude = sqrt(a.reduce(0) { $0 + $1 * $1 })
+        guard abs(magnitude - 1) < 0.0001 else { return false }
+        // Identical vectors score 1; orthogonal ones score 0.
+        let b = SemanticIndex.normalised([0, 0, 1] + [Float](repeating: 0, count: 5))
+        return abs(SemanticIndex.similarity(a, a) - 1) < 0.0001
+            && abs(SemanticIndex.similarity(a, b)) < 0.0001
+    }
+    v.check("A zero vector normalises without dividing by zero") {
+        let zero = [Float](repeating: 0, count: 8)
+        return SemanticIndex.normalised(zero) == zero
+    }
+    v.check("Embeddings are stored against the model that made them") {
+        // Mixing two models' vectors in one search would compare coordinates
+        // that mean different things.
+        let vector = (0..<SemanticIndex.dimensions).map { _ in Float.random(in: -1...1) }
+        let path = "/tmp/lumen-verify-embed-\(UUID().uuidString).jpg"
+        let stored = LumenCore.shared.storeEmbeddings(
+            [(path: path, data: SemanticIndex.encode(vector), fileSize: 1)],
+            model: "verify-model")
+        guard stored == 1 else { return false }
+
+        let mine = LumenCore.shared.embeddedPaths(model: "verify-model")
+        let other = LumenCore.shared.embeddedPaths(model: SemanticIndex.modelIdentifier)
+        defer { _ = LumenCore.shared.pruneEmbeddings() }
+        return mine.contains(path) && !other.contains(path)
+    }
+    v.check("Pruning drops embeddings whose file has gone") {
+        let path = "/tmp/lumen-verify-gone-\(UUID().uuidString).jpg"
+        _ = LumenCore.shared.storeEmbeddings(
+            [(path: path, data: SemanticIndex.encode(
+                [Float](repeating: 0.1, count: SemanticIndex.dimensions)), fileSize: 1)],
+            model: "verify-model")
+        _ = LumenCore.shared.pruneEmbeddings()
+        return !LumenCore.shared.embeddedPaths(model: "verify-model").contains(path)
+    }
+
     v.section("Similarity graph")
     // Synthetic vectors, so the properties are checked rather than guessed at
     // from whatever the library happens to hold. Two tight clusters joined by

@@ -56,6 +56,12 @@ char *lumen_crop_clear(const char *json);
 
 // Image feature prints
 char *lumen_prints_store(const char *json);
+
+// Semantic embeddings — what an image is of, rather than what it looks like.
+char *lumen_embeddings_store(const char *json);
+char *lumen_embeddings_all(const char *model);
+char *lumen_embeddings_known(const char *model);
+char *lumen_embeddings_prune(void);
 char *lumen_prints_all(void);
 char *lumen_prints_known(void);
 char *lumen_prints_prune(void);

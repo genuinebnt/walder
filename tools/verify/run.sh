@@ -33,6 +33,8 @@ swiftc -Onone \
     "$ROOT/apps/Lumen/Sources/Model/RadarNotifier.swift" \
     "$ROOT/apps/Lumen/Sources/Model/SystemAccent.swift" \
     "$ROOT/apps/Lumen/Sources/Model/ImagePrints.swift" \
+    "$ROOT/apps/Lumen/Sources/Model/CLIPTokenizer.swift" \
+    "$ROOT/apps/Lumen/Sources/Model/SemanticIndex.swift" \
     "$ROOT/apps/Lumen/Sources/Model/SimilarityGraph.swift" \
     "$ROOT/apps/Lumen/Sources/Model/ImageCache.swift" \
     "$ROOT/apps/Lumen/Sources/Views/PreviewPane.swift" \
@@ -40,7 +42,7 @@ swiftc -Onone \
     "$ROOT/apps/Lumen/Sources/Views/FiltersPopover.swift" \
     "$ROOT/tools/verify/main.swift" \
     -L "$ROOT/target/debug" -llumen_ffi \
-    -framework AppKit -framework SwiftUI -framework Combine \
+    -framework AppKit -framework SwiftUI -framework Combine -framework CoreML \
     -framework Security -framework SystemConfiguration -framework CoreFoundation \
     -framework IOKit \
     -lc++ -liconv

@@ -224,6 +224,18 @@ impl Database {
         // "find duplicates" and "similar in my library" possible without
         // shipping a model — Vision computes them, this only stores them.
         conn.execute(
+            "CREATE TABLE IF NOT EXISTS image_embeddings (
+                path TEXT PRIMARY KEY,
+                model TEXT NOT NULL,
+                embedding BLOB NOT NULL,
+                file_size INTEGER NOT NULL DEFAULT 0,
+                computed_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )",
+            [],
+        )
+        .map_err(|e| LumenError::Database(e.to_string()))?;
+
+        conn.execute(
             "CREATE TABLE IF NOT EXISTS image_prints (
                 path TEXT PRIMARY KEY,
                 print BLOB NOT NULL,
@@ -1786,6 +1798,104 @@ impl Database {
     }
 
     /// Every stored print, as `(path, blob)`.
+    /// Stores a semantic embedding for a file.
+    ///
+    /// Kept apart from `image_prints` rather than sharing a table: the two
+    /// describe different things — one what an image looks like, the other what
+    /// it is of — they have different lengths, and a model change should
+    /// invalidate one without touching the other.
+    pub fn store_embedding(
+        &self,
+        path: &str,
+        model: &str,
+        embedding: &[u8],
+        file_size: u64,
+    ) -> lumen_core::Result<()> {
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| LumenError::Database(e.to_string()))?;
+        conn.execute(
+            "INSERT INTO image_embeddings (path, model, embedding, file_size)
+             VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(path) DO UPDATE SET
+                model = excluded.model,
+                embedding = excluded.embedding,
+                file_size = excluded.file_size,
+                computed_at = CURRENT_TIMESTAMP",
+            (path, model, embedding, file_size as i64),
+        )
+        .map_err(|e| LumenError::Database(e.to_string()))?;
+        Ok(())
+    }
+
+    /// Every embedding made by `model`.
+    pub fn all_embeddings(&self, model: &str) -> lumen_core::Result<Vec<(String, Vec<u8>)>> {
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| LumenError::Database(e.to_string()))?;
+        let mut stmt = conn
+            .prepare("SELECT path, embedding FROM image_embeddings WHERE model = ?1")
+            .map_err(|e| LumenError::Database(e.to_string()))?;
+        let rows = stmt
+            .query_map([model], |row| Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?)))
+            .map_err(|e| LumenError::Database(e.to_string()))?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row.map_err(|e| LumenError::Database(e.to_string()))?);
+        }
+        Ok(out)
+    }
+
+    /// Which files `model` has already been run over, so a second pass only
+    /// does what is left.
+    pub fn embedded_paths(
+        &self,
+        model: &str,
+    ) -> lumen_core::Result<std::collections::HashSet<String>> {
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| LumenError::Database(e.to_string()))?;
+        let mut stmt = conn
+            .prepare("SELECT path FROM image_embeddings WHERE model = ?1")
+            .map_err(|e| LumenError::Database(e.to_string()))?;
+        let rows = stmt
+            .query_map([model], |row| row.get::<_, String>(0))
+            .map_err(|e| LumenError::Database(e.to_string()))?;
+        let mut out = std::collections::HashSet::new();
+        for row in rows {
+            out.insert(row.map_err(|e| LumenError::Database(e.to_string()))?);
+        }
+        Ok(out)
+    }
+
+    /// Drops embeddings whose file has gone.
+    pub fn prune_embeddings(&self) -> lumen_core::Result<usize> {
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| LumenError::Database(e.to_string()))?;
+        let mut stmt = conn
+            .prepare("SELECT path FROM image_embeddings")
+            .map_err(|e| LumenError::Database(e.to_string()))?;
+        let paths: Vec<String> = stmt
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(|e| LumenError::Database(e.to_string()))?
+            .filter_map(|r| r.ok())
+            .filter(|p| !std::path::Path::new(p).exists())
+            .collect();
+        drop(stmt);
+        let mut removed = 0;
+        for path in &paths {
+            removed += conn
+                .execute("DELETE FROM image_embeddings WHERE path = ?1", [path])
+                .map_err(|e| LumenError::Database(e.to_string()))?;
+        }
+        Ok(removed)
+    }
+
     pub fn all_prints(&self) -> lumen_core::Result<Vec<(String, Vec<u8>)>> {
         let conn = self
             .pool

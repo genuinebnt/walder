@@ -968,6 +968,104 @@ pub unsafe extern "C" fn lumen_crop_clear(json: *const c_char) -> *mut c_char {
 /// Returns `{ "stored": Int }`. Caller frees with [`lumen_string_free`].
 ///
 /// # Safety
+/// Stores semantic embeddings, which say what an image is *of* rather than what
+/// it looks like. Keyed by the model that produced them, so changing model
+/// invalidates the old set rather than mixing two incompatible spaces.
+///
+/// # Safety
+/// `json` must be NUL-terminated UTF-8, or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn lumen_embeddings_store(json: *const c_char) -> *mut c_char {
+    let raw = unsafe { str_from(json) };
+    let Some(core) = core() else {
+        return to_c(err_json("embeddings", "core not initialised"));
+    };
+    let value: serde_json::Value = serde_json::from_str(&raw).unwrap_or(serde_json::Value::Null);
+    let model = value["model"].as_str().unwrap_or_default().to_string();
+    let Some(entries) = value["embeddings"].as_array() else {
+        return to_c(err_json("embeddings", "embeddings are required"));
+    };
+    if model.is_empty() {
+        return to_c(err_json("embeddings", "model is required"));
+    }
+
+    let mut stored = 0;
+    for entry in entries {
+        let path = entry["path"].as_str().unwrap_or_default();
+        let encoded = entry["embedding"].as_str().unwrap_or_default();
+        let size = entry["fileSize"].as_u64().unwrap_or(0);
+        if path.is_empty() || encoded.is_empty() {
+            continue;
+        }
+        let Some(bytes) = decode_base64(encoded) else { continue };
+        if core.db.store_embedding(path, &model, &bytes, size).is_ok() {
+            stored += 1;
+        }
+    }
+    to_c(
+        serde_json::json!({ "ok": true, "kind": "embeddings", "data": { "stored": stored } })
+            .to_string(),
+    )
+}
+
+/// Every embedding for a model, base64 encoded.
+///
+/// # Safety
+/// `model` must be NUL-terminated UTF-8, or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn lumen_embeddings_all(model: *const c_char) -> *mut c_char {
+    let model = unsafe { str_from(model) };
+    let Some(core) = core() else {
+        return to_c(err_json("embeddings", "core not initialised"));
+    };
+    match core.db.all_embeddings(&model) {
+        Ok(rows) => {
+            let listed: Vec<_> = rows
+                .into_iter()
+                .map(|(path, bytes)| {
+                    serde_json::json!({ "path": path, "embedding": encode_base64(&bytes) })
+                })
+                .collect();
+            to_c(serde_json::to_string(&Envelope::ok("embeddings", listed)).unwrap_or_default())
+        }
+        Err(e) => to_c(err_json("embeddings", e)),
+    }
+}
+
+/// Which files a model has already covered, so a pass only does what is left.
+///
+/// # Safety
+/// `model` must be NUL-terminated UTF-8, or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn lumen_embeddings_known(model: *const c_char) -> *mut c_char {
+    let model = unsafe { str_from(model) };
+    let Some(core) = core() else {
+        return to_c(err_json("embeddings", "core not initialised"));
+    };
+    match core.db.embedded_paths(&model) {
+        Ok(paths) => {
+            let listed: Vec<_> = paths.into_iter().collect();
+            to_c(serde_json::to_string(&Envelope::ok("embeddings", listed)).unwrap_or_default())
+        }
+        Err(e) => to_c(err_json("embeddings", e)),
+    }
+}
+
+/// Drops embeddings whose file has gone.
+#[unsafe(no_mangle)]
+pub extern "C" fn lumen_embeddings_prune() -> *mut c_char {
+    let Some(core) = core() else {
+        return to_c(err_json("embeddings", "core not initialised"));
+    };
+    match core.db.prune_embeddings() {
+        Ok(removed) => to_c(
+            serde_json::json!({ "ok": true, "kind": "embeddings", "data": { "removed": removed } })
+                .to_string(),
+        ),
+        Err(e) => to_c(err_json("embeddings", e)),
+    }
+}
+
 /// `json` must be NUL-terminated UTF-8, or null.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lumen_prints_store(json: *const c_char) -> *mut c_char {
