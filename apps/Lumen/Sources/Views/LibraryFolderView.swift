@@ -44,6 +44,16 @@ struct LibraryFolderView: View {
             .padding(Tokens.s4)
         }
         .scrollContentBackground(.hidden)
+        // Space bar in a file browser is muscle memory.
+        .onKeyPress(.space) {
+            let files = visibleItems
+            guard !files.isEmpty else { return .ignored }
+            let start = hovered.flatMap { id in files.firstIndex { $0.id == id } } ?? 0
+            QuickLook.shared.show(files.map(\.url), startingAt: start)
+            return .handled
+        }
+        .focusable()
+        .focusEffectDisabled()
     }
 
     // MARK: Folders
@@ -111,6 +121,7 @@ struct LibraryFolderView: View {
                 }
 
                 layoutPicker
+                colourPicker
 
                 if store.isScanningLibrary || store.isIndexingPrints || store.isClustering {
                     ProgressView().controlSize(.small)
@@ -371,7 +382,7 @@ struct LibraryFolderView: View {
 
     private var grid: some View {
         // Only what is at this level; subfolders are their own tiles above.
-        let shown = store.currentFiles
+        let shown = store.byColour(store.currentFiles)
         return Group {
             if theme == .masonry {
                 // Masonry keeps each image's real shape, which is the layout
@@ -389,7 +400,32 @@ struct LibraryFolderView: View {
             }
         }
         .transaction { $0.animation = nil }
-        .task(id: shown.map(\.id)) { await store.loadAspectRatios(for: shown) }
+        .task(id: shown.map(\.id)) {
+            await store.loadAspectRatios(for: shown)
+            await store.loadColours(for: store.currentFiles)
+        }
+    }
+
+    /// Filter the library by dominant colour — the thing Wallhaven's search
+    /// offers but a folder of files never did.
+    private var colourPicker: some View {
+        Menu {
+            Button("Any colour") { store.setColourFilter(nil) }
+            Divider()
+            ForEach(SystemAccent.allCases, id: \.self) { accent in
+                Button(accent.label) { store.setColourFilter(accent) }
+            }
+        } label: {
+            HStack(spacing: 5) {
+                Circle()
+                    .fill(store.colourFilter?.color ?? Color.secondary.opacity(0.4))
+                    .frame(width: 10, height: 10)
+                Text(store.colourFilter?.label ?? "Colour")
+            }
+        }
+        .menuStyle(.button)
+        .fixedSize()
+        .disabled(store.isReadingColours && store.colourFilter == nil)
     }
 
     /// The layout picker, matching the one the Wallhaven grid has.
@@ -454,6 +490,9 @@ struct LibraryFolderView: View {
                 }
             }
             Divider()
+            Button("Quick Look") {
+                QuickLook.shared.show([wallpaper.url])
+            }
             Button("Find Similar in Library") {
                 Task { await store.findSimilarInLibrary(to: wallpaper) }
             }

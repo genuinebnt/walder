@@ -1,5 +1,6 @@
 import SwiftUI
 import Combine
+import UniformTypeIdentifiers
 
 enum Section: String, Hashable, CaseIterable, Identifiable {
     case browse, toplist, favorites, downloads, collections, folders, displays, schedule, settings
@@ -80,6 +81,24 @@ struct RootView: View {
         .toolbar(selection == nil && store.localPreview == nil && store.cropTarget == nil
                  ? .automatic : .hidden,
                  for: .windowToolbar)
+        // Drop a file or folder anywhere in the window to add it.
+        .onDrop(of: [.fileURL], isTargeted: nil) { providers in
+            Task {
+                var urls: [URL] = []
+                for provider in providers {
+                    guard let item = try? await provider.loadItem(
+                        forTypeIdentifier: "public.file-url") else { continue }
+                    if let data = item as? Data,
+                       let url = URL(dataRepresentation: data, relativeTo: nil) {
+                        urls.append(url)
+                    } else if let url = item as? URL {
+                        urls.append(url)
+                    }
+                }
+                await store.accept(urls)
+            }
+            return true
+        }
         // Previewing collapses the sidebar so a zoomed image gets the whole
         // window instead of running into it.
         .onChange(of: selection?.id) { _, id in

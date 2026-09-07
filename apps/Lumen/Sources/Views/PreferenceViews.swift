@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct ScheduleView: View {
     @Environment(Store.self) private var store
@@ -204,6 +205,18 @@ struct SettingsView: View {
                 }
             }
 
+            SwiftUI.Section("Backup") {
+                LabeledContent("Favorites, collections, filters and watches") {
+                    HStack(spacing: Tokens.s2) {
+                        Button("Export…") { exportBackup() }
+                        Button("Import…") { importBackup() }
+                    }
+                    .controlSize(.small)
+                }
+                .help("A JSON file carrying the records themselves, so a restore "
+                      + "works on a fresh install with an empty cache.")
+            }
+
             SwiftUI.Section {
                 HStack(spacing: Tokens.s3) {
                     Button("Save Preferences") { store.savePreferences() }
@@ -219,6 +232,23 @@ struct SettingsView: View {
         }
         .formStyle(.grouped)
         .scrollContentBackground(.hidden)
+    }
+
+    private func exportBackup() {
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = "Lumen backup.json"
+        panel.allowedContentTypes = [.json]
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        store.exportBackup(to: url)
+    }
+
+    private func importBackup() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowedContentTypes = [.json]
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        store.importBackup(from: url)
     }
 
     private func chooseDirectory() {

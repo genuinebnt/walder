@@ -803,6 +803,78 @@ pub unsafe extern "C" fn lumen_wallpapers_cached(json: *const c_char) -> *mut c_
     to_c(serde_json::to_string(&Envelope::ok("cached", found)).unwrap_or_default())
 }
 
+/// Caches wallpaper records, so a restored backup has rows for favourites and
+/// collection members to point at.
+///
+/// `json`: `{ "wallpapers": [WallpaperDto] }`
+///
+/// # Safety
+/// `json` must be NUL-terminated UTF-8, or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn lumen_wallpapers_cache(json: *const c_char) -> *mut c_char {
+    let raw = unsafe { str_from(json) };
+    let Some(core) = core() else {
+        return to_c(err_json("cache", "core not initialised"));
+    };
+    let value: serde_json::Value = serde_json::from_str(&raw).unwrap_or(serde_json::Value::Null);
+    let Some(entries) = value["wallpapers"].as_array() else {
+        return to_c(err_json("cache", "wallpapers are required"));
+    };
+
+    let mut stored = 0;
+    for entry in entries {
+        // The DTO is the Swift shape; rebuild the core record from it.
+        let Some(id) = entry["id"].as_str() else { continue };
+        let resolution = entry["resolution"].as_str().unwrap_or("0x0");
+        let (width, height) = resolution
+            .split_once('x')
+            .map(|(w, h)| (w.parse().unwrap_or(0), h.parse().unwrap_or(0)))
+            .unwrap_or((0, 0));
+
+        let wallpaper = Wallpaper {
+            id: id.to_string(),
+            provider: WallpaperProvider::Wallhaven,
+            url: entry["url"].as_str().unwrap_or_default().to_string(),
+            short_url: None,
+            full_url: entry["path"].as_str().unwrap_or_default().to_string(),
+            thumbnail_small: entry["thumb"].as_str().unwrap_or_default().to_string(),
+            thumbnail_large: entry["thumb"].as_str().unwrap_or_default().to_string(),
+            thumbnail_original: entry["thumb"].as_str().unwrap_or_default().to_string(),
+            uploader: entry["uploader"].as_str().map(str::to_string),
+            resolution: Resolution::new(width, height),
+            file_size: entry["fileSize"].as_u64().unwrap_or(0),
+            file_type: entry["fileType"].as_str().unwrap_or("image/jpeg").to_string(),
+            category: match entry["category"].as_str().unwrap_or("general") {
+                "anime" => Category::Anime,
+                "people" => Category::People,
+                _ => Category::General,
+            },
+            purity: match entry["purity"].as_str().unwrap_or("sfw") {
+                "sketchy" => Purity::Sketchy,
+                "nsfw" => Purity::Nsfw,
+                _ => Purity::Sfw,
+            },
+            colors: entry["colors"]
+                .as_array()
+                .map(|c| c.iter().filter_map(|v| v.as_str().map(str::to_string)).collect())
+                .unwrap_or_default(),
+            tags: Vec::new(),
+            source: None,
+            views: entry["views"].as_u64().unwrap_or(0),
+            favorites: entry["favorites"].as_u64().unwrap_or(0),
+            ratio: entry["ratio"].as_f64().unwrap_or(1.777),
+            created_at: None,
+        };
+        if core.db.cache_wallpaper(&wallpaper).is_ok() {
+            stored += 1;
+        }
+    }
+    to_c(
+        serde_json::json!({ "ok": true, "kind": "cache", "data": { "stored": stored } })
+            .to_string(),
+    )
+}
+
 // ── crop rectangles ───────────────────────────────────────────────────────
 
 /// Saves a crop for one file on one display.

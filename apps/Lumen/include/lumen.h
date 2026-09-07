@@ -47,6 +47,7 @@ char *lumen_collection_set_member(const char *json);
 
 // Cached records
 char *lumen_wallpapers_cached(const char *json);
+char *lumen_wallpapers_cache(const char *json);
 
 // Crop rectangles
 char *lumen_crop_save(const char *json);

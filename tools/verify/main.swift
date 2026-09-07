@@ -576,13 +576,25 @@ func run() async -> Int32 {
         guard !detailed.tags.isEmpty else { return true }
         return !detailed.tagRefs.isEmpty && detailed.tagRefs.allSatisfy { $0.id > 0 }
     }
-    v.check("Find Similar uses Wallhaven's own like: operator") {
+    await v.checkAsync("Find Similar uses Wallhaven's own like: operator") {
         // Approximating similarity from tags was worse than the operator the
         // API actually provides.
         guard let sample = store.wallpapers.first else { return true }
         store.findSimilar(to: sample)
-        return store.filters.query == "like:\(sample.id)"
+        let correct = store.filters.query == "like:\(sample.id)"
             && store.filters.sorting == .relevance
+
+        // findSimilar fires the search in a Task, so wait for it to land
+        // before restoring — otherwise the "like:" results, which can
+        // legitimately be empty, overwrite the restore a moment later.
+        for _ in 0..<60 {
+            try? await Task.sleep(for: .milliseconds(100))
+            if !store.isLoading && store.filters.query.hasPrefix("like:")
+                && (!store.wallpapers.isEmpty || store.errorMessage != nil) { break }
+        }
+        store.filters = SearchFilters()
+        await store.search()
+        return correct
     }
     await v.checkAPIAsync("A like: search returns wallpapers") { () -> (Bool, String?) in
         guard let sample = store.wallpapers.first else { return (true, nil) }
@@ -964,6 +976,68 @@ func run() async -> Int32 {
         WallpaperMetadata.write(
             tags: ["x"], source: nil, pageURL: nil,
             to: URL(filePath: "/tmp/not-here-\(UUID().uuidString).png")) == false
+    }
+
+    v.section("Backup")
+    await v.checkAsync("A backup round-trips favourites, collections and filters") {
+        // Restore adds rather than replaces, so this checks the contents
+        // survive rather than that the app is emptied first.
+        store.filters.query = "backup-preset"
+        store.savePreset(named: "Verify backup preset")
+        store.createCollection(named: "Verify backup collection")
+
+        let backup = store.makeBackup()
+        let url = FileManager.default.temporaryDirectory
+            .appending(path: "lumen-verify-backup-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: url) }
+        store.exportBackup(to: url)
+
+        guard FileManager.default.fileExists(atPath: url.path) else { return false }
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        guard let data = try? Data(contentsOf: url),
+              let read = try? decoder.decode(Store.Backup.self, from: data) else { return false }
+
+        let keptPreset = read.presets.contains { $0.name == "Verify backup preset" }
+        let keptCollection = read.collections.contains { $0.name == "Verify backup collection" }
+        let keptFavorites = read.favorites.count == backup.favorites.count
+
+        if let made = store.collections.first(where: { $0.name == "Verify backup collection" }) {
+            store.deleteCollection(made)
+        }
+        if let preset = store.presets.first(where: { $0.name == "Verify backup preset" }) {
+            store.deletePreset(preset)
+        }
+        return keptPreset && keptCollection && keptFavorites
+    }
+    v.check("Something that is not a backup is refused") {
+        let url = FileManager.default.temporaryDirectory
+            .appending(path: "lumen-verify-notabackup-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: url) }
+        try? Data("{\"nope\": true}".utf8).write(to: url)
+        store.errorMessage = nil
+        store.importBackup(from: url)
+        return store.errorMessage?.contains("not a Lumen backup") == true
+    }
+    v.check("A backup carries the records, not just the ids") {
+        // Restoring on a fresh install has an empty cache, so ids alone would
+        // restore nothing.
+        guard !store.favorites.isEmpty else { return true }
+        let backup = store.makeBackup()
+        return backup.favorites.first?.thumb.absoluteString.isEmpty == false
+    }
+
+    v.section("Colour search")
+    v.check("Colours use the same seven-name vocabulary as the accent matcher") {
+        // "Show me the green ones" should mean the same thing in both places.
+        SystemAccent.allCases.count == 8
+            && SystemAccent.nearest(toHex: "336600") == .green
+    }
+    v.check("No filter shows everything") {
+        store.setColourFilter(nil)
+        return store.byColour(store.libraryWallpapers).count == store.libraryWallpapers.count
     }
 
     v.section("Auto-collections and taste")
@@ -1904,6 +1978,15 @@ func run() async -> Int32 {
                 store.filters.query = "@someuser"
                 return (store.filters.wirePayload(page: 1)["query"] as? String) == "@someuser"
             }
+            // Several checks above start a search in a Task and do not wait for
+            // it; the last one to land decides what `wallpapers` holds. These
+            // assert properties of search results, so they establish their own.
+            store.filters = SearchFilters()
+            await store.search()
+            for _ in 0..<30 where store.wallpapers.isEmpty && store.errorMessage == nil {
+                try? await Task.sleep(for: .milliseconds(100))
+            }
+
             v.check("Results carry the uploader the inspector shows") {
                 // Not every wallpaper has one, but the field must decode.
                 store.wallpapers.contains { $0.uploader != nil } || !store.wallpapers.isEmpty

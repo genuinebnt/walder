@@ -86,23 +86,34 @@ lookups.
 
 ---
 
-## Agreed, not yet built
+## Agreed, and shipped
 
-Decided on 2026-09-07. In the order they are worth doing.
+All eleven items agreed on 2026-09-07 are built. Each carries the caveat it
+was accepted with:
 
-| Feature | What it is | Notes |
-| --- | --- | --- |
-| **Crop to fit my display** | A pan/zoom pass before setting, so a 21:9 image is not centre-cropped badly on a 16:10 screen. Saved per wallpaper *and per display*. | Storage, the crop-aware renderer and the contrast suggestion are done; the editor UI is not. |
-| **Contrast-aware crop** | When the menu bar would be illegible, offer the vertical offset that puts a calmer band under it. | `MenuBarLegibility.suggestedOffset` exists. Needs the crop editor to land first. |
-| **Bulk resolution rule** | Auto-skip results below the largest display's native resolution. | `WallpaperFitter.pixelSize` already reports it; mostly a filter and a toggle. |
-| **Library health** | Total size, largest files, how many sit below the display's resolution, duplicate count, what is unindexed. | Useful at a few thousand files. All the inputs exist. |
-| **Auto-collections** | Cluster the library with the stored Vision prints and propose collections to accept or reject. | Naming is by example, not by understanding — a print knows "these look alike", not what they are. |
-| **Taste-ranked browsing** | Print favourites, re-rank results by closeness to that centroid. | Only re-orders results already fetched; Wallhaven cannot be asked for "my taste", so it works within a page. |
-| **Drop to import** | Drag an image or a URL onto Lumen to add it to the library or set it. | Cheap; `NSItemProvider` both ways. |
-| **Rotation without repeats** | Shuffle can pick the same wallpaper twice; history makes avoiding the last N trivial. | Small. |
-| **Export / backup** | Favourites, collections and subscriptions as JSON, so a reinstall does not lose them. | Also the honest answer to "what if the database breaks". |
-| **Quick Look** | Space bar in the Folders pane. | `QLPreviewPanel`. |
-| **Colour search in the library** | Wallhaven can be filtered by colour; the local library cannot. | Needs a dominant-colour pass per file, which the print indexing could do in the same sweep. |
+- **Crop to fit** — pan and zoom before setting, stored per wallpaper *and*
+  per display. The menu-bar strip is drawn on the canvas.
+- **Contrast-aware crop** — when that strip would be unreadable, a button
+  moves the crop to a calmer band.
+- **Resolution rule** — hides results that would be upscaled. Filtered in the
+  app, not through Wallhaven's `atleast`, which also excludes differently
+  shaped wallpapers that are large enough.
+- **Library health** — count, size, how much sits below the display, how much
+  is unindexed, largest file.
+- **Auto-collections** — clusters by look and proposes groups. Naming is left
+  to the user: a print knows appearance, not subject.
+- **Taste-ranked browsing** — orders loaded results by distance to your
+  favourites. It cannot ask Wallhaven for this, so it works within the pages
+  you have.
+- **Drop to import** — files or folders dropped on the window.
+- **Rotation without repeats** — avoids the last eight actually shown.
+- **Export / backup** — JSON carrying the records themselves, so a restore
+  works on a fresh install with an empty cache.
+- **Quick Look** — space bar in Folders.
+- **Colour search** — the local library filtered by dominant colour, using the
+  same seven-name vocabulary as the accent matcher.
+
+---
 
 ## Phase 1 — cheap, high payoff
 

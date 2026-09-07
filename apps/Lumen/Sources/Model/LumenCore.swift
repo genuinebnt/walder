@@ -165,6 +165,18 @@ final class LumenCore: @unchecked Sendable {
         _ = Self.takeString(lumen_crop_clear(Self.json(["path": path, "display": display])))
     }
 
+    /// Stores records so a restored backup has something to point at.
+    @discardableResult
+    func cacheWallpapers(_ wallpapers: [Wallpaper]) -> Int {
+        guard !wallpapers.isEmpty else { return 0 }
+        guard let data = try? JSONEncoder().encode(wallpapers),
+              let array = try? JSONSerialization.jsonObject(with: data) else { return 0 }
+        let reply = Self.takeString(
+            lumen_wallpapers_cache(Self.json(["wallpapers": array])))
+        struct Stored: Decodable { let stored: Int }
+        return decodeSync(Stored.self, reply)?.stored ?? 0
+    }
+
     // MARK: Image feature prints
 
     struct StoredPrint: Decodable {

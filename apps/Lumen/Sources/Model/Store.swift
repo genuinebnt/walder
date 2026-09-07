@@ -908,6 +908,219 @@ final class Store {
         }
     }
 
+    // MARK: Colour search
+
+    /// Dominant colour per local file, so the library can be filtered by colour
+    /// the way Wallhaven's own search can.
+    private var dominantColours: [String: SystemAccent] = [:]
+    var colourFilter: SystemAccent?
+    var isReadingColours = false
+
+    /// Reads dominant colours for whatever is on screen, in the background.
+    @MainActor
+    func loadColours(for wallpapers: [LocalWallpaper]) async {
+        let missing = wallpapers.filter { dominantColours[$0.path] == nil }
+        guard !missing.isEmpty, !isReadingColours else { return }
+        isReadingColours = true
+        defer { isReadingColours = false }
+
+        let found = await Task.detached(priority: .utility) {
+            missing.reduce(into: [String: SystemAccent]()) { result, wallpaper in
+                guard let accent = Self.dominantAccent(of: wallpaper.url) else { return }
+                result[wallpaper.path] = accent
+            }
+        }.value
+        dominantColours.merge(found) { _, new in new }
+    }
+
+    /// Reduces an image to one pixel and names the nearest accent to it.
+    ///
+    /// The same seven-colour vocabulary the accent matcher uses, so "show me
+    /// the green ones" means the same thing in both places.
+    private nonisolated static func dominantAccent(of url: URL) -> SystemAccent? {
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+              let image = CGImageSourceCreateThumbnailAtIndex(source, 0, [
+                kCGImageSourceCreateThumbnailFromImageAlways: true,
+                kCGImageSourceThumbnailMaxPixelSize: 32
+              ] as CFDictionary) else { return nil }
+
+        var pixel = [UInt8](repeating: 0, count: 4)
+        guard let context = CGContext(
+            data: &pixel, width: 1, height: 1, bitsPerComponent: 8, bytesPerRow: 4,
+            space: CGColorSpace(name: CGColorSpace.sRGB)!,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+        context.interpolationQuality = .medium
+        context.draw(image, in: CGRect(x: 0, y: 0, width: 1, height: 1))
+
+        let hex = String(format: "%02x%02x%02x", pixel[0], pixel[1], pixel[2])
+        return SystemAccent.nearest(toHex: hex)
+    }
+
+    func colour(of wallpaper: LocalWallpaper) -> SystemAccent? {
+        dominantColours[wallpaper.path]
+    }
+
+    /// Applies the colour filter to a list of local files.
+    func byColour(_ list: [LocalWallpaper]) -> [LocalWallpaper] {
+        guard let colourFilter else { return list }
+        return list.filter { dominantColours[$0.path] == colourFilter }
+    }
+
+    @MainActor
+    func setColourFilter(_ accent: SystemAccent?) {
+        withAnimation(Tokens.quick) { colourFilter = accent }
+    }
+
+    // MARK: Dropped files
+
+    /// Accepts files or folders dropped onto the app.
+    ///
+    /// A folder is imported; images are copied into the download directory and
+    /// indexed, so a wallpaper dragged from a browser or Finder joins the
+    /// library the same way a download does.
+    @MainActor
+    func accept(_ urls: [URL]) async {
+        var imported = 0
+        var copied = 0
+
+        for url in urls {
+            var isDirectory: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory)
+            else { continue }
+
+            if isDirectory.boolValue {
+                await importFolder(at: url.path(percentEncoded: false))
+                imported += 1
+                continue
+            }
+
+            let extensions = ["jpg", "jpeg", "png", "heic", "webp", "tif", "tiff"]
+            guard extensions.contains(url.pathExtension.lowercased()) else { continue }
+
+            let directory = URL(filePath: LumenCore.shared.downloadDirectory)
+            let target = uniqueName(for: url.lastPathComponent, in: directory)
+            do {
+                try FileManager.default.createDirectory(at: directory,
+                                                        withIntermediateDirectories: true)
+                try FileManager.default.copyItem(at: url, to: target)
+                copied += 1
+            } catch {
+                errorMessage = "Could not add \(url.lastPathComponent): \(error.localizedDescription)"
+            }
+        }
+
+        if copied > 0 {
+            try? await LumenCore.shared.refreshDownloads()
+        }
+        if copied > 0 || imported > 0 {
+            reloadLibrary()
+            requestedSection = "folders"
+        }
+    }
+
+    /// Avoids overwriting a file that is already there.
+    private func uniqueName(for filename: String, in directory: URL) -> URL {
+        var candidate = directory.appending(path: filename)
+        guard FileManager.default.fileExists(atPath: candidate.path) else { return candidate }
+
+        let base = (filename as NSString).deletingPathExtension
+        let ext = (filename as NSString).pathExtension
+        var index = 2
+        repeat {
+            let next = ext.isEmpty ? "\(base) \(index)" : "\(base) \(index).\(ext)"
+            candidate = directory.appending(path: next)
+            index += 1
+        } while FileManager.default.fileExists(atPath: candidate.path)
+        return candidate
+    }
+
+    // MARK: Export and backup
+
+    /// Everything worth keeping if the database is lost: what you saved, what
+    /// you grouped, and what you asked to be watched.
+    struct Backup: Codable {
+        var favorites: [Wallpaper] = []
+        var collections: [BackedUpCollection] = []
+        var presets: [FilterPreset] = []
+        var subscriptions: [BackedUpSubscription] = []
+        var exportedAt = Date()
+
+        struct BackedUpCollection: Codable {
+            var name: String
+            var wallpapers: [Wallpaper]
+        }
+        struct BackedUpSubscription: Codable {
+            var query: String
+            var label: String
+            var minFavorites: Int
+        }
+    }
+
+    @MainActor
+    func makeBackup() -> Backup {
+        Backup(favorites: favorites,
+               collections: collections.map {
+                   .init(name: $0.name, wallpapers: $0.wallpapers)
+               },
+               presets: presets,
+               subscriptions: subscriptions.map {
+                   .init(query: $0.query, label: $0.label, minFavorites: $0.minFavorites)
+               })
+    }
+
+    @MainActor
+    func exportBackup(to url: URL) {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        encoder.dateEncodingStrategy = .iso8601
+        do {
+            try encoder.encode(makeBackup()).write(to: url, options: .atomic)
+            errorMessage = nil
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    /// Restores a backup, adding to what is there rather than replacing it.
+    @MainActor
+    func importBackup(from url: URL) {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        guard let data = try? Data(contentsOf: url),
+              let backup = try? decoder.decode(Backup.self, from: data) else {
+            errorMessage = "That is not a Lumen backup."
+            return
+        }
+
+        // Favourites and collection members need a cached wallpaper to point
+        // at, so the records travel in the backup and are re-cached on the way
+        // in — restoring on a fresh install would otherwise find nothing.
+        LumenCore.shared.cacheWallpapers(backup.favorites)
+        LumenCore.shared.setFavorites(ids: backup.favorites.map(\.id), favorited: true)
+
+        for collection in backup.collections {
+            LumenCore.shared.cacheWallpapers(collection.wallpapers)
+            createCollection(named: collection.name)
+            guard let created = collections.first(where: { $0.name == collection.name })
+            else { continue }
+            LumenCore.shared.addToCollection(id: created.id,
+                                             ids: collection.wallpapers.map(\.id))
+        }
+
+        for preset in backup.presets where !presets.contains(where: { $0.name == preset.name }) {
+            presets.append(preset)
+        }
+        for subscription in backup.subscriptions {
+            subscribe(to: subscription.query, label: subscription.label,
+                      minFavorites: subscription.minFavorites)
+        }
+
+        reloadFavorites()
+        reloadCollections()
+        reloadSubscriptions()
+        errorMessage = nil
+    }
+
     // MARK: Auto-collections
 
     struct ProposedCollection: Identifiable {
