@@ -412,6 +412,23 @@ pub extern "C" fn lumen_tag_info(tag_id: u64) -> u64 {
 /// `json`: `{ "id": String, "url": String, "filename": String }`
 ///
 /// # Safety
+/// Where a download should land.
+///
+/// The payload may name a directory — that is how the app downloads straight
+/// into one of your imported folders rather than into the shared download
+/// folder. Anything absent, empty, or not actually a directory falls back to
+/// the configured one, so a stale destination cannot strand a download.
+fn destination_for(core: &'static Core, value: &serde_json::Value) -> PathBuf {
+    let named = value["dir"].as_str().unwrap_or_default().trim();
+    if !named.is_empty() {
+        let resolved = lumen_core::paths::resolve_dir(named);
+        if resolved.is_dir() {
+            return resolved;
+        }
+    }
+    core.download_dir.read().unwrap().clone()
+}
+
 /// `json` must be NUL-terminated UTF-8, or null.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lumen_download(json: *const c_char) -> u64 {
@@ -437,8 +454,8 @@ pub unsafe extern "C" fn lumen_download(json: *const c_char) -> u64 {
         return id;
     }
 
+    let dir = destination_for(core, &value);
     core.runtime.spawn(async move {
-        let dir = core.download_dir.read().unwrap().clone();
         if let Err(e) = std::fs::create_dir_all(&dir) {
             emit(id, err_json("download", e));
             return;
@@ -1700,8 +1717,8 @@ pub unsafe extern "C" fn lumen_download_many(json: *const c_char) -> u64 {
         return id;
     }
 
+    let dir = destination_for(core, &value);
     core.runtime.spawn(async move {
-        let dir = core.download_dir.read().unwrap().clone();
         if let Err(e) = std::fs::create_dir_all(&dir) {
             emit(id, err_json("download", e));
             return;

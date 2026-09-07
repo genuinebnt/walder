@@ -100,6 +100,41 @@ struct DownloadsView: View {
 
 // MARK: - Collections
 
+/// Order and direction for lists of Wallhaven wallpapers.
+///
+/// Shared between collections and downloads so the two panes behave the same;
+/// the direction is its own button because "most favourited" and "least" are
+/// both reasonable things to want.
+struct RemoteSortControls: View {
+    @Environment(Store.self) private var store
+
+    var body: some View {
+        HStack(spacing: 2) {
+            Menu {
+                ForEach(Store.RemoteSort.allCases) { option in
+                    Button {
+                        store.remoteSort = option
+                    } label: {
+                        Label(option.label, systemImage: option.symbol)
+                    }
+                }
+            } label: {
+                Label(store.remoteSort.label, systemImage: store.remoteSort.symbol)
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+
+            Button {
+                store.remoteSortAscending.toggle()
+            } label: {
+                Image(systemName: store.remoteSortAscending ? "arrow.up" : "arrow.down")
+            }
+            .buttonStyle(.borderless)
+            .help(store.remoteSortAscending ? "Ascending" : "Descending")
+        }
+    }
+}
+
 struct CollectionsView: View {
     @Environment(Store.self) private var store
     @State private var name = ""
@@ -167,9 +202,15 @@ struct CollectionsView: View {
                 .keyboardShortcut(.cancelAction)
 
                 Text(collection.name).font(.system(size: 15, weight: .semibold))
-                Text("\(collection.wallpapers.count) wallpapers")
+                Text("\(shown(collection).count) of \(collection.wallpapers.count)")
                     .font(.caption2Mono).foregroundStyle(.secondary)
                 Spacer()
+
+                TextField("Filter", text: Binding(get: { store.remoteSearch },
+                                                  set: { store.remoteSearch = $0 }))
+                    .textFieldStyle(.roundedBorder)
+                    .frame(maxWidth: 180)
+                RemoteSortControls()
 
                 Picker("", selection: Binding(get: { store.gridTheme },
                                               set: { store.gridTheme = $0 })) {
@@ -184,10 +225,16 @@ struct CollectionsView: View {
                                        description: Text("Add wallpapers from a preview."))
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, Tokens.s6)
+            } else if shown(collection).isEmpty {
+                ContentUnavailableView("Nothing matches",
+                                       systemImage: "line.3.horizontal.decrease.circle",
+                                       description: Text("Try a different filter."))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, Tokens.s6)
             } else {
                 Group {
                     if theme == .masonry {
-                        MasonryGrid(items: collection.wallpapers,
+                        MasonryGrid(items: shown(collection),
                                     aspect: { $0.ratio > 0 ? $0.ratio : 16.0 / 10 },
                                     columnWidth: theme.minTileWidth,
                                     spacing: theme.spacing) { tile($0, in: collection) }
@@ -195,13 +242,18 @@ struct CollectionsView: View {
                         LazyVGrid(columns: [GridItem(.adaptive(minimum: theme.minTileWidth),
                                                      spacing: theme.spacing)],
                                   spacing: theme.spacing) {
-                            ForEach(collection.wallpapers) { tile($0, in: collection) }
+                            ForEach(shown(collection)) { tile($0, in: collection) }
                         }
                     }
                 }
                 .transaction { $0.animation = nil }
             }
         }
+    }
+
+    /// What the grid shows: the collection through the sort and filter.
+    private func shown(_ collection: Collection) -> [Wallpaper] {
+        store.arranged(collection.wallpapers)
     }
 
     private func tile(_ wallpaper: Wallpaper, in collection: Collection) -> some View {

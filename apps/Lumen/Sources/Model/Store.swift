@@ -116,6 +116,13 @@ final class Store {
         }
 
         apiKey = Store.migratedAPIKey(from: defaults)
+        localSort = LocalSort(rawValue: defaults.string(forKey: "localSort") ?? "") ?? .name
+        localSortAscending = bool("localSortAscending", default: true)
+        remoteSort = RemoteSort(rawValue: defaults.string(forKey: "remoteSort") ?? "") ?? .dateAdded
+        remoteSortAscending = bool("remoteSortAscending", default: false)
+        downloadDestination = DownloadDestination(
+            key: defaults.string(forKey: "downloadDestination") ?? "")
+        skipDuplicateDownloads = bool("skipDuplicateDownloads", default: true)
         downloadDirectory = defaults.string(forKey: "downloadDirectory") ?? ""
         maxParallel = int("maxParallel", default: 4)
         gridTheme = GridTheme(rawValue: defaults.string(forKey: "gridTheme") ?? "") ?? .comfortable
@@ -511,10 +518,18 @@ final class Store {
         guard !downloads.contains(where: { $0.wallpaperId == wallpaper.id }) else { return }
         known[wallpaper.id] = wallpaper
         Task {
+            // Asked before the bytes are spent, not after.
+            if let have = await alreadyInLibrary(wallpaper) {
+                lastSkippedDuplicates = [wallpaper.id]
+                errorMessage = "You already have this one — \(have.filename)."
+                return
+            }
             do {
                 try await LumenCore.shared.download(id: wallpaper.id,
                                                     url: wallpaper.path.absoluteString,
-                                                    filename: wallpaper.filename)
+                                                    filename: wallpaper.filename,
+                                                    directory: destinationDirectory)
+                fileIntoDestination(wallpaper)
             } catch {
                 errorMessage = error.localizedDescription
             }
@@ -923,7 +938,9 @@ final class Store {
 
     /// Held between calls: building is the expensive part, and the library
     /// changes far less often than these features are used.
-    @ObservationIgnored private var cachedGraph: (paths: Set<String>, graph: SimilarityGraph)?
+    @ObservationIgnored private var cachedGraph: (paths: Set<String>,
+                                                  graph: SimilarityGraph,
+                                                  vectors: [(path: String, vector: [Float])])?
 
     /// The library as a graph, built on first use and reused until the set of
     /// indexed files changes.
@@ -942,8 +959,14 @@ final class Store {
         let graph = await Task.detached(priority: .userInitiated) {
             SimilarityGraph.build(from: entries)
         }.value
-        cachedGraph = (key, graph)
+        cachedGraph = (key, graph, entries)
         return graph
+    }
+
+    /// The library's vectors, for questions that are not about the graph.
+    private func libraryVectors() async -> [(path: String, vector: [Float])] {
+        _ = await libraryGraph()
+        return cachedGraph?.vectors ?? []
     }
 
     /// Drops the graph, for when the indexed set has changed under it.
@@ -972,6 +995,115 @@ final class Store {
         withAnimation(Tokens.normal) {
             similarToSelection = nearest.compactMap { byPath[$0.path] }
         }
+    }
+
+    // MARK: Where downloads go, and what not to download twice
+
+    /// Where a download should land.
+    ///
+    /// A collection is a grouping in the database, not a place on disk, so
+    /// filing into one still writes the file to the download folder. An
+    /// imported folder is a real directory, so the file goes there and turns up
+    /// in that folder on the next scan.
+    enum DownloadDestination: Hashable {
+        case downloadFolder
+        case importedFolder(id: String)
+        case collection(id: String)
+
+        var key: String {
+            switch self {
+            case .downloadFolder: "downloads"
+            case .importedFolder(let id): "folder:\(id)"
+            case .collection(let id): "collection:\(id)"
+            }
+        }
+
+        init(key: String) {
+            if let id = key.split(separator: ":", maxSplits: 1).last.map(String.init),
+               key.hasPrefix("folder:") {
+                self = .importedFolder(id: id)
+            } else if let id = key.split(separator: ":", maxSplits: 1).last.map(String.init),
+                      key.hasPrefix("collection:") {
+                self = .collection(id: id)
+            } else {
+                self = .downloadFolder
+            }
+        }
+    }
+
+    var downloadDestination: DownloadDestination = .downloadFolder {
+        didSet { save(downloadDestination.key, "downloadDestination") }
+    }
+
+    /// Whether a download is skipped when the library already holds the picture.
+    var skipDuplicateDownloads = true {
+        didSet { save(skipDuplicateDownloads, "skipDuplicateDownloads") }
+    }
+
+    /// What the last download call skipped, so the UI can say why nothing
+    /// happened rather than appearing to have ignored the click.
+    var lastSkippedDuplicates: [String] = []
+
+    /// The directory a download should be written to, if not the default.
+    var destinationDirectory: String? {
+        guard case .importedFolder(let id) = downloadDestination else { return nil }
+        return libraryFolders.first { $0.id == id }?.path
+    }
+
+    /// A human name for the destination, for the picker and for messages.
+    var destinationLabel: String {
+        switch downloadDestination {
+        case .downloadFolder:
+            "Download folder"
+        case .importedFolder(let id):
+            libraryFolders.first { $0.id == id }?.name ?? "Download folder"
+        case .collection(let id):
+            collections.first { $0.id == id }?.name ?? "Download folder"
+        }
+    }
+
+    /// A wallpaper already in the library that looks like this one.
+    ///
+    /// Checked against the *thumbnail*, which the grid has already decoded, so
+    /// asking costs a feature print rather than a download. That is what makes
+    /// it possible to answer "you already have this" before spending the
+    /// bandwidth, and it catches the case an id check cannot: the same picture
+    /// downloaded before at a different resolution, or from another uploader.
+    @MainActor
+    func alreadyInLibrary(_ wallpaper: Wallpaper) async -> LocalWallpaper? {
+        guard skipDuplicateDownloads else { return nil }
+        let vectors = await libraryVectors()
+        guard !vectors.isEmpty else { return nil }
+
+        guard let image = await ImageCache.shared.image(for: wallpaper.thumb) else { return nil }
+        let made = await Task.detached(priority: .userInitiated) { () -> [Float]? in
+            let url = FileManager.default.temporaryDirectory
+                .appending(path: "lumen-dupe-\(UUID().uuidString).png")
+            defer { try? FileManager.default.removeItem(at: url) }
+            guard let tiff = image.tiffRepresentation,
+                  let rep = NSBitmapImageRep(data: tiff),
+                  let png = rep.representation(using: .png, properties: [:]),
+                  (try? png.write(to: url)) != nil,
+                  let print = ImagePrints.print(of: url) else { return nil }
+            return ImagePrints.vector(print)
+        }.value
+        guard let made else { return nil }
+
+        let nearest = await Task.detached(priority: .userInitiated) {
+            vectors
+                .map { ($0.path, ImagePrints.distance(made, $0.vector)) }
+                .min { $0.1 < $1.1 }
+        }.value
+        guard let nearest, nearest.1 <= ImagePrints.duplicateThreshold else { return nil }
+        return libraryWallpapers.first { $0.path == nearest.0 }
+    }
+
+    /// Files a wallpaper into the chosen collection, if one is chosen.
+    @MainActor
+    private func fileIntoDestination(_ wallpaper: Wallpaper) {
+        guard case .collection(let id) = downloadDestination,
+              let collection = collections.first(where: { $0.id == id }) else { return }
+        setMembership(wallpaper, of: collection, member: true)
     }
 
     // MARK: Discover
@@ -1932,10 +2064,222 @@ final class Store {
         // Nothing sits at the very top; a folder has to be chosen first.
         guard selectedFolder != nil else { return [] }
         let key = "\(selectedFolder ?? "")|\(browsePath)|\(libraryWallpapers.count)"
+            + "|\(localSort.rawValue)|\(localSortAscending)|\(localSearch)"
         if let cached = currentFilesCache, cached.key == key { return cached.files }
-        let files = libraryWallpapers.filter { $0.subpath == browsePath }
+        let files = localSort.apply(
+            to: matching(localSearch, in: libraryWallpapers.filter { $0.subpath == browsePath }),
+            ascending: localSortAscending
+        )
         currentFilesCache = (key, files)
         return files
+    }
+
+    // MARK: Sorting and searching what you already have
+    //
+    // A folder of four thousand wallpapers is not browsable in file order. The
+    // sort keys are the ones actually worth ordering by — how big it is on
+    // screen, how big it is on disk, when it arrived — and the search reaches
+    // the Wallhaven tags too, for any file whose record is on disk.
+
+    enum LocalSort: String, CaseIterable, Identifiable {
+        case name, size, resolution, dateAdded
+
+        var id: String { rawValue }
+
+        var label: String {
+            switch self {
+            case .name: "Name"
+            case .size: "File Size"
+            case .resolution: "Resolution"
+            case .dateAdded: "Date Added"
+            }
+        }
+
+        var symbol: String {
+            switch self {
+            case .name: "textformat"
+            case .size: "internaldrive"
+            case .resolution: "arrow.up.left.and.arrow.down.right"
+            case .dateAdded: "calendar"
+            }
+        }
+
+        func apply(to files: [LocalWallpaper], ascending: Bool) -> [LocalWallpaper] {
+            let sorted: [LocalWallpaper]
+            switch self {
+            case .name:
+                sorted = files.sorted {
+                    $0.filename.localizedStandardCompare($1.filename) == .orderedAscending
+                }
+            case .size:
+                sorted = files.sorted { $0.fileSize < $1.fileSize }
+            case .resolution:
+                // By pixel count, so a tall wallpaper and a wide one of the
+                // same size sort together. Unknown sizes sink rather than
+                // scattering through the list.
+                sorted = files.sorted { area(of: $0) < area(of: $1) }
+            case .dateAdded:
+                // The index has no timestamp, so this is the file's own — which
+                // for a folder of downloads is when it was downloaded.
+                sorted = files.sorted { added(to: $0) < added(to: $1) }
+            }
+            return ascending ? sorted : sorted.reversed()
+        }
+
+        private func area(of file: LocalWallpaper) -> Double {
+            guard let size = file.pixelSize else { return 0 }
+            return size.width * size.height
+        }
+
+        private func added(to file: LocalWallpaper) -> Date {
+            let values = try? file.url.resourceValues(
+                forKeys: [.addedToDirectoryDateKey, .creationDateKey])
+            return values?.addedToDirectoryDate ?? values?.creationDate ?? .distantPast
+        }
+    }
+
+    var localSort: LocalSort = .name {
+        didSet { save(localSort.rawValue, "localSort"); currentFilesCache = nil }
+    }
+    var localSortAscending = true {
+        didSet { save(localSortAscending, "localSortAscending"); currentFilesCache = nil }
+    }
+    /// Filters the pane. Matches the filename, and the Wallhaven tags of any
+    /// file that has its record beside it.
+    var localSearch = "" { didSet { currentFilesCache = nil } }
+
+    /// Terms per file, built once and kept.
+    ///
+    /// Reading a sidecar per file per keystroke would make typing unusable at
+    /// four thousand files, so the records are read once and indexed.
+    @ObservationIgnored private var searchTerms: [String: String] = [:]
+    @ObservationIgnored private var searchTermsBuiltFor = 0
+
+    /// Applies the search box to a list.
+    func matching(_ query: String, in files: [LocalWallpaper]) -> [LocalWallpaper] {
+        let needle = query.trimmingCharacters(in: .whitespaces).lowercased()
+        guard !needle.isEmpty else { return files }
+        return files.filter { file in
+            file.filename.lowercased().contains(needle)
+                || (searchTerms[file.path]?.contains(needle) ?? false)
+        }
+    }
+
+    /// Reads every sidecar once so tags are searchable.
+    ///
+    /// Off the main actor: at four thousand files this is thousands of small
+    /// reads, and it must not block the pane it is about to improve.
+    @MainActor
+    func indexSearchTerms() async {
+        let files = libraryWallpapers
+        guard files.count != searchTermsBuiltFor else { return }
+        let paths = files.map(\.url)
+
+        let built = await Task.detached(priority: .utility) {
+            var terms: [String: String] = [:]
+            terms.reserveCapacity(paths.count)
+            for url in paths {
+                guard let record = WallpaperMetadata.sidecar(for: url) else { continue }
+                // One string per file rather than a set: `contains` on a joined
+                // string beats iterating a set of short tags.
+                var bag = record.tags.joined(separator: " ")
+                if let uploader = record.uploader { bag += " @" + uploader }
+                bag += " " + record.category + " " + record.resolution
+                terms[url.path] = bag.lowercased()
+            }
+            return terms
+        }.value
+
+        searchTerms = built
+        searchTermsBuiltFor = files.count
+        currentFilesCache = nil
+    }
+
+    /// How many files have a Wallhaven record beside them, which is what makes
+    /// tag search work.
+    var filesWithMetadata: Int { searchTerms.count }
+
+    // ── the same, for wallpapers that came from Wallhaven ──────────────────
+    //
+    // Collections and search results carry more to sort by than files on disk
+    // do: the API reports views and favourites, and the resolution is known
+    // without opening anything.
+
+    enum RemoteSort: String, CaseIterable, Identifiable {
+        case dateAdded, name, size, resolution, favorites, views
+
+        var id: String { rawValue }
+
+        var label: String {
+            switch self {
+            case .dateAdded: "Date Added"
+            case .name: "Name"
+            case .size: "File Size"
+            case .resolution: "Resolution"
+            case .favorites: "Favourites"
+            case .views: "Views"
+            }
+        }
+
+        var symbol: String {
+            switch self {
+            case .dateAdded: "calendar"
+            case .name: "textformat"
+            case .size: "internaldrive"
+            case .resolution: "arrow.up.left.and.arrow.down.right"
+            case .favorites: "heart"
+            case .views: "eye"
+            }
+        }
+
+        func apply(to wallpapers: [Wallpaper], ascending: Bool) -> [Wallpaper] {
+            let sorted: [Wallpaper]
+            switch self {
+            case .dateAdded:
+                // Wallhaven's own upload date, as a string that sorts
+                // correctly because it is written year-first.
+                sorted = wallpapers.sorted { $0.createdAt < $1.createdAt }
+            case .name:
+                sorted = wallpapers.sorted { $0.id < $1.id }
+            case .size:
+                sorted = wallpapers.sorted { $0.fileSize < $1.fileSize }
+            case .resolution:
+                sorted = wallpapers.sorted { pixels(of: $0) < pixels(of: $1) }
+            case .favorites:
+                sorted = wallpapers.sorted { $0.favorites < $1.favorites }
+            case .views:
+                sorted = wallpapers.sorted { $0.views < $1.views }
+            }
+            return ascending ? sorted : sorted.reversed()
+        }
+
+        private func pixels(of wallpaper: Wallpaper) -> Int {
+            let parts = wallpaper.resolution.split(separator: "x")
+            guard parts.count == 2, let w = Int(parts[0]), let h = Int(parts[1]) else { return 0 }
+            return w * h
+        }
+    }
+
+    var remoteSort: RemoteSort = .dateAdded {
+        didSet { save(remoteSort.rawValue, "remoteSort") }
+    }
+    /// Newest and most-favourited first is what people want by default, so
+    /// these lists start descending where the local ones start ascending.
+    var remoteSortAscending = false {
+        didSet { save(remoteSortAscending, "remoteSortAscending") }
+    }
+    var remoteSearch = ""
+
+    /// Sorted and filtered, for a collection or the downloaded list.
+    func arranged(_ wallpapers: [Wallpaper]) -> [Wallpaper] {
+        let needle = remoteSearch.trimmingCharacters(in: .whitespaces).lowercased()
+        let filtered = needle.isEmpty ? wallpapers : wallpapers.filter { wallpaper in
+            wallpaper.id.lowercased().contains(needle)
+                || wallpaper.tags.contains { $0.lowercased().contains(needle) }
+                || (wallpaper.uploader?.lowercased().contains(needle) ?? false)
+                || wallpaper.resolution.contains(needle)
+        }
+        return remoteSort.apply(to: filtered, ascending: remoteSortAscending)
     }
 
     /// Breadcrumb trail for the level being browsed.
@@ -2231,16 +2575,39 @@ final class Store {
         let picked = selectedWallpapers(from: list)
         guard !picked.isEmpty else { return }
         remember(picked)
-        let items = picked
-            .filter { wallpaper in
-                !downloads.contains { $0.wallpaperId == wallpaper.id }
-                    && !isDownloaded(wallpaper)
-            }
-            .map { (id: $0.id, url: $0.path.absoluteString, filename: $0.filename) }
-        guard !items.isEmpty else { return }
+        let queueable = picked.filter { wallpaper in
+            !downloads.contains { $0.wallpaperId == wallpaper.id } && !isDownloaded(wallpaper)
+        }
+        guard !queueable.isEmpty else { return }
+
         Task {
+            // One print per wallpaper against the library, before any of it is
+            // downloaded. On a page of two dozen that is a second or so, and it
+            // is the difference between filing twenty and filing eight.
+            var wanted: [Wallpaper] = []
+            var skipped: [String] = []
+            for wallpaper in queueable {
+                if await alreadyInLibrary(wallpaper) != nil {
+                    skipped.append(wallpaper.id)
+                } else {
+                    wanted.append(wallpaper)
+                }
+            }
+            lastSkippedDuplicates = skipped
+
+            guard !wanted.isEmpty else {
+                errorMessage = "All \(skipped.count) are already in your library."
+                return
+            }
             do {
-                try await LumenCore.shared.download(items)
+                try await LumenCore.shared.download(
+                    wanted.map { (id: $0.id, url: $0.path.absoluteString, filename: $0.filename) },
+                    directory: destinationDirectory)
+                for wallpaper in wanted { fileIntoDestination(wallpaper) }
+                if !skipped.isEmpty {
+                    errorMessage = "Downloading \(wanted.count); skipped \(skipped.count) "
+                        + "already in your library."
+                }
             } catch {
                 errorMessage = error.localizedDescription
             }

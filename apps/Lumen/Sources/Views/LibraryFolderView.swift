@@ -46,6 +46,13 @@ struct LibraryFolderView: View {
             .padding(Tokens.s4)
         }
         .scrollContentBackground(.hidden)
+        .searchable(text: Binding(get: { store.localSearch },
+                                  set: { store.localSearch = $0 }),
+                    placement: .toolbar,
+                    prompt: "Filter by name or tag")
+        // The tag half only works once the records are read, which is one pass
+        // over the folder rather than a read per keystroke.
+        .task(id: store.libraryWallpapers.count) { await store.indexSearchTerms() }
         // Space bar in a file browser is muscle memory.
         .onKeyPress(.space) {
             let files = visibleItems
@@ -132,6 +139,7 @@ struct LibraryFolderView: View {
                     }
                 }
 
+                sortPicker
                 layoutPicker
                 colourPicker
 
@@ -487,6 +495,36 @@ struct LibraryFolderView: View {
     }
 
     /// The layout picker, matching the one the Wallhaven grid has.
+    /// Order, and which way round. The direction is a separate button because
+    /// "largest first" and "smallest first" are both wanted often enough that
+    /// burying one of them in a menu is wrong.
+    private var sortPicker: some View {
+        HStack(spacing: 2) {
+            Menu {
+                ForEach(Store.LocalSort.allCases) { option in
+                    Button {
+                        store.localSort = option
+                    } label: {
+                        Label(option.label, systemImage: option.symbol)
+                    }
+                }
+            } label: {
+                Label(store.localSort.label, systemImage: store.localSort.symbol)
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+
+            Button {
+                store.localSortAscending.toggle()
+            } label: {
+                Image(systemName: store.localSortAscending
+                      ? "arrow.up" : "arrow.down")
+            }
+            .buttonStyle(.borderless)
+            .help(store.localSortAscending ? "Ascending" : "Descending")
+        }
+    }
+
     private var layoutPicker: some View {
         Picker("", selection: Binding(get: { store.gridTheme },
                                       set: { store.gridTheme = $0 })) {

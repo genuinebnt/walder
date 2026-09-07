@@ -173,6 +173,38 @@ struct SettingsView: View {
                 Stepper("Max parallel downloads: \(store.maxParallel)",
                         value: Binding(get: { store.maxParallel }, set: { store.maxParallel = $0 }),
                         in: 1...12)
+
+                Picker("Save downloads to", selection: Binding(
+                    get: { store.downloadDestination },
+                    set: { store.downloadDestination = $0 })) {
+                    Text("Download folder").tag(Store.DownloadDestination.downloadFolder)
+                    if !store.libraryFolders.isEmpty {
+                        SwiftUI.Section("Imported folders") {
+                            ForEach(store.libraryFolders) { folder in
+                                Text(folder.name)
+                                    .tag(Store.DownloadDestination.importedFolder(id: folder.id))
+                            }
+                        }
+                    }
+                    if !store.collections.isEmpty {
+                        SwiftUI.Section("Collections") {
+                            ForEach(store.collections) { collection in
+                                Text(collection.name)
+                                    .tag(Store.DownloadDestination.collection(id: collection.id))
+                            }
+                        }
+                    }
+                }
+                .help("An imported folder is a real directory, so the file lands there. "
+                      + "A collection is a grouping, so the file goes to the download "
+                      + "folder and is filed into it.")
+
+                Toggle("Skip wallpapers already in your library", isOn: Binding(
+                    get: { store.skipDuplicateDownloads },
+                    set: { store.skipDuplicateDownloads = $0 }))
+                    .help("Compares what you are about to download against the library "
+                          + "by look, not by name — so the same picture at another "
+                          + "resolution is caught too.")
             }
 
             SwiftUI.Section("Appearance") {

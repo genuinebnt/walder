@@ -405,6 +405,124 @@ func run() async -> Int32 {
     }
 
     // ── displays ──────────────────────────────────────────────────────────
+    v.section("Sorting and filtering what you have")
+    func localFile(_ name: String, bytes: Int) -> LocalWallpaper {
+        LocalWallpaper(id: name, folderId: "f", url: URL(fileURLWithPath: "/tmp/\(name)"),
+                       path: "/tmp/\(name)", filename: name, fileSize: bytes,
+                       isFavorite: false, subpath: "")
+    }
+    v.check("Local sort by size orders both ways") {
+        let files = [localFile("a.jpg", bytes: 300), localFile("b.jpg", bytes: 100),
+                     localFile("c.jpg", bytes: 200)]
+        let up = Store.LocalSort.size.apply(to: files, ascending: true).map(\.filename)
+        let down = Store.LocalSort.size.apply(to: files, ascending: false).map(\.filename)
+        return up == ["b.jpg", "c.jpg", "a.jpg"] && down == ["a.jpg", "c.jpg", "b.jpg"]
+    }
+    v.check("Local sort by name is natural, not ASCII") {
+        // "10" after "9" is what a person means by sorted; a plain string
+        // comparison puts it before "2".
+        let files = [localFile("wall9.jpg", bytes: 1), localFile("wall10.jpg", bytes: 1),
+                     localFile("wall2.jpg", bytes: 1)]
+        return Store.LocalSort.name.apply(to: files, ascending: true).map(\.filename)
+            == ["wall2.jpg", "wall9.jpg", "wall10.jpg"]
+    }
+    v.check("Every local sort option is offered and labelled") {
+        // A picker with a case the enum does not handle would silently sort by
+        // nothing.
+        return Store.LocalSort.allCases.count == 4
+            && Store.LocalSort.allCases.allSatisfy { !$0.label.isEmpty && !$0.symbol.isEmpty }
+    }
+    v.check("The local search matches on filename") {
+        let files = [localFile("forest.jpg", bytes: 1), localFile("city.jpg", bytes: 1)]
+        return store.matching("FOR", in: files).map(\.filename) == ["forest.jpg"]
+            && store.matching("", in: files).count == 2
+            && store.matching("nothing", in: files).isEmpty
+    }
+    v.check("The local sort choice survives a relaunch") {
+        store.localSort = .resolution
+        store.localSortAscending = false
+        let relaunched = Store(defaults: defaults)
+        return relaunched.localSort == .resolution && relaunched.localSortAscending == false
+    }
+    v.check("Remote sort orders by favourites and by pixel count") {
+        let wallpapers = [
+            Wallpaper(id: "a", url: nil, path: URL(fileURLWithPath: "/a"),
+                      thumb: URL(fileURLWithPath: "/a"), resolution: "1920x1080", ratio: 1.7,
+                      views: 10, favorites: 5, category: "general", purity: .sfw,
+                      fileSize: 1, fileType: "image/jpeg", createdAt: "2020-01-01"),
+            Wallpaper(id: "b", url: nil, path: URL(fileURLWithPath: "/b"),
+                      thumb: URL(fileURLWithPath: "/b"), resolution: "3840x2160", ratio: 1.7,
+                      views: 1, favorites: 50, category: "general", purity: .sfw,
+                      fileSize: 2, fileType: "image/jpeg", createdAt: "2021-01-01"),
+        ]
+        let byFavourites = Store.RemoteSort.favorites.apply(to: wallpapers, ascending: false)
+        let byPixels = Store.RemoteSort.resolution.apply(to: wallpapers, ascending: false)
+        return byFavourites.first?.id == "b" && byPixels.first?.id == "b"
+    }
+    v.check("The remote filter reaches tags and resolution, not just the id") {
+        var tagged = Wallpaper(id: "abc123", url: nil, path: URL(fileURLWithPath: "/a"),
+                               thumb: URL(fileURLWithPath: "/a"), resolution: "3840x2160",
+                               ratio: 1.7, views: 1, favorites: 1, category: "general",
+                               purity: .sfw, fileSize: 1, fileType: "image/jpeg",
+                               createdAt: "2020-01-01")
+        tagged.tags = ["forest", "mist"]
+        store.remoteSearch = "mist"
+        defer { store.remoteSearch = "" }
+        guard store.arranged([tagged]).count == 1 else { return false }
+        store.remoteSearch = "3840"
+        guard store.arranged([tagged]).count == 1 else { return false }
+        store.remoteSearch = "desert"
+        return store.arranged([tagged]).isEmpty
+    }
+
+    v.section("Download destination")
+    v.check("A destination round-trips through its stored key") {
+        // It is persisted as a string, so a case that does not survive the
+        // round trip silently reverts to the download folder on relaunch.
+        for destination: Store.DownloadDestination in [
+            .downloadFolder, .importedFolder(id: "abc"), .collection(id: "xyz")
+        ] {
+            guard Store.DownloadDestination(key: destination.key) == destination else {
+                return false
+            }
+        }
+        return true
+    }
+    v.check("A collection destination writes to the download folder, not a path") {
+        // A collection is a grouping, not a place — asking it for a directory
+        // has to return nothing or the download lands somewhere invented.
+        store.downloadDestination = .collection(id: "whatever")
+        defer { store.downloadDestination = .downloadFolder }
+        return store.destinationDirectory == nil
+    }
+    v.check("An unknown folder falls back rather than stranding the download") {
+        store.downloadDestination = .importedFolder(id: "not-a-folder")
+        defer { store.downloadDestination = .downloadFolder }
+        return store.destinationDirectory == nil
+            && store.destinationLabel == "Download folder"
+    }
+    v.check("The destination and the duplicate switch survive a relaunch") {
+        store.downloadDestination = .collection(id: "keepme")
+        store.skipDuplicateDownloads = false
+        let relaunched = Store(defaults: defaults)
+        defer {
+            store.downloadDestination = .downloadFolder
+            store.skipDuplicateDownloads = true
+        }
+        return relaunched.downloadDestination == .collection(id: "keepme")
+            && relaunched.skipDuplicateDownloads == false
+    }
+    await v.checkAsync("Duplicate skipping off means nothing is ever skipped") {
+        store.skipDuplicateDownloads = false
+        defer { store.skipDuplicateDownloads = true }
+        let wallpaper = Wallpaper(id: "zz", url: nil, path: URL(fileURLWithPath: "/z"),
+                                  thumb: URL(fileURLWithPath: "/z"), resolution: "1x1",
+                                  ratio: 1, views: 0, favorites: 0, category: "general",
+                                  purity: .sfw, fileSize: 1, fileType: "image/jpeg",
+                                  createdAt: "2020-01-01")
+        return await store.alreadyInLibrary(wallpaper) == nil
+    }
+
     v.section("Similarity graph")
     // Synthetic vectors, so the properties are checked rather than guessed at
     // from whatever the library happens to hold. Two tight clusters joined by

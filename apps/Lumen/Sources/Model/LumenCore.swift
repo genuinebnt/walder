@@ -62,10 +62,13 @@ final class LumenCore: @unchecked Sendable {
         try await call(Wallpaper.self) { id.withCString { lumen_details($0) } }
     }
 
-    func download(id: String, url: String, filename: String) async throws {
-        _ = try await call(String.self) {
-            lumen_download(Self.json(["id": id, "url": url, "filename": filename]))
-        }
+    /// `directory` sends the file somewhere other than the configured download
+    /// folder — that is how a download lands in one of your imported folders.
+    func download(id: String, url: String, filename: String,
+                  directory: String? = nil) async throws {
+        var payload: [String: Any] = ["id": id, "url": url, "filename": filename]
+        if let directory, !directory.isEmpty { payload["dir"] = directory }
+        _ = try await call(String.self) { lumen_download(Self.json(payload)) }
     }
 
     /// Downloads the file if it is not already on disk and returns its location.
@@ -325,9 +328,12 @@ final class LumenCore: @unchecked Sendable {
     }
 
     /// Enqueues a whole selection; the core's semaphore bounds concurrency.
-    func download(_ items: [(id: String, url: String, filename: String)]) async throws {
-        let payload = items.map { ["id": $0.id, "url": $0.url, "filename": $0.filename] }
-        _ = try await call(Queued.self) { lumen_download_many(Self.json(["items": payload])) }
+    func download(_ items: [(id: String, url: String, filename: String)],
+                  directory: String? = nil) async throws {
+        let items = items.map { ["id": $0.id, "url": $0.url, "filename": $0.filename] }
+        var payload: [String: Any] = ["items": items]
+        if let directory, !directory.isEmpty { payload["dir"] = directory }
+        _ = try await call(Queued.self) { lumen_download_many(Self.json(payload)) }
     }
 
     private struct Queued: Decodable { let queued: Int }
