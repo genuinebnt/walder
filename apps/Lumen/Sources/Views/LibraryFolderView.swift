@@ -11,7 +11,6 @@ struct LibraryFolderView: View {
     @Environment(Store.self) private var store
 
     @State private var hovered: String?
-    @State private var previewing: LocalWallpaper?
 
     private var items: [LocalWallpaper] { store.libraryWallpapers }
     private var theme: GridTheme { store.gridTheme }
@@ -43,10 +42,6 @@ struct LibraryFolderView: View {
             .padding(Tokens.s4)
         }
         .scrollContentBackground(.hidden)
-        .sheet(item: $previewing) { wallpaper in
-            LocalPreview(wallpaper: wallpaper) { previewing = nil }
-                .environment(store)
-        }
     }
 
     // MARK: Folders
@@ -161,16 +156,30 @@ struct LibraryFolderView: View {
     /// Where you are inside the imported folder, and the way back up.
     @ViewBuilder
     private var breadcrumb: some View {
-        if store.selectedFolder != nil {
+        if !store.libraryFolders.isEmpty {
             HStack(spacing: 4) {
                 Button {
-                    store.browse(to: "")
+                    store.selectFolder(nil)
                 } label: {
-                    Label(rootName, systemImage: "folder")
+                    Label("All folders", systemImage: "folder")
                         .font(.system(size: 12, weight: store.browsePath.isEmpty ? .medium : .regular))
                 }
                 .buttonStyle(.plain)
-                .foregroundStyle(store.browsePath.isEmpty ? .primary : Color.accentColor)
+                .foregroundStyle(store.selectedFolder == nil ? .primary : Color.accentColor)
+
+                if store.selectedFolder != nil {
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 9)).foregroundStyle(.tertiary)
+                    Button {
+                        store.browse(to: "")
+                    } label: {
+                        Text(rootName)
+                            .font(.system(size: 12,
+                                          weight: store.browsePath.isEmpty ? .medium : .regular))
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(store.browsePath.isEmpty ? .primary : Color.accentColor)
+                }
 
                 ForEach(store.breadcrumb, id: \.path) { crumb in
                     Image(systemName: "chevron.right")
@@ -259,7 +268,7 @@ struct LibraryFolderView: View {
 
     private var grid: some View {
         // Only what is at this level; subfolders are their own tiles above.
-        let shown = store.selectedFolder == nil ? items : store.currentFiles
+        let shown = store.currentFiles
         return LazyVGrid(columns: [GridItem(.adaptive(minimum: theme.minTileWidth),
                                             spacing: theme.spacing)],
                          spacing: theme.spacing) {
@@ -294,7 +303,7 @@ struct LibraryFolderView: View {
             }
         }
         .contentShape(.rect)
-        .onTapGesture { previewing = wallpaper }
+        .onTapGesture { withAnimation(Tokens.normal) { store.localPreview = wallpaper } }
         .onDrag { NSItemProvider(contentsOf: wallpaper.url) ?? NSItemProvider() }
         .contextMenu {
             Button("Set as Wallpaper") { store.setLocalWallpaper(wallpaper) }

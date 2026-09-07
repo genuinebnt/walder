@@ -963,15 +963,30 @@ final class Store {
         reloadLibrary()
     }
 
-    /// Steps into a subfolder, or back to a level in the breadcrumb.
+    /// Steps into a subfolder, or back to a level in the breadcrumb. A
+    /// "folder:" path selects one of the imported folders instead.
     @MainActor
     func browse(to path: String) {
+        if let id = path.split(separator: ":", maxSplits: 1).last.map(String.init),
+           path.hasPrefix("folder:") {
+            selectFolder(id)
+            return
+        }
         withAnimation(Tokens.quick) { browsePath = path }
     }
+
+    /// The wallpaper being previewed full-window from the Folders pane.
+    var localPreview: LocalWallpaper?
 
     /// Subdirectories directly inside the level being browsed, with a count of
     /// everything beneath each.
     var currentSubfolders: [(name: String, path: String, count: Int)] {
+        // With no folder chosen, the top of the tree is the imported folders
+        // themselves — otherwise everything from every folder piles into one
+        // list and looks like duplicates.
+        guard selectedFolder != nil else {
+            return libraryFolders.map { (name: $0.name, path: "folder:\($0.id)", count: $0.count) }
+        }
         let prefix = browsePath.isEmpty ? "" : browsePath + "/"
         var counts: [String: Int] = [:]
         for wallpaper in libraryWallpapers {
@@ -990,7 +1005,9 @@ final class Store {
 
     /// Wallpapers sitting directly in the level being browsed.
     var currentFiles: [LocalWallpaper] {
-        libraryWallpapers.filter { $0.subpath == browsePath }
+        // Nothing sits at the very top; a folder has to be chosen first.
+        guard selectedFolder != nil else { return [] }
+        return libraryWallpapers.filter { $0.subpath == browsePath }
     }
 
     /// Breadcrumb trail for the level being browsed.

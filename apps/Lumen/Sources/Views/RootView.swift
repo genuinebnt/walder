@@ -35,6 +35,16 @@ struct RootView: View {
             // The preview takes over the whole window rather than opening a
             // sheet, so the image gets every pixel available when deciding
             // whether to keep it.
+            if let local = store.localPreview {
+                LocalPreview(wallpaper: local) {
+                    withAnimation(Tokens.normal) { store.localPreview = nil }
+                }
+                .environment(store)
+                .clipped()
+                .transition(.opacity)
+                .zIndex(2)
+            }
+
             if let wallpaper = selection {
                 PreviewPane(items: viewerItems, selected: wallpaper) {
                     withAnimation(Tokens.normal) { selection = nil }
@@ -53,10 +63,16 @@ struct RootView: View {
         // renders above any SwiftUI overlay whatever its zIndex — it has to be
         // hidden, not covered. The content is dropped as well as the bar: a
         // hidden bar that still holds items left it half-drawn.
-        .toolbar(selection == nil ? .automatic : .hidden, for: .windowToolbar)
+        .toolbar(selection == nil && store.localPreview == nil ? .automatic : .hidden,
+                 for: .windowToolbar)
         // Previewing collapses the sidebar so a zoomed image gets the whole
         // window instead of running into it.
         .onChange(of: selection?.id) { _, id in
+            withAnimation(Tokens.normal) {
+                columnVisibility = id == nil ? .automatic : .detailOnly
+            }
+        }
+        .onChange(of: store.localPreview?.id) { _, id in
             withAnimation(Tokens.normal) {
                 columnVisibility = id == nil ? .automatic : .detailOnly
             }
@@ -223,7 +239,7 @@ struct RootView: View {
         // The title bar is reserved on every pane, and `showsTitle: false`
         // left it blank on the ones with no controls. The canvas draws the
         // title and subtitle there, so put them back.
-        if selection == nil {
+        if selection == nil && store.localPreview == nil {
             ToolbarItem(placement: .navigation) {
                 VStack(alignment: .leading, spacing: 0) {
                     Text(title).font(.barTitle)
@@ -239,7 +255,7 @@ struct RootView: View {
             }
         }
 
-        if section.isGrid && selection == nil {
+        if section.isGrid && selection == nil && store.localPreview == nil {
             ToolbarItem(placement: .principal) {
                 Picker("Layout", selection: Binding(get: { store.gridTheme }, set: { store.gridTheme = $0 })) {
                     ForEach(GridTheme.allCases) { theme in Text(theme.label).tag(theme) }

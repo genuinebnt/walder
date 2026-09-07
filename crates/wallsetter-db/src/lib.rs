@@ -1429,6 +1429,72 @@ impl Database {
         Ok(found)
     }
 
+    /// Fills in `subpath` for rows indexed before that column existed.
+    ///
+    /// Without this, a library imported by an earlier build stays flat until
+    /// the user thinks to rescan — and it is derivable from the path we already
+    /// store, so asking them to is unnecessary.
+    pub fn backfill_subpaths(&self) -> wallsetter_core::Result<usize> {
+        let folders = self.imported_folders()?;
+        if folders.is_empty() {
+            return Ok(0);
+        }
+
+        let mut conn = self
+            .pool
+            .get()
+            .map_err(|e| WallsetterError::Database(e.to_string()))?;
+        let transaction = conn
+            .transaction()
+            .map_err(|e| WallsetterError::Database(e.to_string()))?;
+        let mut fixed = 0;
+        {
+            let mut listing = transaction
+                .prepare_cached(
+                    "SELECT id, path FROM imported_wallpapers
+                     WHERE folder_id = ?1 AND subpath = ''",
+                )
+                .map_err(|e| WallsetterError::Database(e.to_string()))?;
+            let mut update = transaction
+                .prepare_cached("UPDATE imported_wallpapers SET subpath = ?2 WHERE id = ?1")
+                .map_err(|e| WallsetterError::Database(e.to_string()))?;
+
+            for (folder_id, _, root, _) in &folders {
+                let root_path = std::path::Path::new(root);
+                let rows: Vec<(String, String)> = listing
+                    .query_map([folder_id.to_string()], |row| {
+                        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                    })
+                    .map_err(|e| WallsetterError::Database(e.to_string()))?
+                    .filter_map(|row| row.ok())
+                    .collect();
+
+                for (id, path) in rows {
+                    let subpath = std::path::Path::new(&path)
+                        .parent()
+                        .and_then(|parent| parent.strip_prefix(root_path).ok())
+                        .map(|rel| rel.to_string_lossy().into_owned())
+                        .unwrap_or_default();
+                    // Only rows that are actually in a subfolder need writing.
+                    if subpath.is_empty() {
+                        continue;
+                    }
+                    update
+                        .execute((&id, &subpath))
+                        .map_err(|e| WallsetterError::Database(e.to_string()))?;
+                    fixed += 1;
+                }
+            }
+        }
+        transaction
+            .commit()
+            .map_err(|e| WallsetterError::Database(e.to_string()))?;
+        if fixed > 0 {
+            info!("Backfilled {fixed} imported wallpaper subpaths");
+        }
+        Ok(fixed)
+    }
+
     pub fn set_imported_favorite(&self, id: Uuid, favorite: bool) -> wallsetter_core::Result<()> {
         let conn = self
             .pool

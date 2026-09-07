@@ -192,6 +192,9 @@ pub unsafe extern "C" fn lumen_init(config_json: *const c_char) -> *mut c_char {
     match built {
         Ok(c) => {
             let core = CORE.get_or_init(|| c);
+            // A library imported before subpaths existed would otherwise stay
+            // flat until the user thought to rescan.
+            let _ = core.db.backfill_subpaths();
             spawn_download_watch(core);
             to_c(serde_json::json!({ "ok": true, "kind": "init", "data": "started" }).to_string())
         }

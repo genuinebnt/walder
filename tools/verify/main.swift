@@ -1057,6 +1057,17 @@ func run() async -> Int32 {
         store.browse(to: "")
         return leaf && trail
     }
+    v.check("With no folder chosen, the imported folders are the top level") {
+        // Everything from every folder piling into one list is what made a
+        // nested import look full of duplicates.
+        store.libraryWallpapers = [
+            LocalWallpaper(id: "1", folderId: "f", url: URL(filePath: "/tmp/a.png"),
+                           path: "/tmp/a.png", filename: "a.png", fileSize: 1,
+                           isFavorite: false, subpath: "")
+        ]
+        store.selectedFolder = nil
+        return store.currentFiles.isEmpty
+    }
     v.check("Choosing a folder returns to its top level") {
         store.browse(to: "somewhere/deep")
         store.selectFolder(nil)

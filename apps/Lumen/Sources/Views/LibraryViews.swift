@@ -25,6 +25,7 @@ struct DownloadsView: View {
                     ContentUnavailableView("No downloads yet",
                                            systemImage: "arrow.down.circle",
                                            description: Text("Hover a wallpaper and choose Download."))
+                        .frame(maxWidth: .infinity)
                         .padding(.vertical, Tokens.s6)
                 }
             }
@@ -119,6 +120,7 @@ struct CollectionsView: View {
                     ContentUnavailableView("No collections",
                                            systemImage: "rectangle.stack",
                                            description: Text("Create one to group downloads and shuffle them on a schedule."))
+                        .frame(maxWidth: .infinity)
                         .padding(.vertical, Tokens.s6)
                 }
             }
