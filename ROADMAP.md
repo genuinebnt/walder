@@ -137,63 +137,41 @@ These are what would separate Lumen from every other Wallhaven downloader.
 
 | Feature | Why it stands out | Cost |
 | --- | --- | --- |
-| **Per-Space wallpapers, individually** | "All Spaces" ships, but assigning a *different* wallpaper to each Space does not. The store models it; the missing piece is knowing which Space is which. | Medium now the store's shape is understood. |
 | **Live preview on the desktop** | Set on hover, revert on Escape. | Low mechanically, but it writes the real desktop picture — needs a reliable revert path or it strands the user's wallpaper. |
 
-## Phase 3 — vector embeddings
+## Phase 3 — vector embeddings — shipped
 
-Worth doing, with one honest constraint: **only images already fetched can be
-embedded.** This works over the local library — downloads, favourites, browsed
-thumbnails — not Wallhaven's whole catalogue.
+MobileCLIP-S0, with the caveat that mattered: **Apple licenses the weights for
+research purposes only**, which excludes product development and commercial
+use. They are fetched by `tools/fetch-model.sh` into Application Support, kept
+out of the repository by `.gitignore`, and the feature hides itself when they
+are absent. This is a personal, undistributed build; do not ship it.
 
-**What it buys**
-
-- **Semantic search of the library** — "moody city at night", "warm minimal
-  desert", with no tags. Wallhaven's tag search cannot do this.
-- **True similar-to-this** — nearest neighbours by embedding beat tag overlap,
-  especially for style ("this exact grain and fog").
-- **Near-duplicate detection** — the same wallpaper at different resolutions, or
-  reposts. Cheap and immediately useful.
-- **Auto-collections** — cluster the library and propose collections ("42 images
-  cluster as dark forest"), which fills the Collections work above without
-  manual sorting.
-- **Taste-aware rotation** — embed favourites, rank browse results by distance to
-  that centroid. A "more like what I actually set" sort.
-- **Contextual rotation** — pick wallpapers near a text prompt: "calm, low
-  contrast" during work hours, "vivid" at the weekend.
-
-**How to build it on macOS**
-
-- `VNGenerateImageFeaturePrintRequest` gives similarity and dedupe with **no
-  model to ship** — but no text search.
-- Text→image needs a CLIP-class model converted to Core ML (~150–350 MB; the
-  image encoder runs on the Neural Engine, roughly 10–30 ms per thumbnail).
-  Text queries embed instantly.
-- Storage: 512–768 floats per image. At a few thousand wallpapers a flat cosine
-  scan in memory beats any index — **no vector database.** Persist as a BLOB in
-  `lumen-db`, keyed by wallpaper id; embed on download, lazily for browsed
-  thumbnails. Quantise to int8 if the library grows: 10k × 512 int8 is 5 MB.
-
-**Cost** — app size, a one-time model download, an embedding backfill pass, and a
-second search mode in the UI that has to be explained.
-
-**Sequencing.** Ship feature-print similarity and dedupe first: no model, no
-download, and it covers dedupe, similar-to-this and auto-collections. Add CLIP
-text search after, once there is evidence the library is large enough to want it.
-
-The two interesting screens, when this gets designed: a semantic search field
-with a similarity slider, and an auto-collections review sheet where proposed
-clusters are accepted or rejected.
+- **Describe the library** — "a samurai and mount fuji" finds the wallpaper of
+  one. Verified against the tags the metadata backfill recovered rather than by
+  eye.
+- **Similarity by subject** — Similar, Discover, auto-collections and taste
+  ranking all read the embeddings now. Duplicate detection deliberately does
+  not: its threshold was measured against feature prints, and CLIP would call
+  two different wallpapers of the same thing one picture.
+- **Cost** — about 40ms an image, so a few minutes for a full library, built by
+  the background pass after an import and resumable.
 
 ---
 
-## Not planned
+## Still open
 
-- **Windows and Linux front ends.** The Rust core is portable and the CLI still
-  builds everywhere, but `apps/Lumen` is AppKit-bound by design — per-display
-  and per-Space wallpapers have no cross-platform equivalent worth abstracting.
-- **Uploading to Wallhaven.** Out of scope for a browser and setter.
-- **A general image editor.** Crop-to-fit is deliberately the only editing
-  surface.
-
----
+- **Author stats** — uploads and favourites received. The API does not expose
+  them; this needs scraping or doing without.
+- **Live preview on the desktop** — set on hover, revert on Escape. Low
+  mechanically, but it writes the real desktop picture and needs a revert path
+  that cannot strand you.
+- **Radar alerts do not deliver.** Measured: this build is ad-hoc signed with
+  no Team ID, so macOS never registers it — the app is absent from
+  `com.apple.ncprefs` while ninety-nine others are listed. The in-app badge is
+  what the feature rests on, and Settings now says so. Only a Developer ID
+  signature would change it.
+- **Uncropped thumbnails are small.** Wallhaven caps its aspect-true thumbnail
+  at 300px, so Natural and Masonry upscale it. Sharpening means decoding the
+  full image down to tile size and caching that.
+- **CLI gaps** — no trash, backup/export or library health.
