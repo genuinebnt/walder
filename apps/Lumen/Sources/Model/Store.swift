@@ -1,6 +1,7 @@
 import SwiftUI
 import Observation
 import IOKit.ps
+import Vision
 
 /// App state. Every network, disk and database operation is delegated to the
 /// Rust core through `LumenCore`; this type holds only what the views render.
@@ -531,6 +532,119 @@ final class Store {
         Task {
             try? await Task.sleep(for: .seconds(2.5))
             withAnimation(Tokens.normal) { savedConfirmation = false }
+        }
+    }
+
+    // MARK: Library similarity
+    //
+    // Vision feature prints over the imported library. This is what finds the
+    // same wallpaper at another resolution, and "more like this one" among
+    // files you already have.
+
+    var isIndexingPrints = false
+    var indexProgress: (done: Int, total: Int) = (0, 0)
+    var duplicateGroups: [[LocalWallpaper]] = []
+    var similarToSelection: [LocalWallpaper] = []
+
+    /// How many library files still have no print.
+    var unindexedCount: Int {
+        let known = LumenCore.shared.printedPaths()
+        return libraryWallpapers.filter { !known.contains($0.path) }.count
+    }
+
+    /// Computes prints for anything in the library that lacks one.
+    ///
+    /// Off the main actor, in batches, so a large folder does not freeze the
+    /// UI or hold every print in memory at once.
+    @MainActor
+    func indexLibrary() async {
+        guard coreReady, !isIndexingPrints else { return }
+        isIndexingPrints = true
+        defer { isIndexingPrints = false; indexProgress = (0, 0) }
+
+        LumenCore.shared.prunePrints()
+        let known = LumenCore.shared.printedPaths()
+        let pending = libraryWallpapers.filter { !known.contains($0.path) }
+        guard !pending.isEmpty else { return }
+        indexProgress = (0, pending.count)
+
+        // Batched so progress is visible and memory stays flat.
+        for batch in stride(from: 0, to: pending.count, by: 25) {
+            let slice = Array(pending[batch..<min(batch + 25, pending.count)])
+            let computed = await Task.detached(priority: .utility) {
+                slice.compactMap { wallpaper -> (path: String, data: Data, fileSize: Int)? in
+                    guard let observation = ImagePrints.print(of: wallpaper.url),
+                          let data = ImagePrints.encode(observation) else { return nil }
+                    return (wallpaper.path, data, wallpaper.fileSize)
+                }
+            }.value
+            _ = LumenCore.shared.storePrints(computed)
+            indexProgress = (min(batch + 25, pending.count), pending.count)
+        }
+    }
+
+    /// Loads every stored print, decoded and paired with its path.
+    private func loadedPrints() async -> [(path: String, print: VNFeaturePrintObservation)] {
+        let stored = LumenCore.shared.allPrints()
+        return await Task.detached(priority: .userInitiated) {
+            stored.compactMap { entry in
+                guard let data = Data(base64Encoded: entry.print),
+                      let observation = ImagePrints.decode(data) else { return nil }
+                return (entry.path, observation)
+            }
+        }.value
+    }
+
+    /// Finds files that look like the same picture.
+    @MainActor
+    func findDuplicates() async {
+        guard coreReady else { return }
+        await indexLibrary()
+        isIndexingPrints = true
+        defer { isIndexingPrints = false }
+
+        let prints = await loadedPrints()
+        let groups = await Task.detached(priority: .userInitiated) {
+            ImagePrints.duplicateGroups(in: prints)
+        }.value
+
+        // Map paths back to what the grid renders, dropping anything no longer
+        // in the library.
+        let byPath = Dictionary(uniqueKeysWithValues: libraryWallpapers.map { ($0.path, $0) })
+        withAnimation(Tokens.normal) {
+            duplicateGroups = groups.compactMap { group in
+                let found = group.compactMap { byPath[$0] }
+                return found.count > 1 ? found : nil
+            }
+        }
+    }
+
+    /// Files in the library most like this one.
+    @MainActor
+    func findSimilarInLibrary(to wallpaper: LocalWallpaper) async {
+        guard coreReady else { return }
+        await indexLibrary()
+
+        let prints = await loadedPrints()
+        guard let target = prints.first(where: { $0.path == wallpaper.path })?.print else {
+            similarToSelection = []
+            return
+        }
+        let nearest = await Task.detached(priority: .userInitiated) {
+            ImagePrints.nearest(to: target, in: prints, excluding: wallpaper.path)
+        }.value
+
+        let byPath = Dictionary(uniqueKeysWithValues: libraryWallpapers.map { ($0.path, $0) })
+        withAnimation(Tokens.normal) {
+            similarToSelection = nearest.compactMap { byPath[$0.path] }
+        }
+    }
+
+    @MainActor
+    func clearSimilarity() {
+        withAnimation(Tokens.quick) {
+            duplicateGroups = []
+            similarToSelection = []
         }
     }
 

@@ -129,6 +129,40 @@ final class LumenCore: @unchecked Sendable {
         Set(decodeSync([String].self, Self.takeString(lumen_downloaded_ids())) ?? [])
     }
 
+    // MARK: Image feature prints
+
+    struct StoredPrint: Decodable {
+        let path: String
+        /// Base64; the raw archive travels as JSON.
+        let print: String
+    }
+
+    @discardableResult
+    func storePrints(_ entries: [(path: String, data: Data, fileSize: Int)]) -> Int {
+        guard !entries.isEmpty else { return 0 }
+        let payload = entries.map {
+            ["path": $0.path, "print": $0.data.base64EncodedString(), "fileSize": $0.fileSize]
+        }
+        let reply = Self.takeString(lumen_prints_store(Self.json(["prints": payload])))
+        struct Stored: Decodable { let stored: Int }
+        return decodeSync(Stored.self, reply)?.stored ?? 0
+    }
+
+    func allPrints() -> [StoredPrint] {
+        decodeSync([StoredPrint].self, Self.takeString(lumen_prints_all())) ?? []
+    }
+
+    func printedPaths() -> Set<String> {
+        Set(decodeSync([String].self, Self.takeString(lumen_prints_known())) ?? [])
+    }
+
+    @discardableResult
+    func prunePrints() -> Int {
+        let reply = Self.takeString(lumen_prints_prune())
+        struct Removed: Decodable { let removed: Int }
+        return decodeSync(Removed.self, reply)?.removed ?? 0
+    }
+
     // MARK: Tag radar
 
     @discardableResult

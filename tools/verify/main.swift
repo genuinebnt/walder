@@ -666,6 +666,122 @@ func run() async -> Int32 {
         return store.downloads.count == before
     }
 
+    v.section("Image feature prints")
+
+    /// Writes a PNG of a given size with a deterministic pattern, so two files
+    /// can be the same picture at different resolutions.
+    func writePattern(width: Int, height: Int, shifted: Bool = false) -> URL? {
+        let url = FileManager.default.temporaryDirectory
+            .appending(path: "lumen-verify-print-\(UUID().uuidString).png")
+        guard let context = CGContext(
+            data: nil, width: width, height: height,
+            bitsPerComponent: 8, bytesPerRow: 0,
+            space: CGColorSpace(name: CGColorSpace.sRGB)!,
+            bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue) else { return nil }
+
+        if shifted {
+            // Structurally different, not just recoloured: reordering four
+            // colour bands measured 0.11 apart, which is duplicate territory.
+            var generator = SystemRandomNumberGenerator()
+            for _ in 0..<600 {
+                context.setFillColor(red: .random(in: 0...1, using: &generator),
+                                     green: .random(in: 0...1, using: &generator),
+                                     blue: .random(in: 0...1, using: &generator), alpha: 1)
+                context.fill(CGRect(x: .random(in: 0...CGFloat(width), using: &generator),
+                                    y: .random(in: 0...CGFloat(height), using: &generator),
+                                    width: CGFloat(width) / 12, height: CGFloat(height) / 12))
+            }
+        } else {
+            // Big blocks of colour: recognisable to a feature print at any size.
+            let palette: [(CGFloat, CGFloat, CGFloat)] =
+                [(0.1, 0.6, 0.3), (0.95, 0.85, 0.1), (0.2, 0.3, 0.9), (0.9, 0.2, 0.2)]
+            for (index, colour) in palette.enumerated() {
+                context.setFillColor(red: colour.0, green: colour.1, blue: colour.2, alpha: 1)
+                let band = CGFloat(height) / CGFloat(palette.count)
+                context.fill(CGRect(x: 0, y: CGFloat(index) * band,
+                                    width: CGFloat(width), height: band))
+            }
+        }
+        guard let image = context.makeImage(),
+              let destination = CGImageDestinationCreateWithURL(
+                url as CFURL, "public.png" as CFString, 1, nil) else { return nil }
+        CGImageDestinationAddImage(destination, image, nil)
+        guard CGImageDestinationFinalize(destination) else { return nil }
+        return url
+    }
+
+    let bigCopy = writePattern(width: 800, height: 500)
+    let smallCopy = writePattern(width: 320, height: 200)
+    let different = writePattern(width: 800, height: 500, shifted: true)
+    defer {
+        for url in [bigCopy, smallCopy, different].compactMap({ $0 }) {
+            try? FileManager.default.removeItem(at: url)
+        }
+    }
+
+    v.check("The duplicate threshold sits between the two measured ranges") {
+        // Unrelated real wallpapers measure 0.97-1.27; the same image resized
+        // measures 0.24. A threshold outside that gap is the bug to catch.
+        ImagePrints.duplicateThreshold > 0.3 && ImagePrints.duplicateThreshold < 0.9
+    }
+    v.check("A print can be computed, archived and read back") {
+        guard let bigCopy, let observation = ImagePrints.print(of: bigCopy),
+              let data = ImagePrints.encode(observation),
+              let restored = ImagePrints.decode(data) else { return false }
+        // A print must survive the round trip through storage intact.
+        guard let apart = ImagePrints.distance(observation, restored) else { return false }
+        return apart < 0.001
+    }
+    v.check("The same picture at another size is recognised") {
+        // This is the whole point: a file hash cannot see that these match.
+        guard let bigCopy, let smallCopy,
+              let a = ImagePrints.print(of: bigCopy),
+              let b = ImagePrints.print(of: smallCopy),
+              let apart = ImagePrints.distance(a, b) else { return false }
+        if apart > ImagePrints.duplicateThreshold {
+            print("        resized copy measured \(apart), over the threshold")
+        }
+        return apart <= ImagePrints.duplicateThreshold
+    }
+    v.check("A different picture is not called a duplicate") {
+        guard let bigCopy, let different,
+              let a = ImagePrints.print(of: bigCopy),
+              let b = ImagePrints.print(of: different),
+              let apart = ImagePrints.distance(a, b) else { return false }
+        if apart <= ImagePrints.duplicateThreshold {
+            print("        unrelated pair measured \(apart), under the threshold")
+        }
+        return apart > ImagePrints.duplicateThreshold
+    }
+    v.check("Grouping puts the copies together and leaves the odd one out") {
+        guard let bigCopy, let smallCopy, let different,
+              let a = ImagePrints.print(of: bigCopy),
+              let b = ImagePrints.print(of: smallCopy),
+              let c = ImagePrints.print(of: different) else { return false }
+        let groups = ImagePrints.duplicateGroups(in: [
+            (bigCopy.path, a), (smallCopy.path, b), (different.path, c)
+        ])
+        return groups.count == 1
+            && groups[0].count == 2
+            && !groups[0].contains(different.path)
+    }
+    v.check("Nearest ranks the resized copy above the unrelated one") {
+        guard let bigCopy, let smallCopy, let different,
+              let a = ImagePrints.print(of: bigCopy),
+              let b = ImagePrints.print(of: smallCopy),
+              let c = ImagePrints.print(of: different) else { return false }
+        let ranked = ImagePrints.nearest(
+            to: a, in: [(smallCopy.path, b), (different.path, c)], excluding: bigCopy.path)
+        return ranked.first?.path == smallCopy.path
+    }
+    v.check("An unreadable file yields no print rather than a wrong one") {
+        let url = FileManager.default.temporaryDirectory
+            .appending(path: "lumen-verify-notimage-\(UUID().uuidString).png")
+        try? Data("definitely not a png".utf8).write(to: url)
+        defer { try? FileManager.default.removeItem(at: url) }
+        return ImagePrints.print(of: url) == nil
+    }
+
     v.section("System accent matching")
     v.check("A strong colour maps to the accent a person would name") {
         SystemAccent.nearest(toHex: "0066cc") == .blue

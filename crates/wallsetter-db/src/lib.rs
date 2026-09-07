@@ -219,6 +219,20 @@ impl Database {
         )
         .map_err(|e| WallsetterError::Database(e.to_string()))?;
 
+        // Vision feature prints, keyed by file path. These are what make
+        // "find duplicates" and "similar in my library" possible without
+        // shipping a model — Vision computes them, this only stores them.
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS image_prints (
+                path TEXT PRIMARY KEY,
+                print BLOB NOT NULL,
+                file_size INTEGER NOT NULL DEFAULT 0,
+                computed_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )",
+            [],
+        )
+        .map_err(|e| WallsetterError::Database(e.to_string()))?;
+
         // Indices for the columns the app actually filters and joins on.
         // Without them every favourite check is a full scan of bookmarks.
         conn.execute_batch(
@@ -1644,6 +1658,111 @@ impl Database {
         )
         .map_err(|e| WallsetterError::Database(e.to_string()))?;
         Ok(())
+    }
+}
+
+impl Database {
+    // ──────────────────────────────────────────────
+    // Image feature prints
+    // ──────────────────────────────────────────────
+
+    /// Stores a print for a file. Re-computing overwrites, so a file that was
+    /// replaced on disk gets a fresh print rather than a stale match.
+    pub fn store_print(
+        &self,
+        path: &str,
+        print: &[u8],
+        file_size: u64,
+    ) -> wallsetter_core::Result<()> {
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| WallsetterError::Database(e.to_string()))?;
+        conn.execute(
+            "INSERT INTO image_prints (path, print, file_size) VALUES (?1, ?2, ?3)
+             ON CONFLICT(path) DO UPDATE SET
+                print = excluded.print,
+                file_size = excluded.file_size,
+                computed_at = CURRENT_TIMESTAMP",
+            (path, print, file_size as i64),
+        )
+        .map_err(|e| WallsetterError::Database(e.to_string()))?;
+        Ok(())
+    }
+
+    /// Every stored print, as `(path, blob)`.
+    pub fn all_prints(&self) -> wallsetter_core::Result<Vec<(String, Vec<u8>)>> {
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| WallsetterError::Database(e.to_string()))?;
+        let mut stmt = conn
+            .prepare("SELECT path, print FROM image_prints")
+            .map_err(|e| WallsetterError::Database(e.to_string()))?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?))
+            })
+            .map_err(|e| WallsetterError::Database(e.to_string()))?;
+
+        let mut prints = Vec::new();
+        for row in rows {
+            prints.push(row.map_err(|e| WallsetterError::Database(e.to_string()))?);
+        }
+        Ok(prints)
+    }
+
+    /// Paths that already have a print, so only new files are computed.
+    pub fn printed_paths(&self) -> wallsetter_core::Result<std::collections::HashSet<String>> {
+        let conn = self
+            .pool
+            .get()
+            .map_err(|e| WallsetterError::Database(e.to_string()))?;
+        let mut stmt = conn
+            .prepare("SELECT path FROM image_prints")
+            .map_err(|e| WallsetterError::Database(e.to_string()))?;
+        let rows = stmt
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(|e| WallsetterError::Database(e.to_string()))?;
+
+        let mut paths = std::collections::HashSet::new();
+        for row in rows {
+            paths.insert(row.map_err(|e| WallsetterError::Database(e.to_string()))?);
+        }
+        Ok(paths)
+    }
+
+    /// Drops prints for files that are no longer on disk.
+    pub fn prune_prints(&self) -> wallsetter_core::Result<usize> {
+        let stored = self.printed_paths()?;
+        let gone: Vec<&String> = stored
+            .iter()
+            .filter(|path| !std::path::Path::new(path).exists())
+            .collect();
+        if gone.is_empty() {
+            return Ok(0);
+        }
+
+        let mut conn = self
+            .pool
+            .get()
+            .map_err(|e| WallsetterError::Database(e.to_string()))?;
+        let transaction = conn
+            .transaction()
+            .map_err(|e| WallsetterError::Database(e.to_string()))?;
+        {
+            let mut stmt = transaction
+                .prepare_cached("DELETE FROM image_prints WHERE path = ?1")
+                .map_err(|e| WallsetterError::Database(e.to_string()))?;
+            for path in &gone {
+                stmt.execute([path.as_str()])
+                    .map_err(|e| WallsetterError::Database(e.to_string()))?;
+            }
+        }
+        transaction
+            .commit()
+            .map_err(|e| WallsetterError::Database(e.to_string()))?;
+        Ok(gone.len())
     }
 }
 

@@ -20,7 +20,12 @@ struct LibraryFolderView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: Tokens.s4) {
                 folders
-                if items.isEmpty {
+
+                if !store.duplicateGroups.isEmpty {
+                    duplicates
+                } else if !store.similarToSelection.isEmpty {
+                    similar
+                } else if items.isEmpty {
                     emptyState
                 } else {
                     grid
@@ -61,10 +66,27 @@ struct LibraryFolderView: View {
                     .controlSize(.mini)
                     .font(.system(size: 11.5))
 
-                if store.isScanningLibrary {
+                Button {
+                    Task { await store.findDuplicates() }
+                } label: {
+                    Label("Find Duplicates", systemImage: "square.on.square")
+                }
+                .disabled(store.libraryWallpapers.isEmpty || store.isIndexingPrints)
+                .help("Finds the same picture at another resolution or re-encoded, "
+                      + "which a file comparison would miss")
+
+                if !store.duplicateGroups.isEmpty || !store.similarToSelection.isEmpty {
+                    Button("Clear") { store.clearSimilarity() }
+                }
+
+                if store.isScanningLibrary || store.isIndexingPrints {
                     ProgressView().controlSize(.small)
                 }
                 Spacer()
+                if store.indexProgress.total > 0 {
+                    Text("indexing \(store.indexProgress.done) of \(store.indexProgress.total)")
+                        .font(.caption2Mono).foregroundStyle(.secondary)
+                }
                 Text("\(items.count) wallpapers")
                     .font(.caption2Mono).foregroundStyle(.secondary)
             }
@@ -125,6 +147,39 @@ struct LibraryFolderView: View {
         }
     }
 
+    // MARK: Similarity
+
+    /// Groups of files that look like the same picture.
+    private var duplicates: some View {
+        VStack(alignment: .leading, spacing: Tokens.s4) {
+            Text("\(store.duplicateGroups.count) SETS OF DUPLICATES")
+                .font(.sectionLabel).foregroundStyle(.secondary)
+            ForEach(Array(store.duplicateGroups.enumerated()), id: \.offset) { _, group in
+                VStack(alignment: .leading, spacing: Tokens.s2) {
+                    Text("\(group.count) copies · keep the largest and delete the rest in Finder")
+                        .font(.system(size: 11)).foregroundStyle(.secondary)
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 190), spacing: Tokens.s3)],
+                              spacing: Tokens.s3) {
+                        ForEach(group) { tile($0) }
+                    }
+                }
+                .padding(Tokens.s3)
+                .card()
+            }
+        }
+    }
+
+    private var similar: some View {
+        VStack(alignment: .leading, spacing: Tokens.s2) {
+            Text("SIMILAR IN YOUR LIBRARY").font(.sectionLabel).foregroundStyle(.secondary)
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: theme.minTileWidth),
+                                         spacing: theme.spacing)],
+                      spacing: theme.spacing) {
+                ForEach(store.similarToSelection) { tile($0) }
+            }
+        }
+    }
+
     // MARK: Grid
 
     private var grid: some View {
@@ -176,6 +231,9 @@ struct LibraryFolderView: View {
                 }
             }
             Divider()
+            Button("Find Similar in Library") {
+                Task { await store.findSimilarInLibrary(to: wallpaper) }
+            }
             Button("Reveal in Finder") {
                 NSWorkspace.shared.activateFileViewerSelecting([wallpaper.url])
             }

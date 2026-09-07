@@ -775,6 +775,147 @@ pub unsafe extern "C" fn lumen_collection_set_member(json: *const c_char) -> *mu
     }
 }
 
+// ── image feature prints ──────────────────────────────────────────────────
+
+/// Stores feature prints computed by Vision on the Swift side.
+///
+/// `json`: `{ "prints": [{ "path": String, "print": base64, "fileSize": Int }] }`
+/// Returns `{ "stored": Int }`. Caller frees with [`lumen_string_free`].
+///
+/// # Safety
+/// `json` must be NUL-terminated UTF-8, or null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn lumen_prints_store(json: *const c_char) -> *mut c_char {
+    let raw = unsafe { str_from(json) };
+    let Some(core) = core() else {
+        return to_c(err_json("prints", "core not initialised"));
+    };
+    let value: serde_json::Value = serde_json::from_str(&raw).unwrap_or(serde_json::Value::Null);
+    let Some(entries) = value["prints"].as_array() else {
+        return to_c(err_json("prints", "prints are required"));
+    };
+
+    let mut stored = 0;
+    for entry in entries {
+        let path = entry["path"].as_str().unwrap_or_default();
+        let encoded = entry["print"].as_str().unwrap_or_default();
+        let size = entry["fileSize"].as_u64().unwrap_or(0);
+        if path.is_empty() || encoded.is_empty() {
+            continue;
+        }
+        let Some(bytes) = decode_base64(encoded) else { continue };
+        if core.db.store_print(path, &bytes, size).is_ok() {
+            stored += 1;
+        }
+    }
+    to_c(
+        serde_json::json!({ "ok": true, "kind": "prints", "data": { "stored": stored } })
+            .to_string(),
+    )
+}
+
+/// Every stored print, as `{ path, print }` with the print base64 encoded.
+/// Caller frees with [`lumen_string_free`].
+#[unsafe(no_mangle)]
+pub extern "C" fn lumen_prints_all() -> *mut c_char {
+    let Some(core) = core() else {
+        return to_c(err_json("prints", "core not initialised"));
+    };
+    match core.db.all_prints() {
+        Ok(prints) => {
+            let list: Vec<serde_json::Value> = prints
+                .into_iter()
+                .map(|(path, bytes)| {
+                    serde_json::json!({ "path": path, "print": encode_base64(&bytes) })
+                })
+                .collect();
+            to_c(serde_json::to_string(&Envelope::ok("prints", list)).unwrap_or_default())
+        }
+        Err(e) => to_c(err_json("prints", e)),
+    }
+}
+
+/// Paths that already have a print, so only new files are computed.
+/// Caller frees with [`lumen_string_free`].
+#[unsafe(no_mangle)]
+pub extern "C" fn lumen_prints_known() -> *mut c_char {
+    let Some(core) = core() else {
+        return to_c(err_json("prints", "core not initialised"));
+    };
+    match core.db.printed_paths() {
+        Ok(paths) => {
+            let list: Vec<String> = paths.into_iter().collect();
+            to_c(serde_json::to_string(&Envelope::ok("prints", list)).unwrap_or_default())
+        }
+        Err(e) => to_c(err_json("prints", e)),
+    }
+}
+
+/// Drops prints for files no longer on disk.
+#[unsafe(no_mangle)]
+pub extern "C" fn lumen_prints_prune() -> *mut c_char {
+    let Some(core) = core() else {
+        return to_c(err_json("prints", "core not initialised"));
+    };
+    match core.db.prune_prints() {
+        Ok(removed) => to_c(
+            serde_json::json!({ "ok": true, "kind": "prints", "data": { "removed": removed } })
+                .to_string(),
+        ),
+        Err(e) => to_c(err_json("prints", e)),
+    }
+}
+
+/// Minimal base64, so a Vision print can travel as JSON without pulling in a
+/// dependency for four lines of work.
+fn encode_base64(bytes: &[u8]) -> String {
+    const ALPHABET: &[u8; 64] =
+        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let b = [chunk[0], *chunk.get(1).unwrap_or(&0), *chunk.get(2).unwrap_or(&0)];
+        let n = (u32::from(b[0]) << 16) | (u32::from(b[1]) << 8) | u32::from(b[2]);
+        out.push(ALPHABET[(n >> 18) as usize & 63] as char);
+        out.push(ALPHABET[(n >> 12) as usize & 63] as char);
+        out.push(if chunk.len() > 1 { ALPHABET[(n >> 6) as usize & 63] as char } else { '=' });
+        out.push(if chunk.len() > 2 { ALPHABET[n as usize & 63] as char } else { '=' });
+    }
+    out
+}
+
+fn decode_base64(text: &str) -> Option<Vec<u8>> {
+    fn value(byte: u8) -> Option<u32> {
+        match byte {
+            b'A'..=b'Z' => Some(u32::from(byte - b'A')),
+            b'a'..=b'z' => Some(u32::from(byte - b'a') + 26),
+            b'0'..=b'9' => Some(u32::from(byte - b'0') + 52),
+            b'+' => Some(62),
+            b'/' => Some(63),
+            _ => None,
+        }
+    }
+
+    let cleaned: Vec<u8> = text.bytes().filter(|b| !b.is_ascii_whitespace()).collect();
+    let padding = cleaned.iter().rev().take_while(|b| **b == b'=').count();
+    let body = &cleaned[..cleaned.len().saturating_sub(padding)];
+
+    let mut out = Vec::with_capacity(body.len() * 3 / 4);
+    for chunk in body.chunks(4) {
+        let mut packed = 0u32;
+        for (index, byte) in chunk.iter().enumerate() {
+            packed |= value(*byte)? << (18 - 6 * index);
+        }
+        out.push((packed >> 16) as u8);
+        if chunk.len() > 2 {
+            out.push((packed >> 8) as u8);
+        }
+        if chunk.len() > 3 {
+            out.push(packed as u8);
+        }
+    }
+    Some(out)
+}
+
 // ── tag radar ─────────────────────────────────────────────────────────────
 
 /// Subscribes to a query, so new matches are noticed in the background.
@@ -1474,3 +1615,33 @@ pub extern "C" fn lumen_status() -> *mut c_char {
         .unwrap_or_else(|| "not initialised".into());
     to_c(reason)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{decode_base64, encode_base64};
+
+    #[test]
+    fn base64_round_trips_every_length_and_byte_value() {
+        // Feature prints are opaque binary; a padding bug would corrupt them
+        // silently and only show up as bad similarity matches.
+        for length in 0..64usize {
+            let original: Vec<u8> = (0..length).map(|i| (i * 7 % 256) as u8).collect();
+            let encoded = encode_base64(&original);
+            assert_eq!(encoded.len() % 4, 0, "length {length} is not padded");
+            assert_eq!(decode_base64(&encoded).expect("decode"), original, "length {length}");
+        }
+
+        // Every byte value, not just the ones a small loop happens to hit.
+        let all: Vec<u8> = (0..=255u8).collect();
+        assert_eq!(decode_base64(&encode_base64(&all)).expect("decode"), all);
+    }
+
+    #[test]
+    fn decoding_rejects_rubbish_rather_than_returning_wrong_bytes() {
+        assert!(decode_base64("not base64!").is_none());
+        assert_eq!(decode_base64("").expect("empty"), Vec::<u8>::new());
+        // Whitespace is tolerated, since JSON transports can introduce it.
+        assert_eq!(decode_base64("QQ ==").expect("spaced"), b"A".to_vec());
+    }
+}
+
