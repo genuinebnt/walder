@@ -995,19 +995,29 @@ final class Store {
                                                   graph: SimilarityGraph,
                                                   vectors: [(path: String, vector: [Float])])?
 
-    /// The library as a graph, built on first use and reused until the set of
-    /// indexed files changes.
+    // Two vector spaces, deliberately kept apart.
+    //
+    // A Vision feature print describes how a picture *looks* — its colours,
+    // its composition, its texture. A CLIP embedding describes what it is *of*.
+    // The right one depends on the question:
+    //
+    //   duplicates, "you already have this"  → appearance. Two photographs of
+    //     different samurai are not the same file, however alike the subject.
+    //   similar, Discover, auto-collections  → subject. Asked for more like a
+    //     samurai wallpaper, a palette match is not the answer.
+    //
+    // Using one for both was the compromise before the embeddings existed.
+
+    /// The library as a graph over what its wallpapers are *of*.
+    ///
+    /// Falls back to feature prints when nothing has been embedded — a fresh
+    /// checkout has no model, and appearance is a worse answer than none.
     private func libraryGraph() async -> SimilarityGraph? {
-        let prints = await loadedPrints()
-        guard prints.count > 1 else { return nil }
-
-        let key = Set(prints.map(\.path))
-        if let cached = cachedGraph, cached.paths == key { return cached.graph }
-
-        let entries = prints.compactMap { entry -> (path: String, vector: [Float])? in
-            ImagePrints.vector(entry.print).map { (entry.path, $0) }
-        }
+        let entries = await subjectVectors()
         guard entries.count > 1 else { return nil }
+
+        let key = Set(entries.map(\.path))
+        if let cached = cachedGraph, cached.paths == key { return cached.graph }
 
         let graph = await Task.detached(priority: .userInitiated) {
             SimilarityGraph.build(from: entries)
@@ -1016,11 +1026,28 @@ final class Store {
         return graph
     }
 
-    /// The library's vectors, for questions that are not about the graph.
-    private func libraryVectors() async -> [(path: String, vector: [Float])] {
-        _ = await libraryGraph()
-        return cachedGraph?.vectors ?? []
+    /// What each wallpaper is of, when that is known.
+    private func subjectVectors() async -> [(path: String, vector: [Float])] {
+        if semanticVectors.isEmpty { loadSemanticVectors() }
+        if !semanticVectors.isEmpty { return semanticVectors }
+        return await appearanceVectors()
     }
+
+    /// What each wallpaper looks like. The measure the duplicate threshold was
+    /// established against, so everything about sameness uses this.
+    private func appearanceVectors() async -> [(path: String, vector: [Float])] {
+        if let cached = cachedAppearance, cached.count == printedCount { return cached }
+        let prints = await loadedPrints()
+        let entries = prints.compactMap { entry -> (path: String, vector: [Float])? in
+            ImagePrints.vector(entry.print).map { (entry.path, $0) }
+        }
+        cachedAppearance = entries
+        printedCount = entries.count
+        return entries
+    }
+
+    @ObservationIgnored private var cachedAppearance: [(path: String, vector: [Float])]?
+    @ObservationIgnored private var printedCount = -1
 
     /// Collapses results that are the same picture filed twice.
     ///
@@ -1033,9 +1060,12 @@ final class Store {
     /// entries, so this is a few hundred vector comparisons, and the filename
     /// test settles most of them before any arithmetic happens.
     private func collapsingDuplicates(_ paths: [String], limit: Int) -> [String] {
-        let vectors = cachedGraph?.vectors.reduce(into: [String: [Float]]()) { out, entry in
+        // Appearance, not subject: the threshold below was measured against
+        // feature prints, and two different wallpapers of the same thing are
+        // not copies of each other.
+        let vectors = (cachedAppearance ?? []).reduce(into: [String: [Float]]()) { out, entry in
             out[entry.path] = entry.vector
-        } ?? [:]
+        }
         let names = libraryWallpapers.reduce(into: [String: String]()) { out, file in
             out[file.path] = file.filename
         }
@@ -1175,9 +1205,12 @@ final class Store {
         return nearest.file
     }
 
-    /// The wallpaper's own vector, printed from the thumbnail the grid has
-    /// already decoded so nothing has to be downloaded to ask.
-    private func vector(for wallpaper: Wallpaper) async -> [Float]? {
+    /// A feature print of the wallpaper's thumbnail, which the grid has
+    /// already decoded — so asking costs nothing to download.
+    ///
+    /// Appearance rather than subject on purpose: this answers "is this the
+    /// same picture", and its caller compares against the duplicate threshold.
+    private func visionVector(for wallpaper: Wallpaper) async -> [Float]? {
         guard let image = await ImageCache.shared.image(for: wallpaper.thumb) else { return nil }
         return await Task.detached(priority: .userInitiated) { () -> [Float]? in
             // Vision reads from a file, so the decoded thumbnail goes back out
@@ -1203,8 +1236,8 @@ final class Store {
     /// which is the same question asked a cruder way.
     func nearestInLibrary(to wallpaper: Wallpaper,
                           limit: Int = 12) async -> [(file: LocalWallpaper, distance: Float)] {
-        let vectors = await libraryVectors()
-        guard !vectors.isEmpty, let made = await vector(for: wallpaper) else { return [] }
+        let vectors = await appearanceVectors()
+        guard !vectors.isEmpty, let made = await visionVector(for: wallpaper) else { return [] }
 
         let ranked = await Task.detached(priority: .userInitiated) {
             vectors
@@ -1438,7 +1471,9 @@ final class Store {
         defer { isDiscovering = false }
 
         let recent = Set(history.prefix(8).map(\.url.path))
-        let vectors = await libraryVectors()
+        // The same space the graph was built in, so the fallback below ranks
+        // by the same measure the walk did.
+        let vectors = await subjectVectors()
         let picks = await Task.detached(priority: .userInitiated) { () -> [String] in
             var found = graph.discover(seeds: seeds, excluding: recent, limit: 96)
                 .map(\.path)
@@ -1992,11 +2027,13 @@ final class Store {
         isRankingByTaste = true
         defer { isRankingByTaste = false }
 
-        // Thumbnails are already decoded for the grid, so printing them is
-        // nearly free compared with fetching anything new.
-        let references = await prints(for: favorites.prefix(24).map(\.thumb))
+        // Thumbnails are already decoded for the grid, so measuring them costs
+        // nothing to fetch. Subject rather than appearance where the model is
+        // installed: taste is about what you like the look *of*, and a palette
+        // match is a poor stand-in for it.
+        let references = await taste(of: favorites.prefix(24).map(\.thumb))
         guard !references.isEmpty else { return }
-        let candidates = await prints(for: wallpapers.map(\.thumb))
+        let candidates = await taste(of: wallpapers.map(\.thumb))
         guard !candidates.isEmpty else { return }
 
         // A graph over the favourites *and* the results together, walked from
@@ -2008,12 +2045,8 @@ final class Store {
         // distance to the rest is large.
         let referenceKeys = references.keys.map { "fav:\($0)" }
         var entries: [(path: String, vector: [Float])] = []
-        for (key, print) in references {
-            if let vector = ImagePrints.vector(print) { entries.append(("fav:\(key)", vector)) }
-        }
-        for (key, print) in candidates {
-            if let vector = ImagePrints.vector(print) { entries.append((key, vector)) }
-        }
+        for (key, vector) in references { entries.append(("fav:\(key)", vector)) }
+        for (key, vector) in candidates { entries.append((key, vector)) }
         guard entries.count > 1 else { return }
 
         let scored = await Task.detached(priority: .userInitiated) {
@@ -2032,6 +2065,27 @@ final class Store {
             }
             tasteRanked = true
         }
+    }
+
+    /// Vectors for a set of thumbnails, in whichever space is available.
+    ///
+    /// CLIP where the model is installed, feature prints otherwise. Both are
+    /// only ever compared against others from the same call, so the two never
+    /// meet.
+    @MainActor
+    private func taste(of urls: [URL]) async -> [String: [Float]] {
+        await SemanticIndex.shared.load()
+        guard SemanticIndex.shared.isReady else {
+            return await prints(for: urls).compactMapValues { ImagePrints.vector($0) }
+        }
+        var out: [String: [Float]] = [:]
+        for url in urls {
+            guard let image = await ImageCache.shared.image(for: url) else { continue }
+            if let vector = SemanticIndex.shared.embed(image: image) {
+                out[url.absoluteString] = vector
+            }
+        }
+        return out
     }
 
     /// Prints for a set of thumbnails, decoded through the shared cache.

@@ -199,6 +199,17 @@ struct SettingsView: View {
                       + "A collection is a grouping, so the file goes to the download "
                       + "folder and is filed into it.")
 
+                if let reason = RadarNotifier.unavailableReason {
+                    LabeledContent("Radar alerts") {
+                        Text(reason)
+                            .font(.system(size: 11.5)).foregroundStyle(Tokens.warning)
+                            .help("The radar still works — new matches appear as a badge "
+                                  + "in the sidebar. Only the Notification Center alert "
+                                  + "is unavailable, which an ad-hoc signed build "
+                                  + "cannot get.")
+                    }
+                }
+
                 Toggle("Index folders in the background", isOn: Binding(
                     get: { store.indexInBackground },
                     set: { store.indexInBackground = $0 }))

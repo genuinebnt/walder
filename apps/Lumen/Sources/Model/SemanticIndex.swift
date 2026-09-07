@@ -114,6 +114,20 @@ final class SemanticIndex {
                         dictionary: ["image": MLFeatureValue(pixelBuffer: buffer)]))
     }
 
+    /// The embedding for an image already in memory.
+    ///
+    /// The grid has decoded these thumbnails already, so ranking a page of
+    /// results costs the model's time and nothing else — no fetch, and no
+    /// round trip through a temporary file.
+    func embed(image: NSImage) -> [Float]? {
+        guard let model = imageModel,
+              let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil),
+              let buffer = Self.pixelBuffer(from: cgImage) else { return nil }
+        return embed(model: model,
+                     input: try? MLDictionaryFeatureProvider(
+                        dictionary: ["image": MLFeatureValue(pixelBuffer: buffer)]))
+    }
+
     /// The embedding for a phrase.
     func embed(text: String) -> [Float]? {
         guard let model = textModel, let tokenizer else { return nil }

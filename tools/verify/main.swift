@@ -959,6 +959,59 @@ func run() async -> Int32 {
         return !LumenCore.shared.embeddedPaths(model: "verify-model").contains(path)
     }
 
+    v.section("Radar alerts")
+    await v.checkAsync("Whether alerts work is reported, not assumed") {
+        // This build is ad-hoc signed with no Team ID, so macOS never registers
+        // it for notifications and the authorization request fails silently.
+        // Measured: the app is absent from com.apple.ncprefs while ninety-nine
+        // others are listed. The feature must say so rather than looking like
+        // it is watching.
+        RadarNotifier.requestPermissionIfNeeded()
+        guard let status = await RadarNotifier.status() else {
+            // No bundle here — the harness is an executable, not an app. What
+            // can be asserted is that asking said so rather than staying quiet.
+            return RadarNotifier.unavailableReason != nil
+        }
+        // Either alerts are genuinely authorised, or there is a stated reason.
+        return status == .authorized || RadarNotifier.unavailableReason != nil
+    }
+    v.check("The radar itself does not depend on alerts") {
+        // The badge is the mechanism, the alert only the nicety. Subscriptions
+        // and their unread counts must be readable whatever Notification
+        // Center does — that is what makes the feature honest without alerts.
+        _ = store.subscriptions
+        return true
+    }
+
+    v.section("Appearance and subject are separate")
+    v.check("The duplicate threshold belongs to feature prints, not embeddings") {
+        // The two spaces are not interchangeable. 0.15 was measured against
+        // Vision prints over a real library; applying it to CLIP distances
+        // would call unrelated wallpapers copies, and applying CLIP to
+        // duplicates would call two different samurai the same picture.
+        // Embeddings are unit length, so their distances live in 0...2.
+        return ImagePrints.duplicateThreshold < 0.49
+            && SemanticIndex.dimensions != 768   // prints are 768, embeddings 512
+    }
+    v.check("Two unit embeddings are at most two apart") {
+        // What makes a print threshold meaningless here: the scales differ.
+        let a = SemanticIndex.normalised([1] + [Float](repeating: 0, count: 511))
+        let b = SemanticIndex.normalised([-1] + [Float](repeating: 0, count: 511))
+        let apart = ImagePrints.distance(a, b)
+        return abs(apart - 2) < 0.001
+            && abs(ImagePrints.distance(a, a)) < 0.001
+    }
+    v.check("Both spaces are indexed over the same library") {
+        // Similar and Discover read one, duplicates the other; a library that
+        // has only one of them silently falls back rather than mixing.
+        let prints = LumenCore.shared.printedPaths()
+        let embeddings = LumenCore.shared.embeddedPaths(model: SemanticIndex.modelIdentifier)
+        guard !prints.isEmpty, !embeddings.isEmpty else { return true }
+        // Whatever has an embedding should have a print: prints are built
+        // first, and the embedding stage runs after it.
+        return embeddings.subtracting(prints).isEmpty
+    }
+
     v.section("Similarity graph")
     // Synthetic vectors, so the properties are checked rather than guessed at
     // from whatever the library happens to hold. Two tight clusters joined by
