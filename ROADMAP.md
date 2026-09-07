@@ -171,7 +171,10 @@ are absent. This is a personal, undistributed build; do not ship it.
   `com.apple.ncprefs` while ninety-nine others are listed. The in-app badge is
   what the feature rests on, and Settings now says so. Only a Developer ID
   signature would change it.
-- **Uncropped thumbnails are small.** Wallhaven caps its aspect-true thumbnail
-  at 300px, so Natural and Masonry upscale it. Sharpening means decoding the
-  full image down to tile size and caching that.
+- **Uncropped thumbnails are small, and will stay that way.** Wallhaven serves
+  exactly three: `small` 300x200 and `lg` 432x243, both cropped to a fixed
+  shape, and `orig` at 300px on the long edge, the only aspect-true one. The
+  alternative is the full image — 6.3MB against 17KB, 370x the bytes for one
+  grid tile, or roughly 150MB for a page of twenty-four. Not worth it. Natural
+  and Masonry upscale the 300px version and that is the right trade.
 - **CLI gaps** — no trash, backup/export or library health.
