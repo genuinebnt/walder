@@ -793,15 +793,24 @@ struct LocalPreview: View {
     private var preview: some View {
         ZStack {
             Color.black
-            CachedImage(url: wallpaper.url, maxPixels: ImageDetail.preview) { image in
-                image.resizable().aspectRatio(contentMode: zoomed ? .fill : .fit)
-            } placeholder: {
-                ProgressView().controlSize(.large)
-            } failure: {
-                Label("Preview unavailable", systemImage: "exclamationmark.triangle")
-                    .foregroundStyle(.secondary)
+            // Same capped expansion as the Wallhaven preview: filling the pane
+            // with a portrait leaves most of it outside the window.
+            GeometryReader { proxy in
+                let drawn = Store.drawnSize(image: wallpaper.pixelSize ?? proxy.size,
+                                            in: proxy.size, expanded: zoomed)
+                CachedImage(url: wallpaper.url, maxPixels: ImageDetail.preview) { image in
+                    image.resizable()
+                        .frame(width: drawn.width, height: drawn.height)
+                        .position(x: proxy.size.width / 2, y: proxy.size.height / 2)
+                } placeholder: {
+                    ProgressView().controlSize(.large)
+                        .frame(width: proxy.size.width, height: proxy.size.height)
+                } failure: {
+                    Label("Preview unavailable", systemImage: "exclamationmark.triangle")
+                        .foregroundStyle(.secondary)
+                        .frame(width: proxy.size.width, height: proxy.size.height)
+                }
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
             .clipped()
 
             VStack {
@@ -957,13 +966,15 @@ struct LocalPreview: View {
 
             if SpacesWallpaper.isAvailable {
                 Button {
-                    store.setLockScreen(local: wallpaper)
+                    store.setScreenSaver(local: wallpaper)
                 } label: {
-                    Label("Set as Lock Screen", systemImage: "lock.display")
+                    Label("Set as Screen Saver", systemImage: "display")
                         .frame(maxWidth: .infinity)
                 }
                 .controlSize(.large)
-                .help("macOS keeps the lock screen separate from the desktop picture")
+                .help("Replaces the moving screen saver with this picture. The lock "
+                      + "screen is not separate on macOS — it shows the desktop "
+                      + "picture, so Set as Wallpaper already covers it.")
             }
 
             HStack(spacing: Tokens.s2) {

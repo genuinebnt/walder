@@ -1359,7 +1359,7 @@ final class Store {
     func reloadSpaces() {
         spaces = SpacesWallpaper.spaces()
         spaceWallpapers = SpacesWallpaper.currentWallpapers()
-        lockScreen = SpacesWallpaper.lockScreenWallpaper()
+        screenSaverImage = SpacesWallpaper.screenSaverImage()
     }
 
     /// The file a Space is showing, if Lumen can tell.
@@ -1386,19 +1386,23 @@ final class Store {
         }
     }
 
-    /// Puts a wallpaper on the lock screen rather than the desktop.
+    /// Makes a wallpaper the screen saver.
+    ///
+    /// Deliberately not called "lock screen": macOS shows the desktop picture
+    /// when you lock, so there is nothing separate to set. This is the picture
+    /// that replaces the moving screen saver after the idle delay.
     @MainActor
-    func setLockScreen(_ wallpaper: Wallpaper) {
+    func setScreenSaver(_ wallpaper: Wallpaper) {
         Task {
             do {
                 let local = try await LumenCore.shared.ensureLocal(
                     url: wallpaper.path.absoluteString, filename: wallpaper.filename)
                 attachLocalFile(local, to: wallpaper.id)
-                try SpacesWallpaper.applyToLockScreen(fileURL: local)
+                try SpacesWallpaper.applyToScreenSaver(fileURL: local)
                 // Deliberately not recorded in history: history is what has
                 // been on the *desktop*, and undo restores that. Mixing the
-                // lock screen in would make undo put the wrong thing back.
-                lockScreen = local
+                // screen saver in would make undo put the wrong thing back.
+                screenSaverImage = local
                 errorMessage = nil
             } catch {
                 errorMessage = error.localizedDescription
@@ -1407,26 +1411,26 @@ final class Store {
     }
 
     @MainActor
-    func setLockScreen(local wallpaper: LocalWallpaper) {
+    func setScreenSaver(local wallpaper: LocalWallpaper) {
         guard FileManager.default.fileExists(atPath: wallpaper.url.path) else {
             errorMessage = "\(wallpaper.filename) is no longer on disk."
             return
         }
         do {
-            try SpacesWallpaper.applyToLockScreen(fileURL: wallpaper.url)
-            lockScreen = wallpaper.url
+            try SpacesWallpaper.applyToScreenSaver(fileURL: wallpaper.url)
+            screenSaverImage = wallpaper.url
             errorMessage = nil
         } catch {
             errorMessage = error.localizedDescription
         }
     }
 
-    /// What the lock screen is showing, when it is a still image.
-    var lockScreen: URL?
+    /// The screen saver's still picture, when it is one.
+    var screenSaverImage: URL?
 
     @MainActor
-    func reloadLockScreen() {
-        lockScreen = SpacesWallpaper.lockScreenWallpaper()
+    func reloadScreenSaver() {
+        screenSaverImage = SpacesWallpaper.screenSaverImage()
     }
 
     @MainActor
@@ -2610,6 +2614,35 @@ final class Store {
             withAnimation(Tokens.normal) { previewShowsInspector = true }
             previewInspectorAutoHidden = false
         }
+    }
+
+    /// How far expanding may scale an image past the size that fits.
+    ///
+    /// Filling the pane is the right answer for a wallpaper roughly the pane's
+    /// shape. It is the wrong one for a portrait in a landscape window: filling
+    /// there shows a narrow vertical slice and throws most of the picture off
+    /// the edges. Capping the scale means expanding always shows more detail
+    /// without the image leaving the window it is being viewed in.
+    static let maximumExpansion: CGFloat = 1.6
+
+    /// The size an image should be drawn at inside a pane.
+    ///
+    /// Fitted, it is the largest that fits whole. Expanded, it grows towards
+    /// filling but no further than `maximumExpansion` — so a 2:3 portrait in a
+    /// 16:9 window, which would need 2.7x to fill, stops at 1.6x and stays
+    /// mostly on screen.
+    static func drawnSize(image: CGSize, in container: CGSize,
+                          expanded: Bool) -> CGSize {
+        guard image.width > 0, image.height > 0,
+              container.width > 0, container.height > 0 else { return container }
+
+        let fit = min(container.width / image.width, container.height / image.height)
+        guard expanded else {
+            return CGSize(width: image.width * fit, height: image.height * fit)
+        }
+        let fill = max(container.width / image.width, container.height / image.height)
+        let scale = min(fill, fit * maximumExpansion)
+        return CGSize(width: image.width * scale, height: image.height * scale)
     }
 
     @MainActor

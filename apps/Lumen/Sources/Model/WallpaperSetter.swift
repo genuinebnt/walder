@@ -396,12 +396,18 @@ enum SpacesWallpaper {
         return node
     }
 
-    /// Puts `fileURL` on the lock screen.
+    /// Makes `fileURL` the screen saver — a still picture instead of a moving
+    /// one.
     ///
-    /// macOS keeps the lock screen in the same store as the desktop, under
-    /// `Idle`. It is system-wide rather than per-Space, so this rewrites every
-    /// idle node it finds — which is what System Settings does too.
-    static func applyToLockScreen(fileURL: URL) throws {
+    /// Not the lock screen. macOS has no separate lock-screen picture: locking
+    /// shows the desktop picture of the Space you were on, so setting the
+    /// desktop already sets what you see when you lock. The store's `Idle` slot
+    /// that this writes holds the *screen saver*, which by default is a module
+    /// like `Ventura.appex` and which this replaces with a still image — the
+    /// same thing System Settings does when a photo is chosen there.
+    ///
+    /// System-wide rather than per-Space, so every idle node is rewritten.
+    static func applyToScreenSaver(fileURL: URL) throws {
         guard isAvailable else { throw Failure.storeMissing }
 
         let original = try Data(contentsOf: storeURL)
@@ -429,9 +435,9 @@ enum SpacesWallpaper {
         restartAgent()
     }
 
-    /// What the lock screen is showing, when it is a still image rather than a
-    /// screen saver.
-    static func lockScreenWallpaper() -> URL? {
+    /// The screen saver's picture, when it is a still image rather than a
+    /// module. Nil means a moving screen saver is configured.
+    static func screenSaverImage() -> URL? {
         guard isAvailable,
               let data = try? Data(contentsOf: storeURL),
               let root = try? PropertyListSerialization.propertyList(

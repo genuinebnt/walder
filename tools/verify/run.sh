@@ -11,7 +11,7 @@ fi
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 OUT="$ROOT/build/verify"
-SDK="$(xcrun --show-sdk-path)"
+SDK="$("$ROOT/tools/pick-sdk.sh")"
 
 cargo build -p lumen-ffi --quiet
 mkdir -p "$ROOT/build"

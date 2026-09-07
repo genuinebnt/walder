@@ -7,7 +7,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP="$ROOT/build/Lumen.app"
 CONFIG="${CONFIG:-release}"
-SDK="$(xcrun --show-sdk-path)"
+SDK="$("$ROOT/tools/pick-sdk.sh")"
 TARGET="arm64-apple-macos14.0"
 
 echo "==> Rust core ($CONFIG)"

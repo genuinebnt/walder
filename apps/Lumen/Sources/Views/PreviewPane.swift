@@ -129,6 +129,16 @@ struct PreviewPane: View {
         withAnimation(Tokens.quick) { index = next }
     }
 
+    /// The wallpaper's own proportions, from what Wallhaven reports.
+    private var pixelSize: CGSize {
+        let parts = wallpaper.resolution.split(separator: "x")
+        guard parts.count == 2,
+              let width = Double(parts[0]), let height = Double(parts[1]),
+              width > 0, height > 0
+        else { return CGSize(width: 16, height: 9) }
+        return CGSize(width: width, height: height)
+    }
+
     /// What the preview is actually showing.
     private var currentSource: URL {
         store.preferLocalPreview ? wallpaper.previewSource : wallpaper.path
@@ -149,19 +159,28 @@ struct PreviewPane: View {
         ZStack {
             Color.black
 
-            CachedImage(url: currentSource, maxPixels: ImageDetail.preview) { image in
-                image
-                    .resizable()
-                    .aspectRatio(contentMode: store.previewZoomed ? .fill : .fit)
-                    .transition(.opacity)
-            } placeholder: {
-                ProgressView().controlSize(.large)
-            } failure: {
-                Label("Preview unavailable", systemImage: "exclamationmark.triangle")
-                    .foregroundStyle(.secondary)
+            // Drawn at a measured size rather than through `.fill`, which for
+            // a portrait in a landscape pane scaled the image so far that only
+            // a narrow band of it stayed on screen.
+            GeometryReader { proxy in
+                let drawn = Store.drawnSize(image: pixelSize, in: proxy.size,
+                                            expanded: store.previewZoomed)
+                CachedImage(url: currentSource, maxPixels: ImageDetail.preview) { image in
+                    image
+                        .resizable()
+                        .frame(width: drawn.width, height: drawn.height)
+                        .position(x: proxy.size.width / 2, y: proxy.size.height / 2)
+                        .transition(.opacity)
+                } placeholder: {
+                    ProgressView().controlSize(.large)
+                        .frame(width: proxy.size.width, height: proxy.size.height)
+                } failure: {
+                    Label("Preview unavailable", systemImage: "exclamationmark.triangle")
+                        .foregroundStyle(.secondary)
+                        .frame(width: proxy.size.width, height: proxy.size.height)
+                }
+                .id(wallpaper.id)
             }
-            .id(wallpaper.id)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
             .clipped()
 
             overlayChrome
@@ -294,7 +313,7 @@ struct PreviewPane: View {
             .tint(justSet ? Tokens.success : nil)
             .animation(Tokens.quick, value: justSet)
 
-            lockScreenButton
+            screenSaverButton
 
             HStack(spacing: Tokens.s2) {
                 Menu {
@@ -641,19 +660,21 @@ struct PreviewPane: View {
         return wallpaper.tags.map { ($0, nil) }
     }
 
-    /// Sets the lock screen instead of the desktop.
+    /// Makes this the screen saver — a still picture instead of a moving one.
     @ViewBuilder
-    private var lockScreenButton: some View {
+    private var screenSaverButton: some View {
         if SpacesWallpaper.isAvailable {
             Button {
-                store.setLockScreen(wallpaper)
+                store.setScreenSaver(wallpaper)
                 confirmSet()
             } label: {
-                Label("Set as Lock Screen", systemImage: "lock.display")
+                Label("Set as Screen Saver", systemImage: "display")
                     .frame(maxWidth: .infinity)
             }
             .controlSize(.large)
-            .help("macOS keeps the lock screen separate from the desktop picture")
+            .help("Replaces the moving screen saver with this picture. The lock "
+                  + "screen is not separate on macOS — it shows the desktop "
+                  + "picture, so Set as Wallpaper already covers it.")
         }
     }
 

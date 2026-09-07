@@ -429,20 +429,20 @@ func run() async -> Int32 {
         Sorting.allCases.count >= 6 && Sorting.allCases.allSatisfy { !$0.label.isEmpty }
     }
 
-    v.section("Lock screen")
-    v.check("The lock screen is read from the store, not guessed") {
+    v.section("Screen saver")
+    v.check("A still screen saver is read from the store, not guessed") {
         guard SpacesWallpaper.isAvailable else { return true }
-        // Nil is a legitimate answer — the lock screen is a screen saver until
-        // a picture is put on it — but anything returned must be a real file.
-        guard let url = SpacesWallpaper.lockScreenWallpaper() else { return true }
+        // Nil is the normal answer — the default screen saver is a module, not
+        // a picture — but anything returned must be a real file.
+        guard let url = SpacesWallpaper.screenSaverImage() else { return true }
         return url.isFileURL
     }
-    v.check("The store exposes the lock screen separately from the desktop") {
+    v.check("The screen saver is read separately from the desktop picture") {
         guard SpacesWallpaper.isAvailable else { return true }
         store.reloadSpaces()
-        // Reading one must not be reading the other: they are different keys
-        // in the same file, and conflating them would set the wrong thing.
-        return store.lockScreen == SpacesWallpaper.lockScreenWallpaper()
+        // Different keys in one file. Conflating them would set the wrong one —
+        // which is exactly what happened when this was called "lock screen".
+        return store.screenSaverImage == SpacesWallpaper.screenSaverImage()
     }
 
     v.section("Duplicate accuracy")
@@ -1628,6 +1628,50 @@ func run() async -> Int32 {
         let made = FileManager.default.fileExists(atPath: expected.path)
         try? FileManager.default.removeItem(at: expected)
         return made
+    }
+
+    v.section("Preview sizing")
+    v.check("A wallpaper the pane's shape fills it exactly") {
+        let drawn = Store.drawnSize(image: CGSize(width: 1920, height: 1080),
+                                    in: CGSize(width: 1600, height: 900), expanded: true)
+        return abs(drawn.width - 1600) < 1 && abs(drawn.height - 900) < 1
+    }
+    v.check("A portrait stops short of filling a landscape pane") {
+        // 2:3 in 16:9 needs about 2.7x to fill, which leaves a narrow vertical
+        // band on screen and the rest outside the window.
+        let container = CGSize(width: 1600, height: 900)
+        let portrait = CGSize(width: 1000, height: 1500)
+        let fitted = Store.drawnSize(image: portrait, in: container, expanded: false)
+        let expanded = Store.drawnSize(image: portrait, in: container, expanded: true)
+        let growth = expanded.height / fitted.height
+        return growth > 1
+            && growth <= Store.maximumExpansion + 0.001
+            && expanded.width < container.width * 2
+    }
+    v.check("Fitted always stays inside the pane") {
+        for image in [CGSize(width: 1000, height: 1500), CGSize(width: 4000, height: 1000),
+                      CGSize(width: 500, height: 500)] {
+            let container = CGSize(width: 1600, height: 900)
+            let drawn = Store.drawnSize(image: image, in: container, expanded: false)
+            guard drawn.width <= container.width + 1, drawn.height <= container.height + 1
+            else { return false }
+        }
+        return true
+    }
+    v.check("Expanding never shrinks the image") {
+        for image in [CGSize(width: 1000, height: 1500), CGSize(width: 4000, height: 1000),
+                      CGSize(width: 1920, height: 1080)] {
+            let container = CGSize(width: 1600, height: 900)
+            let fitted = Store.drawnSize(image: image, in: container, expanded: false)
+            let expanded = Store.drawnSize(image: image, in: container, expanded: true)
+            guard expanded.width >= fitted.width - 0.001 else { return false }
+        }
+        return true
+    }
+    v.check("A degenerate size does not divide by zero") {
+        let container = CGSize(width: 1600, height: 900)
+        return Store.drawnSize(image: .zero, in: container, expanded: true) == container
+            && Store.drawnSize(image: container, in: .zero, expanded: false) == .zero
     }
 
     v.section("Preview mode")
