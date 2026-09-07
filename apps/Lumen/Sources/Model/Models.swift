@@ -9,7 +9,11 @@ struct Wallpaper: Identifiable, Hashable, Codable {
     let id: String
     let url: URL?           // wallhaven page
     let path: URL           // full-resolution file
-    let thumb: URL          // grid thumbnail
+    let thumb: URL          // grid thumbnail, cropped to 16:9 by Wallhaven
+    /// Uncropped thumbnail, at the wallpaper's real proportions. Smaller than
+    /// `thumb` — Wallhaven caps it at 300px — but the only one that can be
+    /// shown in a layout that does not crop.
+    var thumbOriginal: URL?
     let resolution: String
     let ratio: Double
     let views: Int
@@ -30,6 +34,25 @@ struct Wallpaper: Identifiable, Hashable, Codable {
 
     var displayResolution: String { resolution.replacingOccurrences(of: "x", with: " × ") }
     var previewSource: URL { localFile ?? path }
+
+    /// Width over height, worked out from the resolution rather than taken
+    /// from the API's `ratio`, which is rounded to two decimals — enough drift
+    /// to show a sliver of letterboxing in a layout sized to the shape.
+    var trueRatio: Double {
+        let parts = resolution.split(separator: "x")
+        guard parts.count == 2, let width = Double(parts[0]), let height = Double(parts[1]),
+              width > 0, height > 0 else { return ratio > 0 ? ratio : 16.0 / 10 }
+        return width / height
+    }
+
+    /// The thumbnail to draw for a layout: the uncropped one where the layout
+    /// shows a wallpaper at its own shape, the sharper cropped one otherwise.
+    func thumb(for theme: GridTheme) -> URL {
+        switch theme {
+        case .masonry, .natural: thumbOriginal ?? thumb
+        default: thumb
+        }
+    }
     var sizeMB: String { String(format: "%.1f MB", Double(fileSize) / 1_048_576) }
     var filename: String { "wallhaven-\(id).\(fileType.hasSuffix("png") ? "png" : "jpg")" }
 

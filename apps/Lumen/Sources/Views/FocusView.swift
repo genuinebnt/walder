@@ -257,12 +257,12 @@ struct FocusView: View {
         Group {
             if theme == .natural {
                 JustifiedGrid(items: items,
-                              aspect: { $0.ratio > 0 ? $0.ratio : 16.0 / 10 },
+                              aspect: { $0.trueRatio },
                               targetRowHeight: theme.minTileWidth,
                               spacing: theme.spacing) { tile($0) }
             } else if theme == .masonry {
                 MasonryGrid(items: items,
-                            aspect: { $0.ratio > 0 ? $0.ratio : 16.0 / 10 },
+                            aspect: { $0.trueRatio },
                             columnWidth: theme.minTileWidth,
                             spacing: theme.spacing) { tile($0) }
             } else {

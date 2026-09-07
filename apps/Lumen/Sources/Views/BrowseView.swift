@@ -39,12 +39,12 @@ struct BrowseView: View {
                 Group {
                     if theme == .masonry {
                         MasonryGrid(items: items,
-                                    aspect: { $0.ratio > 0 ? $0.ratio : 16.0 / 10 },
+                                    aspect: { $0.trueRatio },
                                     columnWidth: theme.minTileWidth,
                                     spacing: theme.spacing) { tile($0) }
                     } else if theme == .natural {
                         JustifiedGrid(items: items,
-                                      aspect: { $0.ratio > 0 ? $0.ratio : 16.0 / 10 },
+                                      aspect: { $0.trueRatio },
                                       targetRowHeight: theme.minTileWidth,
                                       spacing: theme.spacing) { tile($0) }
                     } else {
@@ -132,7 +132,8 @@ struct BrowseView: View {
     /// Decodes the next screenful while the user is still looking at this one.
     private func prefetchAhead(of wallpaper: Wallpaper) {
         guard let index = items.firstIndex(where: { $0.id == wallpaper.id }) else { return }
-        let upcoming = items[index..<min(index + 12, items.count)].map(\.thumb)
+        let upcoming = items[index..<min(index + 12, items.count)]
+            .map { $0.thumb(for: theme) }
         ImageCache.shared.prefetch(upcoming)
     }
 
@@ -186,12 +187,12 @@ struct WallpaperTile: View {
     /// takes its size from the layout rather than imposing one.
     private var aspect: Double {
         theme == .masonry || theme == .natural
-            ? wallpaper.ratio
+            ? wallpaper.trueRatio
             : (theme == .cinema ? 16.0 / 9 : 16.0 / 10)
     }
 
     var body: some View {
-        CachedImage(url: wallpaper.thumb) { image in
+        CachedImage(url: wallpaper.thumb(for: theme)) { image in
             image
                 .resizable()
                 // Natural sizes its frame to the wallpaper's own shape, so

@@ -172,6 +172,11 @@ pub struct WallpaperDto {
     pub url: Option<String>,
     pub path: String,
     pub thumb: String,
+    /// Wallhaven crops `thumb` to 16:9 on the server, so a portrait arrives as
+    /// a landscape slice. This one keeps the wallpaper's real proportions —
+    /// smaller, but the only thumbnail the shape-true layouts can use.
+    #[serde(rename = "thumbOriginal")]
+    pub thumb_original: String,
     pub resolution: String,
     pub ratio: f64,
     pub views: i64,
@@ -205,6 +210,11 @@ impl From<&Wallpaper> for WallpaperDto {
             url: Some(w.url.clone()).filter(|s| !s.is_empty()),
             path: w.full_url.clone(),
             thumb: w.thumbnail_large.clone(),
+            thumb_original: if w.thumbnail_original.is_empty() {
+                w.thumbnail_large.clone()
+            } else {
+                w.thumbnail_original.clone()
+            },
             resolution: w.resolution.to_string(),
             ratio: w.ratio,
             views: w.views as i64,

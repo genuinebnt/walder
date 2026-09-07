@@ -759,6 +759,52 @@ func run() async -> Int32 {
         }
         return true
     }
+    v.check("Shape-true layouts ask for the uncropped thumbnail") {
+        // Wallhaven crops its `lg` thumbnail to 16:9 on the server, so a
+        // 2500x4000 portrait arrives as a 432x243 landscape slice. No layout
+        // can recover what the file does not contain; the `orig` thumbnail is
+        // the only one that keeps the shape.
+        var wallpaper = Wallpaper(
+            id: "xe9zld", url: nil,
+            path: URL(string: "https://w.wallhaven.cc/full/xe/x.jpg")!,
+            thumb: URL(string: "https://th.wallhaven.cc/lg/xe/xe9zld.jpg")!,
+            resolution: "2500x4000", ratio: 0.63, views: 1, favorites: 1,
+            category: "general", purity: .sfw, fileSize: 1,
+            fileType: "image/jpeg", createdAt: "2024-01-01")
+        wallpaper.thumbOriginal = URL(string: "https://th.wallhaven.cc/orig/xe/xe9zld.jpg")!
+
+        // Cropping layouts keep the sharper one; shape-true layouts do not.
+        return wallpaper.thumb(for: .comfortable) == wallpaper.thumb
+            && wallpaper.thumb(for: .cinema) == wallpaper.thumb
+            && wallpaper.thumb(for: .masonry) == wallpaper.thumbOriginal
+            && wallpaper.thumb(for: .natural) == wallpaper.thumbOriginal
+    }
+    v.check("A missing uncropped thumbnail falls back rather than failing") {
+        let wallpaper = Wallpaper(
+            id: "x", url: nil, path: URL(string: "https://e/x.jpg")!,
+            thumb: URL(string: "https://e/t.jpg")!, resolution: "100x100", ratio: 1,
+            views: 0, favorites: 0, category: "general", purity: .sfw,
+            fileSize: 1, fileType: "image/jpeg", createdAt: "2024-01-01")
+        return wallpaper.thumb(for: .natural) == wallpaper.thumb
+    }
+    v.check("The shape comes from the resolution, not the rounded ratio") {
+        // 2500x4000 is 0.625; the API reports 0.63. That drift is enough to
+        // show a sliver of letterboxing in a frame sized to the shape.
+        let wallpaper = Wallpaper(
+            id: "x", url: nil, path: URL(string: "https://e/x.jpg")!,
+            thumb: URL(string: "https://e/t.jpg")!, resolution: "2500x4000", ratio: 0.63,
+            views: 0, favorites: 0, category: "general", purity: .sfw,
+            fileSize: 1, fileType: "image/jpeg", createdAt: "2024-01-01")
+        guard abs(wallpaper.trueRatio - 0.625) < 0.000001 else { return false }
+
+        // And a resolution it cannot parse falls back to the API's figure.
+        let odd = Wallpaper(
+            id: "y", url: nil, path: URL(string: "https://e/y.jpg")!,
+            thumb: URL(string: "https://e/t.jpg")!, resolution: "unknown", ratio: 1.5,
+            views: 0, favorites: 0, category: "general", purity: .sfw,
+            fileSize: 1, fileType: "image/jpeg", createdAt: "2024-01-01")
+        return abs(odd.trueRatio - 1.5) < 0.000001
+    }
     v.check("Every result set can be cleared") {
         // The Clear button and the header back button had drifted apart, and a
         // describe search could not be dismissed from the toolbar. Both now go
