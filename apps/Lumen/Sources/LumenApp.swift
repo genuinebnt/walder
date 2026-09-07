@@ -73,4 +73,5 @@ extension Notification.Name {
     static let lumenBack = Notification.Name("lumen.back")
     static let lumenForward = Notification.Name("lumen.forward")
     static let lumenShowFolders = Notification.Name("lumen.showFolders")
+    static let lumenShuffleFavorites = Notification.Name("lumen.shuffleFavorites")
 }

@@ -195,7 +195,7 @@ struct WallpaperTile: View {
         .aspectRatio(theme == .masonry ? nil : aspect, contentMode: .fill)
         .frame(maxWidth: .infinity)
         .clipped()
-        .overlay { hoverLayer }
+        .overlay { if isHovered { hoverLayer } }
         .overlay { purityBorder }
         .overlay { selectionLayer }
         .overlay { downloadedBadge }
@@ -206,11 +206,11 @@ struct WallpaperTile: View {
                     .strokeBorder(Tokens.accent, lineWidth: 3)
             }
         }
-        // Flatten to one layer before the shadow: without this every hover
-        // re-rasterises the image, its overlays and the border separately.
+        // Only the hovered tile gets a shadow. A shadow is an offscreen pass,
+        // and paying for one per tile is what made a full grid scroll badly.
         .compositingGroup()
-        .shadow(color: .black.opacity(isHovered ? 0.4 : 0.16),
-                radius: isHovered ? 14 : 5, y: isHovered ? 7 : 2)
+        .shadow(color: .black.opacity(isHovered ? 0.4 : 0),
+                radius: isHovered ? 14 : 0, y: isHovered ? 7 : 0)
         .scaleEffect(isHovered ? 1.014 : 1)
         .zIndex(isHovered ? 1 : 0)
         .animation(Tokens.normal, value: isHovered)
@@ -259,9 +259,9 @@ struct WallpaperTile: View {
             .padding(Tokens.s3)
             .foregroundStyle(.white)
         }
-        .opacity(isHovered && !isSelecting ? 1 : 0)
+        .opacity(isSelecting ? 0 : 1)
         .allowsHitTesting(!isSelecting)
-        .animation(Tokens.quick, value: isHovered)
+        .transition(.opacity)
     }
 
     /// Marks a wallpaper already sitting in the download directory, so you can

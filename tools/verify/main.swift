@@ -978,6 +978,73 @@ func run() async -> Int32 {
             to: URL(filePath: "/tmp/not-here-\(UUID().uuidString).png")) == false
     }
 
+    v.section("Trash and put back")
+    await v.checkAsync("Trashing moves the file and putting it back restores it") {
+        // A real file in a real folder: this must not be tested against a stub,
+        // because the whole point is that it goes to the system Trash.
+        let root = FileManager.default.temporaryDirectory
+            .appending(path: "lumen-verify-trash-\(UUID().uuidString)")
+        try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let file = root.appending(path: "wallhaven-trashme.png")
+        guard let rep = NSBitmapImageRep(
+            bitmapDataPlanes: nil, pixelsWide: 8, pixelsHigh: 8,
+            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+            colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0),
+              let png = rep.representation(using: .png, properties: [:]),
+              (try? png.write(to: file)) != nil else { return false }
+
+        let local = LocalWallpaper(id: UUID().uuidString, folderId: "f", url: file,
+                                   path: file.path(percentEncoded: false),
+                                   filename: file.lastPathComponent,
+                                   fileSize: png.count, isFavorite: false)
+        store.trash([local])
+        guard !FileManager.default.fileExists(atPath: file.path) else {
+            print("        file was still there after trashing")
+            return false
+        }
+        guard store.canRestoreTrashed else { return false }
+
+        store.restoreTrashed()
+        let back = FileManager.default.fileExists(atPath: file.path)
+        if !back { print("        put back failed: \(store.errorMessage ?? "no error")") }
+        // The offer is one-shot; it should not linger after being used.
+        return back && !store.canRestoreTrashed
+    }
+    v.check("Trashing nothing does nothing") {
+        store.forgetTrashed()
+        store.trash([])
+        return !store.canRestoreTrashed
+    }
+    v.check("A file that has already gone is reported, not silently skipped") {
+        let missing = LocalWallpaper(
+            id: "gone", folderId: "f",
+            url: URL(filePath: "/tmp/lumen-not-here-\(UUID().uuidString).png"),
+            path: "/tmp/gone.png", filename: "gone.png", fileSize: 0, isFavorite: false)
+        store.errorMessage = nil
+        store.trash([missing])
+        let reported = store.errorMessage?.contains("Trash") == true
+        store.forgetTrashed()
+        store.errorMessage = nil
+        return reported
+    }
+
+    v.section("Spaces, individually")
+    v.check("The window server's Spaces are enumerated and numbered") {
+        let spaces = SpacesWallpaper.spaces()
+        guard !spaces.isEmpty else {
+            print("        no Spaces reported — nothing to assign to")
+            return false
+        }
+        // Exactly one current Space per display, numbered from one.
+        let currentPerDisplay = Dictionary(grouping: spaces, by: \.display)
+            .allSatisfy { $0.value.filter(\.isCurrent).count <= 1 }
+        return currentPerDisplay
+            && spaces.allSatisfy { $0.number >= 1 }
+            && spaces.contains { $0.isCurrent }
+    }
+
     v.section("Backup")
     await v.checkAsync("A backup round-trips favourites, collections and filters") {
         // Restore adds rather than replaces, so this checks the contents

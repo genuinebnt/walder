@@ -371,14 +371,31 @@ final class LumenCore: @unchecked Sendable {
 
     // MARK: Plumbing
 
+    /// How long to wait for a reply before giving up.
+    ///
+    /// A reply that never arrives would otherwise hold its continuation — and
+    /// the task awaiting it — for the life of the process. The core has its own
+    /// retries and timeouts, so anything past this is a lost reply, not a slow
+    /// one.
+    private static let replyTimeout: Duration = .seconds(90)
+
     private func call<T: Decodable>(_ type: T.Type, _ invoke: () -> UInt64) async throws -> T {
+        var requestID: UInt64 = 0
         let data: Data = try await withCheckedThrowingContinuation { continuation in
             // Park the continuation before invoking: the reply can land on
             // another thread before this call returns.
             let id = nextParked(continuation)
             let actual = invoke()
+            requestID = actual
             reparent(from: id, to: actual)
+            // Nothing resumes a continuation whose reply is lost, so arm a
+            // fallback that does.
+            Task { [weak self] in
+                try? await Task.sleep(for: Self.replyTimeout)
+                self?.abandon(requestID: actual)
+            }
         }
+        _ = requestID
         let envelope = try JSONDecoder().decode(Envelope<T>.self, from: data)
         guard envelope.ok, let value = envelope.data else {
             throw CoreError.backend(envelope.error ?? "unknown error")
@@ -404,9 +421,9 @@ final class LumenCore: @unchecked Sendable {
             lock.unlock()
             return
         }
-        if let early = early.removeValue(forKey: actual) {
+        if let waiting = early.removeValue(forKey: actual) {
             lock.unlock()
-            continuation.resume(returning: early)
+            continuation.resume(returning: waiting.data)
             return
         }
         waiting[actual] = continuation
@@ -414,7 +431,28 @@ final class LumenCore: @unchecked Sendable {
     }
 
     /// Replies that arrived before `reparent` could file the continuation.
-    private var early: [UInt64: Data] = [:]
+    ///
+    /// Held with the time they landed: an entry whose caller never came back
+    /// for it would otherwise sit here for the life of the process, and this
+    /// dictionary would only ever grow.
+    private var early: [UInt64: (data: Data, at: Date)] = [:]
+
+    /// Drops early replies nobody claimed. Called whenever one is filed, which
+    /// is often enough to keep this bounded and rare enough to cost nothing.
+    private func pruneEarly() {
+        guard early.count > 32 else { return }
+        let cutoff = Date().addingTimeInterval(-60)
+        early = early.filter { $0.value.at > cutoff }
+    }
+
+    /// Fails a request whose reply never came, releasing its continuation.
+    private func abandon(requestID: UInt64) {
+        lock.lock()
+        let continuation = waiting.removeValue(forKey: requestID)
+        early.removeValue(forKey: requestID)
+        lock.unlock()
+        continuation?.resume(throwing: CoreError.backend("The core did not answer in time."))
+    }
 
     fileprivate func deliver(requestID: UInt64, data: Data) {
         if requestID == 0 {
@@ -428,7 +466,8 @@ final class LumenCore: @unchecked Sendable {
             lock.unlock()
             continuation.resume(returning: data)
         } else {
-            early[requestID] = data
+            early[requestID] = (data, Date())
+            pruneEarly()
             lock.unlock()
         }
     }

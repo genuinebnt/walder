@@ -190,6 +190,7 @@ final class Store {
         reloadHistory()
         reloadSubscriptions()
         rearmRadar()
+        reloadSpaces()
         Task { await backfillSidecars() }
         rearmRotation()
     }
@@ -403,7 +404,11 @@ final class Store {
 
     // MARK: Favorites
 
-    func isFavorite(_ wallpaper: Wallpaper) -> Bool { favorites.contains { $0.id == wallpaper.id } }
+    /// Ids of the favourites, so a grid of tiles is a set lookup each rather
+    /// than a scan of the whole list each.
+    @ObservationIgnored private var favoriteIDs: Set<String> = []
+
+    func isFavorite(_ wallpaper: Wallpaper) -> Bool { favoriteIDs.contains(wallpaper.id) }
 
     @MainActor
     func toggleFavorite(_ wallpaper: Wallpaper) {
@@ -414,8 +419,10 @@ final class Store {
         withAnimation(Tokens.bouncy) {
             if nowFavorited {
                 if !isFavorite(wallpaper) { favorites.append(wallpaper) }
+                favoriteIDs.insert(wallpaper.id)
             } else {
                 favorites.removeAll { $0.id == wallpaper.id }
+                favoriteIDs.remove(wallpaper.id)
             }
         }
     }
@@ -424,6 +431,7 @@ final class Store {
     func reloadFavorites() {
         let saved = LumenCore.shared.favorites()
         remember(saved)
+        favoriteIDs = Set(saved.map(\.id))
         withAnimation(Tokens.normal) { favorites = saved }
     }
 
@@ -908,6 +916,135 @@ final class Store {
         }
     }
 
+    // MARK: Trash
+
+    /// Files moved to the Trash, kept so they can be put back.
+    ///
+    /// Deleting goes through the Trash rather than removing the file: a
+    /// wallpaper library is not something to destroy on a mis-click, and macOS
+    /// already has a place for "gone but recoverable".
+    struct TrashedFiles {
+        var originals: [URL]
+        var inTrash: [URL]
+        var describedAs: String
+    }
+
+    private(set) var lastTrashed: TrashedFiles?
+
+    var canRestoreTrashed: Bool { lastTrashed != nil }
+
+    /// Moves local wallpapers to the Trash and offers to put them back.
+    @MainActor
+    func trash(_ wallpapers: [LocalWallpaper]) {
+        guard !wallpapers.isEmpty else { return }
+        var originals: [URL] = []
+        var landed: [URL] = []
+
+        for wallpaper in wallpapers {
+            var destination: NSURL?
+            do {
+                try FileManager.default.trashItem(at: wallpaper.url,
+                                                  resultingItemURL: &destination)
+                originals.append(wallpaper.url)
+                if let destination { landed.append(destination as URL) }
+                // The record beside it goes too, or it is left orphaned.
+                WallpaperMetadata.removeSidecar(for: wallpaper.url)
+            } catch {
+                errorMessage = "Could not move \(wallpaper.filename) to the Trash: "
+                    + error.localizedDescription
+            }
+        }
+
+        guard !originals.isEmpty else { return }
+        lastTrashed = TrashedFiles(
+            originals: originals,
+            inTrash: landed,
+            describedAs: originals.count == 1
+                ? originals[0].lastPathComponent
+                : "\(originals.count) wallpapers")
+
+        Task {
+            try? await LumenCore.shared.rescanLibrary()
+            reloadLibrary()
+        }
+    }
+
+    /// Puts the last trashed files back where they came from.
+    @MainActor
+    func restoreTrashed() {
+        guard let trashed = lastTrashed else { return }
+        guard trashed.inTrash.count == trashed.originals.count else {
+            errorMessage = "Those files cannot be put back automatically — "
+                + "they are in the Trash."
+            lastTrashed = nil
+            return
+        }
+
+        var restored = 0
+        for (source, destination) in zip(trashed.inTrash, trashed.originals) {
+            do {
+                try FileManager.default.moveItem(at: source, to: destination)
+                restored += 1
+            } catch {
+                errorMessage = "Could not put back \(destination.lastPathComponent): "
+                    + error.localizedDescription
+            }
+        }
+
+        lastTrashed = nil
+        guard restored > 0 else { return }
+        Task {
+            try? await LumenCore.shared.rescanLibrary()
+            reloadLibrary()
+        }
+    }
+
+    @MainActor
+    func forgetTrashed() { lastTrashed = nil }
+
+    // MARK: Spaces
+
+    var spaces: [SpacesWallpaper.Space] = []
+
+    @MainActor
+    func reloadSpaces() {
+        spaces = SpacesWallpaper.spaces()
+    }
+
+    /// Sets a wallpaper on one Space, leaving every other alone.
+    @MainActor
+    func setWallpaper(_ wallpaper: Wallpaper, onSpace space: SpacesWallpaper.Space) {
+        Task {
+            do {
+                let local = try await LumenCore.shared.ensureLocal(
+                    url: wallpaper.path.absoluteString, filename: wallpaper.filename)
+                attachLocalFile(local, to: wallpaper.id)
+                try SpacesWallpaper.apply(fileURL: local, toSpace: space.uuid)
+                recordHistory(local, id: wallpaper.id,
+                              label: "wallhaven-\(wallpaper.id) (\(space.label))")
+                errorMessage = nil
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    @MainActor
+    func setLocalWallpaper(_ wallpaper: LocalWallpaper, onSpace space: SpacesWallpaper.Space) {
+        guard FileManager.default.fileExists(atPath: wallpaper.url.path) else {
+            errorMessage = "\(wallpaper.filename) is no longer on disk."
+            return
+        }
+        do {
+            try SpacesWallpaper.apply(fileURL: wallpaper.url, toSpace: space.uuid)
+            recordHistory(wallpaper.url, id: nil,
+                          label: "\(wallpaper.filename) (\(space.label))")
+            errorMessage = nil
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
     // MARK: Colour search
 
     /// Dominant colour per local file, so the library can be filtered by colour
@@ -1331,6 +1468,7 @@ final class Store {
         }
         reloadSubscriptions()
         rearmRadar()
+        reloadSpaces()
         Task { await backfillSidecars() }
     }
 
@@ -1656,10 +1794,20 @@ final class Store {
     }
 
     /// Wallpapers sitting directly in the level being browsed.
+    /// Files at the level being browsed.
+    ///
+    /// Cached rather than filtered on demand: this is read during layout, and
+    /// filtering several thousand rows on every render is felt as scroll jank.
+    @ObservationIgnored private var currentFilesCache: (key: String, files: [LocalWallpaper])?
+
     var currentFiles: [LocalWallpaper] {
         // Nothing sits at the very top; a folder has to be chosen first.
         guard selectedFolder != nil else { return [] }
-        return libraryWallpapers.filter { $0.subpath == browsePath }
+        let key = "\(selectedFolder ?? "")|\(browsePath)|\(libraryWallpapers.count)"
+        if let cached = currentFilesCache, cached.key == key { return cached.files }
+        let files = libraryWallpapers.filter { $0.subpath == browsePath }
+        currentFilesCache = (key, files)
+        return files
     }
 
     /// Breadcrumb trail for the level being browsed.

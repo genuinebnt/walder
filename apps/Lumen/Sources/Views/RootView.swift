@@ -153,6 +153,12 @@ struct RootView: View {
         .onReceive(NotificationCenter.default.publisher(for: .lumenUndo)) { _ in
             store.undoWallpaper()
         }
+        .onReceive(NotificationCenter.default.publisher(for: .lumenShuffleFavorites)) { _ in
+            // Shortcuts asked for a favourite specifically, so this does not
+            // follow the schedule's source.
+            guard let pick = store.favorites.randomElement() else { return }
+            store.setWallpaper(pick)
+        }
         .onReceive(NotificationCenter.default.publisher(for: .lumenShowFolders)) { _ in
             withAnimation(Tokens.normal) { section = .folders }
         }

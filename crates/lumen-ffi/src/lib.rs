@@ -1855,7 +1855,54 @@ pub extern "C" fn lumen_status() -> *mut c_char {
 
 #[cfg(test)]
 mod tests {
-    use super::{decode_base64, encode_base64};
+    use super::{decode_base64, encode_base64, lumen_string_free, str_from, to_c};
+    use std::ffi::CString;
+
+    /// The C string boundary, which is where a leak or a double free would
+    /// live. Run under Miri (`cargo +nightly miri test -p lumen-ffi`), which
+    /// checks the pointer arithmetic and the allocation pairing that ordinary
+    /// tests cannot see.
+    #[test]
+    fn strings_handed_out_are_freed_exactly_once() {
+        for payload in ["", "plain", "{\"ok\":true}", "unicode — ✓ 日本語"] {
+            let pointer = to_c(payload.to_string());
+            assert!(!pointer.is_null());
+            // Reading it back must not disturb the allocation.
+            let seen = unsafe { str_from(pointer) };
+            assert_eq!(seen, payload);
+            unsafe { lumen_string_free(pointer) };
+        }
+    }
+
+    #[test]
+    fn freeing_null_is_a_no_op() {
+        // Swift passes whatever the C call returned, including null on failure.
+        unsafe { lumen_string_free(std::ptr::null_mut()) };
+    }
+
+    #[test]
+    fn reading_a_null_pointer_yields_an_empty_string() {
+        assert_eq!(unsafe { str_from(std::ptr::null()) }, "");
+    }
+
+    #[test]
+    fn a_payload_containing_a_nul_does_not_truncate_silently() {
+        // CString::new rejects an interior NUL; to_c must not hand back a
+        // pointer into freed memory when it does.
+        let pointer = to_c("before\0after".to_string());
+        let seen = unsafe { str_from(pointer) };
+        assert!(seen.contains("nul in payload"), "got {seen}");
+        unsafe { lumen_string_free(pointer) };
+    }
+
+    #[test]
+    fn borrowed_input_is_copied_rather_than_kept() {
+        // The Rust side must not retain a pointer Swift owns.
+        let owned = CString::new("caller owns this").unwrap();
+        let copied = unsafe { str_from(owned.as_ptr()) };
+        drop(owned);
+        assert_eq!(copied, "caller owns this");
+    }
 
     #[test]
     fn base64_round_trips_every_length_and_byte_value() {

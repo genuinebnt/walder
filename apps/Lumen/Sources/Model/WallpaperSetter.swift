@@ -167,6 +167,99 @@ enum SpacesWallpaper {
         }
     }
 
+    /// One macOS Space, as the window server records it.
+    struct Space: Identifiable, Hashable {
+        /// The key the wallpaper store uses. The first Space has an empty one.
+        let uuid: String
+        /// 1-based position on its display, which is what "Desktop 2" means.
+        let number: Int
+        let isCurrent: Bool
+        let display: String
+
+        var id: String { "\(display)|\(uuid)|\(number)" }
+        var label: String { "Desktop \(number)" }
+    }
+
+    /// The Spaces that currently exist, in order, per display.
+    ///
+    /// The window server keeps this in `com.apple.spaces`, and its UUIDs are
+    /// the same ones the wallpaper store is keyed by — which is what makes
+    /// assigning a wallpaper to one Space possible at all.
+    static func spaces() -> [Space] {
+        guard let config = UserDefaults.standard
+            .persistentDomain(forName: "com.apple.spaces")?["SpacesDisplayConfiguration"]
+            as? [String: Any],
+              let management = config["Management Data"] as? [String: Any],
+              let monitors = management["Monitors"] as? [[String: Any]]
+        else { return [] }
+
+        var found: [Space] = []
+        for monitor in monitors {
+            let display = monitor["Display Identifier"] as? String ?? "Main"
+            let current = (monitor["Current Space"] as? [String: Any])?["uuid"] as? String
+            let listed = monitor["Spaces"] as? [[String: Any]] ?? []
+
+            for (index, space) in listed.enumerated() {
+                // Fullscreen apps get their own Space entries; only normal
+                // desktops (type 0) take a wallpaper.
+                guard (space["type"] as? Int ?? 0) == 0 else { continue }
+                let uuid = space["uuid"] as? String ?? ""
+                found.append(Space(uuid: uuid,
+                                   number: index + 1,
+                                   isCurrent: uuid == current,
+                                   display: display))
+            }
+        }
+        return found
+    }
+
+    /// Points one Space at `fileURL`, leaving the others alone.
+    static func apply(fileURL: URL, toSpace uuid: String) throws {
+        guard isAvailable else { throw Failure.storeMissing }
+
+        let original = try Data(contentsOf: storeURL)
+        var format = PropertyListSerialization.PropertyListFormat.binary
+        guard var root = try? PropertyListSerialization.propertyList(
+            from: original, options: [], format: &format) as? [String: Any],
+              var spaces = root["Spaces"] as? [String: Any]
+        else { throw Failure.unreadable }
+
+        let configuration = try PropertyListSerialization.data(
+            fromPropertyList: ["type": "imageFile",
+                               "url": ["relative": fileURL.absoluteString]],
+            format: .binary, options: 0)
+
+        // A Space the store has not seen yet needs its entry creating.
+        var entry = spaces[uuid] as? [String: Any] ?? [:]
+        var slot = entry["Default"] as? [String: Any] ?? [:]
+        var count = 0
+        slot = rewriteDesktops(in: slot, configuration: configuration, count: &count)
+        if count == 0 {
+            // Nothing to rewrite means no Desktop node; make one.
+            slot["Desktop"] = [
+                "Content": [
+                    "Choices": [[
+                        "Provider": "com.apple.wallpaper.choice.image",
+                        "Configuration": configuration,
+                        "Files": [Any]()
+                    ]],
+                    "Shuffle": "$null"
+                ],
+                "LastSet": Date(),
+                "LastUse": Date()
+            ]
+        }
+        entry["Default"] = slot
+        spaces[uuid] = entry
+        root["Spaces"] = spaces
+
+        try backUpOnce(original)
+        let encoded = try PropertyListSerialization.data(
+            fromPropertyList: root, format: .binary, options: 0)
+        try encoded.write(to: storeURL, options: .atomic)
+        restartAgent()
+    }
+
     static var storeURL: URL {
         FileManager.default.homeDirectoryForCurrentUser
             .appending(path: "Library/Application Support/com.apple.wallpaper/Store/Index.plist")

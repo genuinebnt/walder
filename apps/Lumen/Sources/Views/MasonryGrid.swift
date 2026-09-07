@@ -20,6 +20,9 @@ struct MasonryGrid<Item: Identifiable, Content: View>: View {
     @ViewBuilder let content: (Item) -> Content
 
     @State private var available: CGFloat = 0
+    /// Distribution is O(items x columns); recomputing it on every render is
+    /// felt directly as scroll jank at a few thousand items.
+    @State private var cached: (key: String, columns: [[Item]])?
 
     var body: some View {
         HStack(alignment: .top, spacing: spacing) {
@@ -66,7 +69,15 @@ struct MasonryGrid<Item: Identifiable, Content: View>: View {
     ///
     /// Heights are relative — 1/aspect per item — because only their ordering
     /// matters for balancing, not their pixel values.
-    private var columns: [[Item]] { distribute(into: columnCount) }
+    private var columns: [[Item]] {
+        let key = "\(items.count)|\(columnCount)|\(items.first.map { String(describing: $0.id) } ?? "")"
+        if let cached, cached.key == key { return cached.columns }
+        let built = distribute(into: columnCount)
+        // Assigning during body would loop; the cache is filled on the next
+        // layout pass through the task below.
+        Task { @MainActor in self.cached = (key, built) }
+        return built
+    }
 
     private func distribute(into count: Int) -> [[Item]] {
         guard count > 1 else { return [items] }

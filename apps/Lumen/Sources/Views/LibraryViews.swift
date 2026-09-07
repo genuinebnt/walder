@@ -308,7 +308,77 @@ struct DisplaysView: View {
 
     var body: some View {
         ScrollView {
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 300), spacing: Tokens.s4)], spacing: Tokens.s4) {
+            VStack(alignment: .leading, spacing: Tokens.s4) {
+                if !store.spaces.isEmpty { spacesSection }
+                displayGrid
+            }
+            .padding(Tokens.s4)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .scrollContentBackground(.hidden)
+        .onAppear {
+            store.displays = mergeLiveDisplays()
+            store.reloadSpaces()
+        }
+    }
+
+    /// Each Space, and a way to give it its own wallpaper.
+    ///
+    /// macOS keeps a separate desktop picture per Space and offers no API for
+    /// it; the window server's own record names them, and the wallpaper store
+    /// is keyed by the same ids.
+    private var spacesSection: some View {
+        VStack(alignment: .leading, spacing: Tokens.s2) {
+            HStack {
+                Text("SPACES").font(.sectionLabel).foregroundStyle(.secondary)
+                Spacer()
+                Button {
+                    store.reloadSpaces()
+                } label: {
+                    Image(systemName: "arrow.clockwise").font(.system(size: 10))
+                }
+                .buttonStyle(.plain).foregroundStyle(.secondary)
+            }
+            Text("Each Space keeps its own wallpaper. Assign the one showing now "
+                 + "to any of them.")
+                .font(.system(size: 11.5)).foregroundStyle(.secondary)
+
+            FlowLayout(spacing: 6) {
+                ForEach(store.spaces) { space in
+                    Button {
+                        if let current = store.current {
+                            store.setWallpaper(current, onSpace: space)
+                        }
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: space.isCurrent
+                                  ? "square.on.square.dashed" : "square")
+                                .font(.system(size: 11))
+                            Text(space.label)
+                            if space.isCurrent {
+                                Text("current").font(.caption2Mono).foregroundStyle(.secondary)
+                            }
+                        }
+                        .font(.system(size: 12))
+                        .padding(.horizontal, 10).padding(.vertical, 6)
+                        .background(.quaternary.opacity(0.45), in: .capsule)
+                        .contentShape(.capsule)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(store.current == nil)
+                    .help(store.current == nil
+                          ? "Set a wallpaper first, then assign it to a Space"
+                          : "Put the current wallpaper on \(space.label)")
+                }
+            }
+        }
+        .padding(Tokens.s3)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .card()
+    }
+
+    private var displayGrid: some View {
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: 300), spacing: Tokens.s4)], spacing: Tokens.s4) {
                 ForEach(store.displays) { display in
                     VStack(alignment: .leading, spacing: Tokens.s3) {
                         ZStack(alignment: .top) {
@@ -351,11 +421,6 @@ struct DisplaysView: View {
                     .card()
                 }
             }
-            .padding(Tokens.s4)
-            .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .scrollContentBackground(.hidden)
-        .onAppear { store.displays = mergeLiveDisplays() }
     }
 
     private func fit(for display: DisplayTarget) -> Binding<DisplayTarget.Fit> {

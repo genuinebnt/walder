@@ -136,6 +136,27 @@ struct LibraryFolderView: View {
             }
             .controlSize(.small)
 
+            if let trashed = store.lastTrashed {
+                HStack(spacing: Tokens.s2) {
+                    Image(systemName: "trash").foregroundStyle(.secondary)
+                    Text("Moved \(trashed.describedAs) to the Trash")
+                        .font(.system(size: 12))
+                    Button("Put Back") { store.restoreTrashed() }
+                        .controlSize(.small)
+                    Spacer()
+                    Button {
+                        store.forgetTrashed()
+                    } label: {
+                        Image(systemName: "xmark").font(.system(size: 10))
+                    }
+                    .buttonStyle(.plain).foregroundStyle(.secondary)
+                }
+                .padding(Tokens.s3)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(.quaternary.opacity(0.4), in: .rect(cornerRadius: Tokens.control))
+                .transition(.move(edge: .top).combined(with: .opacity))
+            }
+
             if !store.libraryFolders.isEmpty { healthRow }
 
             if !store.libraryFolders.isEmpty {
@@ -347,8 +368,18 @@ struct LibraryFolderView: View {
                 .font(.sectionLabel).foregroundStyle(.secondary)
             ForEach(Array(store.duplicateGroups.enumerated()), id: \.offset) { _, group in
                 VStack(alignment: .leading, spacing: Tokens.s2) {
-                    Text("\(group.count) copies · keep the largest and delete the rest in Finder")
-                        .font(.system(size: 11)).foregroundStyle(.secondary)
+                    HStack(spacing: Tokens.s2) {
+                        Text("\(group.count) copies")
+                            .font(.system(size: 11)).foregroundStyle(.secondary)
+                        Button("Trash all but the largest") {
+                            // Keeping the largest is almost always right: the
+                            // others are re-encodes or downscales of it.
+                            let sorted = group.sorted { $0.fileSize > $1.fileSize }
+                            store.trash(Array(sorted.dropFirst()))
+                        }
+                        .controlSize(.small)
+                        Spacer()
+                    }
                     LazyVGrid(columns: [GridItem(.adaptive(minimum: 190), spacing: Tokens.s3)],
                               spacing: Tokens.s3) {
                         ForEach(group) { tile($0) }
@@ -462,11 +493,11 @@ struct LibraryFolderView: View {
         // A letterboxed tile needs something behind it.
         .background(theme == .masonry ? Color.clear : Color.black.opacity(0.35))
         .clipped()
-        .overlay { hoverLayer(wallpaper) }
+        .overlay { if hovered == wallpaper.id { hoverLayer(wallpaper) } }
         .clipShape(.rect(cornerRadius: theme.cornerRadius))
         .compositingGroup()
-        .shadow(color: .black.opacity(hovered == wallpaper.id ? 0.4 : 0.16),
-                radius: hovered == wallpaper.id ? 14 : 5, y: hovered == wallpaper.id ? 7 : 2)
+        .shadow(color: .black.opacity(hovered == wallpaper.id ? 0.4 : 0),
+                radius: hovered == wallpaper.id ? 14 : 0, y: hovered == wallpaper.id ? 7 : 0)
         .scaleEffect(hovered == wallpaper.id ? 1.014 : 1)
         .zIndex(hovered == wallpaper.id ? 1 : 0)
         .animation(Tokens.normal, value: hovered)
@@ -492,6 +523,10 @@ struct LibraryFolderView: View {
             Divider()
             Button("Quick Look") {
                 QuickLook.shared.show([wallpaper.url])
+            }
+            Divider()
+            Button("Move to Trash", role: .destructive) {
+                store.trash([wallpaper])
             }
             Button("Find Similar in Library") {
                 Task { await store.findSimilarInLibrary(to: wallpaper) }
@@ -548,8 +583,7 @@ struct LibraryFolderView: View {
             .padding(Tokens.s3)
             .foregroundStyle(.white)
         }
-        .opacity(isHovered ? 1 : 0)
-        .animation(Tokens.quick, value: isHovered)
+        .transition(.opacity)
     }
 
     private var emptyState: some View {
